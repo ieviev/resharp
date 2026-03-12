@@ -40,7 +40,7 @@ _*a_*           any string that contains 'a'
 
 You combine all of these with `&` to get more complex patterns. RE# also supports lookarounds (`(?=...)`, `(?<=...)`, `(?!...)`, `(?<!...)`), compiled directly into the automaton with no backtracking. 
 
-NOTE: RE# is not compatible with some `regex` crate features, eg. lazy quantifiers (`.*?`). See the full [syntax reference](docs/syntax.md) for details.
+> RE# is not compatible with some `regex` crate features, eg. lazy quantifiers (`.*?`). See the full [syntax reference](docs/syntax.md) for details.
 
 ### Differences from [`resharp-dotnet`](https://github.com/ieviev/resharp-dotnet) and rust [`regex`](https://crates.io/crates/regex)
 
