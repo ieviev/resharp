@@ -1,0 +1,36 @@
+[package]
+name = "resharp"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+description = "high-performance regex engine with intersection and complement operations"
+keywords = ["regex", "automata", "intersection", "complement"]
+categories = ["text-processing"]
+documentation = "https://docs.rs/resharp"
+readme = "../README.md"
+
+[features]
+default = ["delayed"]
+delayed = ["resharp-algebra/delayed"]
+debug-derivatives = []
+debug-nulls = []
+
+[dependencies]
+resharp-algebra = { version = "0.1.0", path = "../resharp-algebra" }
+resharp-parser = { version = "0.1.0", path = "../resharp-parser" }
+
+[dev-dependencies]
+resharp-algebra = { version = "0.1.0", path = "../resharp-algebra" }
+resharp-parser = { version = "0.1.0", path = "../resharp-parser" }
+toml = "0.8"
+criterion = "0.5"
+regex = "1"
+fancy-regex = "0.14"
+regex-automata = "0.4.14"
+
+[[bench]]
+name = "comparison"
+harness = false

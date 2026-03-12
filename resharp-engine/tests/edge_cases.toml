@@ -1,0 +1,255 @@
+description = '''
+edge cases: (?i), unicode byte offsets, dot-newline, nested booleans, quantified groups.
+'''
+
+# -- (?i) case-insensitive (completely untested) --
+
+[[test]]
+name = "ci_literal"
+pattern = "(?i)abc"
+input = "xAbCx"
+matches = [[1, 4]]
+
+[[test]]
+name = "ci_alternation"
+pattern = "(?i)(foo|bar)"
+input = "FOO and Bar"
+matches = [[0, 3], [8, 11]]
+
+[[test]]
+name = "ci_class_range"
+pattern = "(?i)[a-f]+"
+input = "xABCDEFx"
+matches = [[1, 7]]
+
+[[test]]
+name = "ci_scoped"
+pattern = "(?i:abc)def"
+input = "ABCdef"
+matches = [[0, 6]]
+ignore = true
+reason = "scoped (?i:...) flag not propagated into group"
+
+[[test]]
+name = "ci_scoped_boundary"
+pattern = "(?i:abc)def"
+input = "ABCDEF"
+matches = []
+ignore = true
+reason = "scoped (?i:...) flag not propagated into group"
+
+[[test]]
+name = "ci_quantifier"
+pattern = "(?i)a+"
+input = "aAaA"
+matches = [[0, 4]]
+
+[[test]]
+name = "ci_bounded_repeat"
+pattern = "(?i)ab{2,4}"
+input = "aBBB"
+matches = [[0, 4]]
+
+[[test]]
+name = "ci_dotstar"
+pattern = "(?i)a.*z"
+input = "AbcZ"
+matches = [[0, 4]]
+
+# -- (?i) + boolean operations --
+
+[[test]]
+name = "ci_complement"
+pattern = '(?i)~(_*hello_*)'
+input = "HELLO"
+matches = [[0, 4], [4, 5], [5, 5]]
+
+[[test]]
+name = "ci_complement_no_match"
+pattern = '(?i)~(_*a_*)'
+input = "bBb"
+matches = [[0, 3], [3, 3]]
+
+[[test]]
+name = "ci_intersection"
+pattern = "(?i)(.*cat.*&.*dog.*)"
+input = "my CAT and DOG"
+matches = [[0, 14]]
+
+# -- dot vs newline --
+
+[[test]]
+name = "dot_stops_at_newline"
+pattern = ".+"
+input = "a\nb"
+matches = [[0, 1], [2, 3]]
+
+[[test]]
+name = "dot_star_blocked_by_newline"
+pattern = "a.*b"
+input = "a\nb"
+matches = []
+
+[[test]]
+name = "any_byte_crosses_newline"
+pattern = 'a[\s\S]*b'
+input = "a\nb"
+matches = [[0, 3]]
+
+# -- unicode byte offsets --
+
+[[test]]
+name = "unicode_literal"
+pattern = "café"
+input = "I love café!"
+matches = [[7, 12]]
+
+[[test]]
+name = "unicode_dot_byte_level"
+pattern = "f.f"
+input = "féf"
+matches = []
+
+[[test]]
+name = "unicode_two_dots"
+pattern = "f..f"
+input = "féf"
+matches = [[0, 4]]
+
+[[test]]
+name = "unicode_lookbehind"
+pattern = '(?<=é)x'
+input = "éx"
+matches = [[2, 3]]
+
+# -- intersection + anchors --
+
+[[test]]
+name = "inter_anchor_both"
+pattern = '^[a-z]+$&.*cat.*'
+input = "thecat"
+matches = [[0, 6]]
+
+[[test]]
+name = "inter_anchor_no_match_space"
+pattern = '^[a-z]+$&.*cat.*'
+input = "the cat"
+matches = []
+
+[[test]]
+name = "inter_anchor_length_and_digit"
+pattern = '^.{4,8}$&.*\d.*'
+input = "abc1def"
+matches = [[0, 7]]
+
+[[test]]
+name = "inter_anchor_too_long"
+pattern = '^.{4,8}$&.*\d.*'
+input = "abcdefghi"
+matches = []
+
+[[test]]
+name = "inter_anchor_password_valid"
+pattern = '~(.*\d\d.*)&^[a-zA-Z\d]{8,}$'
+input = "Abcdefg1"
+matches = [[0, 8]]
+
+[[test]]
+name = "inter_anchor_password_invalid"
+pattern = '~(.*\d\d.*)&^[a-zA-Z\d]{8,}$'
+input = "Ab12cdef"
+matches = []
+
+# -- nested booleans --
+
+[[test]]
+name = "double_complement"
+pattern = '~(~(abc))'
+input = "xabcx"
+matches = [[1, 4]]
+
+[[test]]
+name = "complement_concat_literal"
+pattern = '~(.*x.*)y'
+input = "aaaay"
+matches = [[0, 5]]
+
+# -- quantified alternation groups --
+
+[[test]]
+name = "quantified_alt"
+pattern = "(a|bc){2,3}"
+input = "abca"
+matches = [[0, 4]]
+
+[[test]]
+name = "quantified_alt_mixed_lengths"
+pattern = "(x|yy|zzz){2}"
+input = "xzzz"
+matches = [[0, 4]]
+
+[[test]]
+name = "quantified_alt_exact"
+pattern = "(ab|cd){3}"
+input = "abcdab"
+matches = [[0, 6]]
+
+[[test]]
+name = "optional_group_skipped"
+pattern = "a(bc)?d"
+input = "ad"
+matches = [[0, 2]]
+
+[[test]]
+name = "optional_group_used"
+pattern = "a(bc)?d"
+input = "abcd"
+matches = [[0, 4]]
+
+# -- bounded repeat edge cases --
+
+[[test]]
+name = "exact_repeat_boundary"
+pattern = "a{5}"
+input = "aaaaaa"
+matches = [[0, 5]]
+
+[[test]]
+name = "bounded_repeat_greedy_clamp"
+pattern = "a{3,5}"
+input = "aaaa"
+matches = [[0, 4]]
+
+[[test]]
+name = "bounded_repeat_too_short"
+pattern = "a{3,5}"
+input = "aa"
+matches = []
+
+# -- alternation prefix overlap --
+
+[[test]]
+name = "alt_longest_first"
+pattern = "abcd|abc"
+input = "abcd"
+matches = [[0, 4]]
+
+[[test]]
+name = "alt_fallback_shorter"
+pattern = "abcd|abc"
+input = "abcx"
+matches = [[0, 3]]
+
+# -- consecutive quantifiers --
+
+[[test]]
+name = "consecutive_plus"
+pattern = "a+b+"
+input = "aaabbb"
+matches = [[0, 6]]
+
+[[test]]
+name = "alt_common_prefix_branch"
+pattern = "(abc|abd)"
+input = "abd"
+matches = [[0, 3]]

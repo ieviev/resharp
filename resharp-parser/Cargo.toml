@@ -1,0 +1,16 @@
+[package]
+name = "resharp-parser"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+description = "regex pattern parser for resharp"
+keywords = ["regex", "parser"]
+categories = ["parsing"]
+readme = "../README.md"
+
+[dependencies]
+regex-syntax = "0.8.5"
+resharp-algebra = { version = "0.1.0", path = "../resharp-algebra" }

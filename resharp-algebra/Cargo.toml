@@ -1,0 +1,22 @@
+[package]
+name = "resharp-algebra"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+description = "boolean algebra and symbolic rewriting engine for resharp regex"
+keywords = ["regex", "automata", "boolean-algebra"]
+categories = ["algorithms"]
+readme = "../README.md"
+
+[dependencies]
+smallvec = "1.14.0"
+
+[features]
+print_rewrites = []
+graphviz = []
+delayed = []
+norewrite = []
+default = ["delayed"]

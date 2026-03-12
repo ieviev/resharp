@@ -1,0 +1,70 @@
+description = '''
+negative tests for invalid patterns and parser error paths.
+all tests use expect_error = true to verify Regex::new returns Err.
+'''
+
+[[test]]
+name = "unclosed_class"
+pattern = "[unclosed"
+expect_error = true
+reason = "ClassUnclosed"
+
+[[test]]
+name = "unclosed_group"
+pattern = "(unclosed"
+expect_error = true
+reason = "GroupUnclosed"
+
+[[test]]
+name = "repetition_missing_operand"
+pattern = "*"
+expect_error = true
+reason = "RepetitionMissing"
+
+[[test]]
+name = "class_range_invalid"
+pattern = "[z-a]"
+expect_error = true
+reason = "ClassRangeInvalid"
+
+[[test]]
+name = "escape_hex_invalid"
+pattern = '\xGG'
+expect_error = true
+reason = "EscapeHexInvalid"
+
+[[test]]
+name = "group_name_empty"
+pattern = "(?P<>abc)"
+expect_error = true
+reason = "GroupNameEmpty"
+
+[[test]]
+name = "unclosed_repetition"
+pattern = "a{3"
+expect_error = true
+reason = "RepetitionCountUnclosed"
+
+[[test]]
+name = "nested_unclosed_group"
+pattern = "((abc)"
+expect_error = true
+reason = "GroupUnclosed - nested"
+
+[[test]]
+name = "invalid_escape"
+pattern = '\p{InvalidPropertyName}'
+expect_error = true
+reason = "UnicodePropertyNotFound"
+
+[[test]]
+name = "empty_pattern_repetition"
+pattern = "+abc"
+expect_error = true
+reason = "RepetitionMissing - plus"
+
+[[test]]
+name = "unclosed_class_negated"
+pattern = "[^abc"
+expect_error = true
+reason = "ClassUnclosed - negated"

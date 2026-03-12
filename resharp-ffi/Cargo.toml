@@ -1,0 +1,12 @@
+[package]
+name = "resharp-ffi"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+resharp = { path = "../resharp-engine" }

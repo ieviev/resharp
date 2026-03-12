@@ -1,0 +1,459 @@
+description = '''
+tests exercising the BFS derivative prefix skip optimization.
+matches = [[start, end]] in utf8 bytes (half-open intervals).
+covers literals, classes, anchors, booleans, quantifiers, lookarounds,
+and long inputs where memchr-based skip is the hot path.
+'''
+
+# -- literals: high skip potential (few non-self bytes in reverse DFA) --
+
+[[test]]
+pattern = 'abc'
+input = 'xxabcxx'
+matches = [[2, 5]]
+
+[[test]]
+pattern = 'abc'
+input = 'abcabc'
+matches = [[0, 3], [3, 6]]
+
+[[test]]
+pattern = 'abc'
+input = 'xyzxyz'
+matches = []
+
+[[test]]
+pattern = 'abc'
+input = 'abc'
+matches = [[0, 3]]
+
+[[test]]
+pattern = 'z'
+input = 'aaaaaaaaaaaaaaaaaaaaz'
+matches = [[20, 21]]
+
+[[test]]
+pattern = 'z'
+input = 'zaaaaaaaaaaaaaaaaaaa'
+matches = [[0, 1]]
+
+[[test]]
+pattern = 'needle'
+input = 'haystackhaystackhaystackhaystackneedlehaystack'
+matches = [[32, 38]]
+
+[[test]]
+pattern = 'needle'
+input = 'nope'
+matches = []
+
+[[test]]
+pattern = 'ab'
+input = 'aababab'
+matches = [[1, 3], [3, 5], [5, 7]]
+
+[[test]]
+pattern = 'x'
+input = 'x'
+matches = [[0, 1]]
+
+[[test]]
+pattern = 'hello'
+input = '    hello    hello    '
+matches = [[4, 9], [13, 18]]
+
+# -- single char in long input --
+
+[[test]]
+pattern = 'q'
+input = '00000000000000000000000000000000000000000000q000'
+matches = [[44, 45]]
+
+[[test]]
+pattern = 'q'
+input = '000000000000000000000000000000000000000000000000'
+matches = []
+
+# -- character classes --
+
+[[test]]
+pattern = '[0-9]+'
+input = 'abc123def456'
+matches = [[3, 6], [9, 12]]
+
+[[test]]
+pattern = '[aeiou]'
+input = 'bcdfg'
+matches = []
+
+[[test]]
+pattern = '[aeiou]'
+input = 'hello'
+matches = [[1, 2], [4, 5]]
+
+[[test]]
+pattern = '[^a-z]+'
+input = 'abc123ABC'
+matches = [[3, 9]]
+
+[[test]]
+pattern = '[A-Z][a-z]+'
+input = 'Hello World Foo'
+matches = [[0, 5], [6, 11], [12, 15]]
+
+# -- anchors --
+
+[[test]]
+pattern = '^\d+$'
+input = '12345'
+matches = [[0, 5]]
+
+[[test]]
+pattern = '^\d+$'
+input = '123a5'
+matches = []
+
+[[test]]
+pattern = '^hello'
+input = 'hello world'
+matches = [[0, 5]]
+
+[[test]]
+pattern = 'world$'
+input = 'hello world'
+matches = [[6, 11]]
+
+[[test]]
+pattern = '^exact$'
+input = 'exact'
+matches = [[0, 5]]
+
+[[test]]
+pattern = '^exact$'
+input = 'not exact'
+matches = []
+
+# -- quantifiers --
+
+[[test]]
+pattern = 'a+'
+input = 'bbbaaabbb'
+matches = [[3, 6]]
+
+[[test]]
+pattern = 'a+'
+input = 'aaa'
+matches = [[0, 3]]
+
+[[test]]
+pattern = '(ab)+'
+input = '__abab__ab__'
+matches = [[2, 6], [8, 10]]
+
+[[test]]
+pattern = 'ab{2,4}c'
+input = 'xabbcxabbbcxabbbbcx'
+matches = [[1, 5], [6, 11], [12, 18]]
+
+[[test]]
+pattern = 'a{3}'
+input = 'aaaaaa'
+matches = [[0, 3], [3, 6]]
+
+# -- dot patterns --
+
+[[test]]
+pattern = '..g'
+input = 'dfdff dfggg gfgdfg gddfdf'
+matches = [[6, 9], [10, 13], [15, 18]]
+
+[[test]]
+pattern = '.+x'
+input = 'abcx'
+matches = [[0, 4]]
+
+[[test]]
+pattern = 'a.b'
+input = 'axb ayb azb'
+matches = [[0, 3], [4, 7], [8, 11]]
+
+# -- alternation --
+
+[[test]]
+pattern = 'cat|dog'
+input = 'I have a cat and a dog'
+matches = [[9, 12], [19, 22]]
+
+[[test]]
+pattern = 'aa|bb'
+input = 'aabb'
+matches = [[0, 2], [2, 4]]
+
+[[test]]
+pattern = 'foo|bar|baz'
+input = '___foo___bar___baz___'
+matches = [[3, 6], [9, 12], [15, 18]]
+
+# -- complement --
+
+[[test]]
+pattern = '~(_*\d\d_*)'
+input = 'Aa11aBaAA'
+matches = [[0, 3], [3, 9], [9, 9]]
+
+[[test]]
+pattern = '~(.*and.*)'
+input = '__A and B'
+matches = [[0, 6], [6, 9], [9, 9]]
+
+[[test]]
+pattern = '~(.*nd.*)'
+input = '_ndB'
+matches = [[0, 2], [2, 4], [4, 4]]
+
+[[test]]
+pattern = 'a~(_*e_*)'
+input = 'abcdefghijklmnop'
+matches = [[0, 4]]
+
+# -- intersection --
+
+[[test]]
+pattern = 'c...&...s'
+input = 'raining cats and dogs'
+matches = [[8, 12]]
+
+[[test]]
+pattern = 'c.*&.*s'
+input = 'cats blah blah blah'
+matches = [[0, 4]]
+
+[[test]]
+pattern = '.*a.*&.*b.*&.*c.*'
+input = 'abc'
+matches = [[0, 3]]
+
+# -- complement + intersection --
+
+[[test]]
+pattern = '~(.*\d\d.*)&[a-zA-Z\d]{8,}'
+input = 'tej55zhA25wXu8bvQxFxt'
+matches = [[9, 21]]
+
+[[test]]
+pattern = '~(.*\d\d.*)&[a-zA-Z\d]{8,}'
+input = 'y tej55zhA25wXu8bvQxFxt o'
+matches = [[11, 23]]
+
+[[test]]
+pattern = '.*[a-z].*&.*[A-Z].*&.*\d.*&[a-zA-Z\d]{8,}&~(.*\d\d.*)'
+input = 'y tej55zhA25wXu8bvQxFxt o'
+matches = [[11, 23]]
+
+# -- lookahead --
+
+[[test]]
+pattern = 'a(?=b)'
+input = '_ab_ab_'
+matches = [[1, 2], [4, 5]]
+
+[[test]]
+pattern = 'bb(?=aa)'
+input = '__bbaa__'
+matches = [[2, 4]]
+
+[[test]]
+pattern = '\d+(?=[aA]\.?[mM]\.?)'
+input = '10am'
+matches = [[0, 2]]
+
+[[test]]
+pattern = '(ab)+(?=_)'
+input = '_ab_ab_'
+matches = [[1, 3], [4, 6]]
+
+# -- lookbehind --
+
+[[test]]
+pattern = '(?<=b)a'
+input = 'ba'
+matches = [[1, 2]]
+
+[[test]]
+pattern = '(?<=b)a'
+input = 'bbbba'
+matches = [[4, 5]]
+
+[[test]]
+pattern = '(?<=aaa).*'
+input = 'aaabbb'
+matches = [[3, 6]]
+
+[[test]]
+pattern = '(?<=author).*'
+input = 'author: abc and def'
+matches = [[6, 19]]
+
+# -- negative lookbehind --
+
+[[test]]
+pattern = '(?<!\d)a'
+input = '1a__a__a'
+matches = [[4, 5], [7, 8]]
+
+[[test]]
+pattern = '(?<!b)c'
+input = ' c'
+matches = [[1, 2]]
+
+# -- real-world patterns with long inputs --
+
+[[test]]
+pattern = '\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}'
+input = 'connect from 192.168.1.100 to server 10.0.0.1 on port 443'
+matches = [[13, 26], [37, 45]]
+
+[[test]]
+pattern = '[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}'
+input = 'contact user@example.com or admin@test.org for info'
+matches = [[8, 24], [28, 42]]
+
+[[test]]
+pattern = '<!--[\s\S]*--[ \t]*>'
+input = '<!-- anything -- >'
+matches = [[0, 18]]
+
+[[test]]
+pattern = '((\d{2})|(\d))\/((\d{2})|(\d))\/((\d{4})|(\d{2}))'
+input = '4/05/89'
+matches = [[0, 7]]
+
+# -- patterns at boundaries --
+
+[[test]]
+pattern = 'abc'
+input = 'abc_______________'
+matches = [[0, 3]]
+
+[[test]]
+pattern = 'abc'
+input = '_______________abc'
+matches = [[15, 18]]
+
+[[test]]
+pattern = 'xyz'
+input = 'xyzxyz_____________xyzxyz'
+matches = [[0, 3], [3, 6], [19, 22], [22, 25]]
+
+# -- multiline --
+
+[[test]]
+pattern = "(?:.+\n)+\n"
+input = "\naaa\n\nbbb\n\nccc\n\n"
+matches = [[1, 6], [6, 11], [11, 16]]
+
+# -- greedy across long input --
+
+[[test]]
+pattern = 'q.*q'
+input = 'q my comment q'
+matches = [[0, 14]]
+
+[[test]]
+pattern = '.*a{3}'
+input = 'aa aaa'
+matches = [[0, 6]]
+
+# -- word boundary alternatives --
+
+[[test]]
+pattern = '(?<=\W|\A)11'
+input = '11'
+matches = [[0, 2]]
+
+[[test]]
+pattern = '(?<=\W|\A)11'
+input = ' 11'
+matches = [[1, 3]]
+
+[[test]]
+pattern = '11(?=\W|\z)'
+input = '11'
+matches = [[0, 2]]
+
+[[test]]
+pattern = '11(?=\W|\z)'
+input = '11 '
+matches = [[0, 2]]
+
+# -- repeated pattern in long haystack (skip acceleration hot path) --
+
+[[test]]
+pattern = 'MARKER'
+input = '..........................................................................MARKER......................................................................MARKER..........'
+matches = [[74, 80], [150, 156]]
+
+[[test]]
+pattern = 'XY'
+input = '____________________________________________________________________________________________________XY'
+matches = [[100, 102]]
+
+[[test]]
+pattern = 'lethargy.*air'
+input = "\nlethargy, and and the air tainted with\nc\n"
+matches = [[1, 26]]
+
+# -- bracket/punctuation patterns --
+
+[[test]]
+pattern = '\(.*\)'
+input = 'f(x) and g(y)'
+matches = [[1, 13]]
+
+[[test]]
+pattern = '"[^"]*"'
+input = 'say "hello" and "bye"'
+matches = [[4, 11], [16, 21]]
+
+# -- mixed unicode boundary --
+
+[[test]]
+pattern = '(?<!鿛)(apres)\b'
+input = '鿛apres'
+matches = []
+
+# -- html tag --
+
+[[test]]
+pattern = '<h[1-6]>.*</h[1-6]>'
+input = '<h1>Title</h1> and <h2>Sub</h2>'
+matches = [[0, 31]]
+
+[[test]]
+pattern = '<h.{1,60}>.*<\/h(5|3|2|1|4)>'
+input = '<li><a href="/wiki/Lattes_Editori" title="Lattes Editori">Lattes Editori</a></li>'
+matches = []
+
+# -- bounded repeat edge --
+
+[[test]]
+pattern = 'ab{0,5}c'
+input = 'bbabbbbbc'
+matches = [[2, 9]]
+
+[[test]]
+pattern = 'ab{0,5}c'
+input = 'bbabbbcbbac'
+matches = [[2, 7], [9, 11]]
+
+# -- complex boolean in long text --
+
+[[test]]
+pattern = 'F.*&~(.*Finn)'
+input = "Finn', published in 1885."
+matches = [[0, 25]]
+
+[[test]]
+pattern = '.*Huck.*&~(.*F.*)'
+input = "The Adventures of Huckleberry Finn', published in 1885."
+matches = [[0, 30]]

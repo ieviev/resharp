@@ -1,0 +1,64 @@
+description = '''
+basic engine tests: literals, classes, alternation, greedy quantifiers.
+matches = [[start, end]] in utf8 bytes (half-open intervals).
+'''
+
+[[test]]
+name = "basic_literal"
+pattern = "abc"
+input = "xxabcxx"
+matches = [[2, 5]]
+
+[[test]]
+name = "multiple_matches"
+pattern = "aa"
+input = "aaaa"
+matches = [[0, 2], [2, 4]]
+
+[[test]]
+name = "no_match"
+pattern = "xyz"
+input = "hello"
+matches = []
+
+[[test]]
+name = "comment_pattern"
+pattern = '/\*[\d\D]*\*/'
+input = "/* my comment */"
+matches = [[0, 16]]
+
+[[test]]
+name = "negated_class"
+pattern = "[^F]+"
+input = "The Adventures of Huckleberry Finn', published in 1885."
+matches = [[0, 30], [31, 55]]
+
+[[test]]
+name = "quoted_match"
+pattern = 'q.*q'
+input = "q my comment q"
+matches = [[0, 14]]
+
+[[test]]
+name = "alternation_spaces"
+pattern = "a( |)b( |)c( |)d"
+input = "a b c d"
+matches = [[0, 7]]
+
+[[test]]
+name = "find_first"
+pattern = "ab"
+input = "xxabab"
+matches = [[2, 4], [4, 6]]
+
+[[test]]
+name = "greedy_match"
+pattern = "a+"
+input = "aaa"
+matches = [[0, 3]]
+
+[[test]]
+name = "negation_intersection"
+pattern = '~(_*(d_*){2})&.*down.*'
+input = "asd asd down asdasd asd asd "
+matches = [[7, 15]]

@@ -1,0 +1,21 @@
+[workspace]
+members = ["resharp-algebra", "resharp-parser", "resharp-engine", "resharp-ffi"]
+resolver = "2"
+
+[profile.release]
+lto = true
+codegen-units = 1
+opt-level = 3
+
+[profile.bench]
+lto = true
+codegen-units = 1
+opt-level = 3
+
+[workspace.package]
+version = "0.1.1"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/ieviev/resharp-rs"
+authors = ["Ian Erik Varatalu"]
+rust-version = "1.70"

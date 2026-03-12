@@ -1,0 +1,121 @@
+description = '''
+find_anchored tests: return longest match starting at position 0, or nothing.
+matches = [[start, end]] in utf8 bytes (half-open intervals).
+all tests use anchored = true.
+'''
+
+# -- with explicit \A --
+
+[[test]]
+name = "match"
+pattern = '\A[a-zA-Z]+\z'
+input = "asdfasdf"
+matches = [[0, 8]]
+anchored = true
+
+[[test]]
+name = "no_match"
+pattern = '\A[a-zA-Z]+\z'
+input = "(asdf)asdf"
+matches = []
+anchored = true
+
+[[test]]
+name = "prefix_only"
+pattern = '\A[0-9]+'
+input = "123abc"
+matches = [[0, 3]]
+anchored = true
+
+[[test]]
+name = "empty_nullable"
+pattern = '\A[a-z]*'
+input = ""
+matches = [[0, 0]]
+anchored = true
+
+[[test]]
+name = "empty_non_nullable"
+pattern = '\A[a-z]+'
+input = ""
+matches = []
+anchored = true
+
+[[test]]
+name = "zero_length_star_no_leading_match"
+pattern = '\Aa*'
+input = "bbabbab"
+matches = [[0, 0]]
+anchored = true
+
+[[test]]
+name = "zero_length_star_leading_match"
+pattern = '\Aa*'
+input = "aabbab"
+matches = [[0, 2]]
+anchored = true
+
+[[test]]
+name = "zero_length_empty_pattern"
+pattern = '\A'
+input = "hello"
+matches = [[0, 0]]
+anchored = true
+
+[[test]]
+name = "zero_length_optional"
+pattern = '\Aa?'
+input = "xyz"
+matches = [[0, 0]]
+anchored = true
+
+# -- without leading \A (implicit anchoring) --
+
+[[test]]
+name = "no_anchor_alpha"
+pattern = '[a-zA-Z]+'
+input = "hello123"
+matches = [[0, 5]]
+anchored = true
+
+[[test]]
+name = "no_anchor_no_match"
+pattern = '[a-zA-Z]+'
+input = "123hello"
+matches = []
+anchored = true
+
+[[test]]
+name = "no_anchor_with_end"
+pattern = '[a-z]+\z'
+input = "hello"
+matches = [[0, 5]]
+anchored = true
+
+[[test]]
+name = "no_anchor_star"
+pattern = 'a*'
+input = "aaabb"
+matches = [[0, 3]]
+anchored = true
+
+[[test]]
+name = "no_anchor_nullable_no_lead"
+pattern = 'x*'
+input = "yyy"
+matches = [[0, 0]]
+anchored = true
+
+[[test]]
+name = "no_anchor_empty_input"
+pattern = '[a-z]+'
+input = ""
+matches = []
+anchored = true
+
+[[test]]
+name = "no_anchor_prefix"
+pattern = '[0-9]+'
+input = "42abc"
+matches = [[0, 2]]
+anchored = true

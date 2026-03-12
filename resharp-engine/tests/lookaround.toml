@@ -1,0 +1,596 @@
+description = '''
+lookahead, lookbehind, combined lookaround, and negative lookaround tests.
+matches = [[start, end]] in utf8 bytes (half-open intervals).
+'''
+
+# -- lookahead --
+
+[[test]]
+name = "lookahead_greedy"
+pattern = ".*(?=aaa)"
+input = "baaa"
+matches = [[0, 1], [1, 1]]
+
+[[test]]
+name = "lookahead_zero_width"
+pattern = "(?=a)"
+input = "a"
+expect_error = true
+reason = "unsupported: pure lookahead"
+
+[[test]]
+name = "lookahead_a_then_a"
+pattern = "a(?=a)"
+input = "aa"
+matches = [[0, 1]]
+
+[[test]]
+name = "lookahead_a_then_b"
+pattern = "a(?=b)"
+input = "_ab_ab_"
+matches = [[1, 2], [4, 5]]
+
+[[test]]
+name = "lookahead_bb_aa"
+pattern = "bb(?=aa)"
+input = "__bbaa__"
+matches = [[2, 4]]
+
+[[test]]
+name = "lookahead_bb_a"
+pattern = "bb(?=a)"
+input = "__bbaaa__"
+matches = [[2, 4]]
+
+[[test]]
+name = "lookahead_bb_aaa"
+pattern = "bb(?=aaa)"
+input = "__bbaaa__"
+matches = [[2, 4]]
+
+[[test]]
+name = "lookahead_bb_aaaa"
+pattern = "bb(?=aaaa)"
+input = "__bbaaaa__"
+matches = [[2, 4]]
+
+[[test]]
+name = "lookahead_bb_aaaaa"
+pattern = "bb(?=aaaaa)"
+input = "__bbaaaaa__"
+matches = [[2, 4]]
+
+[[test]]
+name = "lookahead_word_springer"
+pattern = '\w+(?=.*Springer)'
+input = "publisher={Springer}"
+matches = [[0, 9]]
+
+[[test]]
+name = "lookahead_word_springer_wildcard"
+pattern = '\w+(?=_*Springer)'
+input = "publisher={Springer}"
+matches = [[0, 9]]
+
+[[test]]
+name = "lookahead_dot_c"
+pattern = ".(?=.*c)"
+input = "bc"
+matches = [[0, 1]]
+
+[[test]]
+name = "lookahead_a_b_underscore"
+pattern = "a(?=b_)"
+input = "_ab_ab_"
+matches = [[1, 2], [4, 5]]
+
+[[test]]
+name = "lookahead_dotstar_b_underscore"
+pattern = ".*(?=b_)"
+input = "_ab_ab_"
+matches = [[0, 5], [5, 5]]
+
+[[test]]
+name = "lookahead_group_plus_underscore"
+pattern = "(ab)+(?=_)"
+input = "_ab_ab_"
+matches = [[1, 3], [4, 6]]
+
+[[test]]
+name = "lookahead_multiple_bbb_ccc"
+pattern = ".*(?=.*bbb)(?=.*ccc)"
+input = "aaa bbb ccc"
+matches = [[0, 4], [4, 4]]
+
+[[test]]
+name = "lookahead_multiple_13_2"
+pattern = "1(?=.*3)(?=.*2)"
+input = " 1 23"
+matches = [[1, 2]]
+
+[[test]]
+name = "lookahead_a_plus_wb_underscores"
+pattern = 'a+(?=\W)(?=.*___)'
+input = "aaa ___"
+matches = [[0, 3]]
+
+[[test]]
+name = "lookahead_dotstar_wb_underscores"
+pattern = '.*(?=\W)(?=.*___)'
+input = "aaa ___"
+matches = [[0, 3], [3, 3]]
+
+[[test]]
+name = "lookahead_time_am"
+pattern = '\d+(?=[aA]\.?[mM]\.?)'
+input = "10am"
+matches = [[0, 2]]
+
+[[test]]
+name = "lookahead_time_pm"
+pattern = '\d+(?=[aApP]\.?[mM]\.?)'
+input = "10pm"
+matches = [[0, 2]]
+
+[[test]]
+name = "lookahead_time_space_pm"
+pattern = '\d+(?=\s*[aApP]\.?[mM]\.?)'
+input = "10 pm"
+matches = [[0, 2]]
+
+[[test]]
+name = "lookahead_time_many_spaces_pm"
+pattern = '\d+(?=\s*[aApP]\.?[mM]\.?)'
+input = "10         pm"
+matches = [[0, 2]]
+
+[[test]]
+name = "lookahead_end_anchor"
+pattern = 'a_*(?=\z)'
+input = "aaa"
+matches = [[0, 3]]
+ignore = true
+reason = "\\z anchor not yet supported"
+
+[[test]]
+name = "lookahead_end_anchor_wildcard"
+pattern = 'a_*(?=_*\z)'
+input = "aaa"
+matches = [[0, 3]]
+ignore = true
+reason = "\\z anchor not yet supported"
+
+# -- lookbehind --
+
+[[test]]
+name = "lookbehind_zero_width_b"
+pattern = "(?<=b)"
+input = "b"
+expect_error = true
+reason = "unsupported: pure lookbehind without body"
+
+[[test]]
+name = "lookbehind_zero_width_bb"
+pattern = "(?<=bb)"
+input = "bb"
+expect_error = true
+reason = "unsupported: pure lookbehind without body"
+
+[[test]]
+name = "lookbehind_zero_width_bbb"
+pattern = "(?<=bbb)"
+input = "bbb"
+expect_error = true
+reason = "unsupported: pure lookbehind without body"
+
+[[test]]
+name = "lookbehind_zero_width_bbbb"
+pattern = "(?<=bbbb)"
+input = "bbbb"
+expect_error = true
+reason = "unsupported: pure lookbehind without body"
+
+[[test]]
+name = "lookbehind_b_then_b"
+pattern = "(?<=b)b"
+input = "bb"
+matches = [[1, 2]]
+
+[[test]]
+name = "lookbehind_bb_then_b"
+pattern = "(?<=bb)b"
+input = "bbb"
+matches = [[2, 3]]
+
+[[test]]
+name = "lookbehind_b_then_a"
+pattern = "(?<=b)a"
+input = "ba"
+matches = [[1, 2]]
+
+[[test]]
+name = "lookbehind_b_then_a_bba"
+pattern = "(?<=b)a"
+input = "bba"
+matches = [[2, 3]]
+
+[[test]]
+name = "lookbehind_b_then_a_bbbba"
+pattern = "(?<=b)a"
+input = "bbbba"
+matches = [[4, 5]]
+
+[[test]]
+name = "lookbehind_bb_then_a"
+pattern = "(?<=bb)a"
+input = "bbbba"
+matches = [[4, 5]]
+
+[[test]]
+name = "lookbehind_bbb_then_a"
+pattern = "(?<=bbb)a"
+input = "bbbba"
+matches = [[4, 5]]
+
+[[test]]
+name = "lookbehind_aaa_dotstar"
+pattern = "(?<=aaa).*"
+input = "aaabbb"
+matches = [[3, 6]]
+
+[[test]]
+name = "lookbehind_author"
+pattern = "(?<=author).*"
+input = "author: abc and def"
+matches = [[6, 19]]
+
+[[test]]
+name = "lookbehind_braces"
+pattern = '(?<=aaa\{).*(?=\})'
+input = "aaa{bbb {ccc}}"
+matches = [[4, 13]]
+
+[[test]]
+name = "lookbehind_stacked_w_a"
+pattern = '(?<=\w)(?<=a)b'
+input = "ab"
+matches = [[1, 2]]
+
+[[test]]
+name = "lookbehind_stacked_ww_aa"
+pattern = '(?<=\w\w)(?<=aa)b'
+input = "aab"
+matches = [[2, 3]]
+
+[[test]]
+name = "lookbehind_stacked_ww_aa_bb"
+pattern = '(?<=\w\w)(?<=aa)bb'
+input = "aabb"
+matches = [[2, 4]]
+
+[[test]]
+name = "lookbehind_stacked_w_aa"
+pattern = '(?<=\w)(?<=aa)b'
+input = "aab"
+matches = [[2, 3]]
+
+[[test]]
+name = "lookbehind_a_wb_b"
+pattern = '(?<=a.*)\bb'
+input = "a  b"
+matches = [[3, 4]]
+
+# -- lookbehind + lookahead combined --
+
+[[test]]
+name = "lookbehind_lookahead_dot_c"
+pattern = "(?<=a.*).(?=.*c)"
+input = "abc"
+matches = [[1, 2]]
+
+[[test]]
+name = "lookbehind_lookahead_dot_c_underscores"
+pattern = "(?<=a.*).(?=.*c)"
+input = "a__c"
+matches = [[1, 2], [2, 3]]
+
+[[test]]
+name = "lookbehind_lookahead_x"
+pattern = "(?<=a.*)(x)(?=.*c)"
+input = "a x c"
+matches = [[2, 3]]
+
+[[test]]
+name = "lookbehind_lookahead_wb_x"
+pattern = '(?<=a.*)(\bx)(?=.*c)'
+input = "a x c"
+matches = [[2, 3]]
+
+[[test]]
+name = "lookbehind_lookahead_wb_x_wb"
+pattern = '(?<=a.*)(\bx\b)(?=.*c)'
+input = "a x c"
+matches = [[2, 3]]
+
+[[test]]
+name = "lookbehind_lookahead_wb_xx_no_match"
+pattern = '(?<=a.*)(\bx\b)(?=.*c)'
+input = "a xx c"
+matches = []
+
+[[test]]
+name = "lookbehind_lookahead_hello"
+pattern = '(?<=\W)hello(?=\W)'
+input = " hello "
+matches = [[1, 6]]
+
+[[test]]
+name = "lookbehind_lookahead_helloworld_no_match"
+pattern = '(?<=\W)hello(?=\W)'
+input = " helloworld "
+matches = []
+
+[[test]]
+name = "lookbehind_bounded_ab"
+pattern = "(?<=c.*)(ab){1,3}"
+input = "c_ababab"
+matches = [[2, 8]]
+
+[[test]]
+name = "lookahead_bounded_ab_c"
+pattern = "(ab){1,3}(?=.*c)"
+input = "__ababab_c"
+matches = [[2, 8]]
+
+# -- complex lookaround --
+
+[[test]]
+name = "lookahead_complex_multi"
+pattern = "a.+(?=.*f)(?=.*e)(?=c)"
+input = "abcdef"
+matches = [[0, 2]]
+
+[[test]]
+name = "lookbehind_complex_multi"
+pattern = "(?<=f)(?<=e.*)(?<=c.*).+"
+input = "abcdefghij"
+matches = [[6, 10]]
+
+# -- negative lookaround --
+
+[[test]]
+name = "neg_lookahead"
+pattern = "(?!a)"
+input = "b"
+expect_error = true
+reason = "unsupported: pure negative lookahead"
+
+[[test]]
+name = "neg_lookbehind_b"
+pattern = "(?<!a)"
+input = "b"
+expect_error = true
+reason = "unsupported: pure negative lookbehind"
+
+[[test]]
+name = "neg_lookbehind_a"
+pattern = "(?<!a)"
+input = "a"
+expect_error = true
+reason = "unsupported: pure negative lookbehind"
+
+[[test]]
+name = "neg_lookbehind_digit_a"
+pattern = '(?<!\d)a'
+input = " a"
+matches = [[1, 2]]
+
+[[test]]
+name = "neg_lookbehind_b_c"
+pattern = "(?<!b)c"
+input = " c"
+matches = [[1, 2]]
+
+[[test]]
+name = "pos_lookbehind_digit_a"
+pattern = '(?<=\d)a'
+input = "1a__a__a"
+matches = [[1, 2]]
+
+[[test]]
+name = "neg_lookbehind_digit_a_multi"
+pattern = '(?<!\d)a'
+input = "1a__a__a"
+matches = [[4, 5], [7, 8]]
+
+[[test]]
+name = "neg_lookbehind_digit_a_space"
+pattern = '(?<!\d)a'
+input = " a"
+matches = [[1, 2]]
+
+# -- conditional matching --
+
+[[test]]
+name = "lookahead_conditional_digit"
+pattern = '1(?=[012])\d'
+input = "11"
+matches = [[0, 2]]
+
+[[test]]
+name = "lookbehind_dot_a"
+pattern = ".(?<=a)"
+input = "aaa"
+expect_error = true
+reason = "unsupported: lookbehind as match filter"
+
+# -- lookahead with word boundary --
+
+[[test]]
+name = "lookahead_wb_dash"
+pattern = 'a+\b(?=.*---)'
+input = "aaa ---"
+matches = [[0, 3]]
+
+[[test]]
+name = "lookahead_wb_1_2"
+pattern = '1\b(?=.*2)'
+input = " 1 2"
+matches = [[1, 2]]
+
+[[test]]
+name = "lookahead_wb_x_c"
+pattern = 'x\b(?=.*c)'
+input = "a x c"
+matches = [[2, 3]]
+
+# -- union of lookaheads --
+
+[[test]]
+name = "union_lookahead_ab_cd_ef_gh"
+pattern = 'ab(?=cd)|ef(?=gh)'
+input = "abcd"
+matches = [[0, 2]]
+
+[[test]]
+name = "union_lookahead_ab_cd_ef_gh_second"
+pattern = 'ab(?=cd)|ef(?=gh)'
+input = "efgh"
+matches = [[0, 2]]
+
+[[test]]
+name = "union_lookahead_ab_cd_ef_gh_both"
+pattern = 'ab(?=cd)|ef(?=gh)'
+input = "abcd efgh"
+matches = [[0, 2], [5, 7]]
+
+# -- readme lookahead derivative tests --
+# derivatives of (?<=\s)[A-Z][a-z]+(?=\s) and related patterns
+
+[[test]]
+name = "readme_lookahead_single_word"
+pattern = '(?<=\s)[A-Z][a-z]+(?=\s)'
+input = " Hello "
+matches = [[1, 6]]
+
+[[test]]
+name = "readme_lookahead_multiple_words"
+pattern = '(?<=\s)[A-Z][a-z]+(?=\s)'
+input = " Hello World Foo "
+matches = [[1, 6], [7, 12], [13, 16]]
+
+[[test]]
+name = "readme_lookahead_no_trailing_space"
+pattern = '(?<=\s)[A-Z][a-z]+(?=\s)'
+input = " Hello"
+matches = []
+
+[[test]]
+name = "readme_lookahead_no_leading_space"
+pattern = '(?<=\s)[A-Z][a-z]+(?=\s)'
+input = "Hello "
+matches = []
+
+[[test]]
+name = "readme_lookahead_adjacent_caps"
+pattern = '(?<=\s)[A-Z][a-z]+(?=\s)'
+input = " AB "
+matches = []
+
+[[test]]
+name = "readme_lookahead_single_lower"
+pattern = '(?<=\s)[A-Z][a-z]+(?=\s)'
+input = " A "
+matches = []
+
+[[test]]
+name = "readme_lookahead_tab_delimited"
+pattern = '(?<=\s)[A-Z][a-z]+(?=\s)'
+input = "\tHello\tWorld\t"
+matches = [[1, 6], [7, 12]]
+
+[[test]]
+name = "readme_lookahead_mixed_spacing"
+pattern = '(?<=\s)[A-Z][a-z]+(?=\s)'
+input = " Cat  Dog "
+matches = [[1, 4], [6, 9]]
+
+[[test]]
+name = "readme_lookahead_surrounded_by_words"
+pattern = '(?<=\s)[A-Z][a-z]+(?=\s)'
+input = "foo Bar baz"
+matches = [[4, 7]]
+
+[[test]]
+name = "readme_lookahead_newline_delimited"
+pattern = '(?<=\s)[A-Z][a-z]+(?=\s)'
+input = "\nHello\n"
+matches = [[1, 6]]
+
+# lookahead derivative: longer body forces more derivative steps
+
+[[test]]
+name = "lookahead_der_long_body"
+pattern = '[A-Z][a-z]{5,}(?=\s)'
+input = "Abcdef Xy "
+matches = [[0, 6]]
+
+[[test]]
+name = "lookahead_der_long_lookahead_body"
+pattern = '\w+(?=\s{3,}end)'
+input = "word   end"
+matches = [[0, 4]]
+
+[[test]]
+name = "lookahead_der_class_repetition"
+pattern = '[a-z]+(?=[A-Z])'
+input = "abcDef"
+matches = [[0, 3]]
+
+[[test]]
+name = "lookahead_der_class_repetition_multi"
+pattern = '[a-z]+(?=[A-Z])'
+input = "abcDefGhi"
+matches = [[0, 3], [4, 6]]
+
+[[test]]
+name = "lookahead_der_digit_before_alpha"
+pattern = '\d+(?=[a-z])'
+input = "123abc456def"
+matches = [[0, 3], [6, 9]]
+
+# derivative steps through nested/chained lookaheads
+
+[[test]]
+name = "lookahead_der_chained_three"
+pattern = '\w+(?=.*x)(?=.*y)(?=.*z)'
+input = "abc xyz"
+matches = [[0, 3]]
+
+[[test]]
+name = "lookahead_der_chained_three_no_match"
+pattern = '\w+(?=.*x)(?=.*y)(?=.*z)'
+input = "abc xy"
+matches = []
+
+# derivative of lookahead with alternation in body
+
+[[test]]
+name = "lookahead_der_alt_body"
+pattern = '(cat|dog)(?=s)'
+input = "cats dogs"
+matches = [[0, 3], [5, 8]]
+
+[[test]]
+name = "lookahead_der_alt_body_no_s"
+pattern = '(cat|dog)(?=s)'
+input = "cat dog"
+matches = []
+
+# -- phone with lookaround context --
+
+[[test]]
+name = "lookaround_phone_uk"
+pattern = '(\s*\(?0\d{4}\)?\s*\d{6}\s*)|(\s*\(?0\d{3}\)?\s*\d{3}\s*\d{4}\s*)'
+input = "01603 123123"
+matches = [[0, 12]]
