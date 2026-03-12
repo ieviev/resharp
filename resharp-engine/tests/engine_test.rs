@@ -477,6 +477,11 @@ fn dictionary_context_medium() {
 }
 
 #[test]
+fn paragraph() {
+    run_file("paragraph.toml");
+}
+
+#[test]
 fn find_anchored() {
     run_file("find_anchored.toml");
 }

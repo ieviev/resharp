@@ -1,0 +1,97 @@
+description = '''
+paragraph boundary tests: whole-paragraph anchoring via lookbehind/lookahead.
+body = _*&~(_*\n\n_*)&~(\n_*|_*\n) - no \n\n, no leading/trailing \n.
+matches = [[start, end]] in utf8 bytes (half-open intervals).
+'''
+
+# -- basic lookbehind/lookahead building blocks --
+
+[[test]]
+name = "lookbehind_A_star_lookahead_nn_single_line"
+pattern = "(?<=\\A)_*(?=\n\n)"
+input = "ab\n\ncd\n"
+matches = [[0, 2]]
+
+[[test]]
+name = "lookbehind_A_star_lookahead_nn_multi_line"
+pattern = "(?<=\\A)_*(?=\n\n)"
+input = "ab\ncd\n\nef\n"
+matches = [[0, 5]]
+
+[[test]]
+name = "lookbehind_nn_star_lookahead_nz"
+pattern = "(?<=\n\n)_*(?=\n\\z)"
+input = "ab\n\ncd\n"
+matches = [[4, 6]]
+
+[[test]]
+name = "lookbehind_nn_star_lookahead_z"
+pattern = "(?<=\n\n)_*(?=\\z)"
+input = "ab\n\ncd"
+matches = [[4, 6]]
+
+# -- whole paragraph boundary --
+
+[[test]]
+name = "whole_para_single_line_paras"
+pattern = "(?<=\\A|\n\n)(_*&~(_*\n\n_*)&~(\n_*|_*\n))(?=\n\n|\n\\z|\\z)"
+input = "ab\n\ncd\n"
+matches = [[0, 2], [4, 6]]
+
+[[test]]
+name = "whole_para_multi_line_first"
+pattern = "(?<=\\A|\n\n)(_*&~(_*\n\n_*)&~(\n_*|_*\n))(?=\n\n|\n\\z|\\z)"
+input = "ab\ncd\n\nef\n"
+matches = [[0, 5], [7, 9]]
+
+[[test]]
+name = "whole_para_three_paras"
+pattern = "(?<=\\A|\n\n)(_*&~(_*\n\n_*)&~(\n_*|_*\n))(?=\n\n|\n\\z|\\z)"
+input = "aa\n\nbb\n\ncc\n"
+matches = [[0, 2], [4, 6], [8, 10]]
+
+[[test]]
+name = "whole_para_no_trailing_newline"
+pattern = "(?<=\\A|\n\n)(_*&~(_*\n\n_*)&~(\n_*|_*\n))(?=\n\n|\n\\z|\\z)"
+input = "aa\n\nbb"
+matches = [[0, 2], [4, 6]]
+
+[[test]]
+name = "whole_para_clean_multi_line"
+pattern = "(?<=\\A|\n\n)(_*&~(_*\n\n_*)&~(\n_*|_*\n))(?=\n\n|\n\\z|\\z)"
+input = "ab\ncd\n\nef"
+matches = [[0, 5], [7, 9]]
+
+# -- intersection with content + paragraph boundary --
+
+[[test]]
+name = "para_contains_word"
+pattern = "((_*cats_*)&(_*dogs_*))&((?<=\\A|\n\n)(_*&~(_*\n\n_*)&~(\n_*|_*\n))(?=\n\n|\n\\z|\\z))"
+input = "cats and dogs\n\nonly cats\n"
+matches = [[0, 13]]
+
+[[test]]
+name = "para_contains_word_multi_line"
+pattern = "((_*cats_*)&(_*dogs_*))&((?<=\\A|\n\n)(_*&~(_*\n\n_*)&~(\n_*|_*\n))(?=\n\n|\n\\z|\\z))"
+input = "first about\ncats and dogs\n\nonly fish\n"
+matches = [[0, 25]]
+
+[[test]]
+name = "para_contains_word_no_match_cross"
+pattern = "((_*cats_*)&(_*dogs_*))&((?<=\\A|\n\n)(_*&~(_*\n\n_*)&~(\n_*|_*\n))(?=\n\n|\n\\z|\\z))"
+input = "cats only\n\ndogs only\n"
+matches = []
+
+# -- complement with paragraph boundary (the --not use case) --
+
+[[test]]
+name = "para_with_not"
+pattern = "((_*cats_*)&~(_*dogs_*))&((?<=\\A|\n\n)(_*&~(_*\n\n_*)&~(\n_*|_*\n))(?=\n\n|\n\\z|\\z))"
+input = "cats and dogs\n\ncats alone\n"
+matches = [[15, 25]]
+
+[[test]]
+name = "para_with_not_multi_line"
+pattern = "((_*cats_*)&~(_*dogs_*))&((?<=\\A|\n\n)(_*&~(_*\n\n_*)&~(\n_*|_*\n))(?=\n\n|\n\\z|\\z))"
+input = "cats and\ndogs here\n\ncats and\nbirds here\n"
+matches = [[20, 39]]
