@@ -1,12 +1,15 @@
 pub use crate::simd::RevPrefixSearch;
 pub use crate::simd::RevSearchBytes as MintermSearchValue;
+#[cfg(target_arch = "x86_64")]
 pub use crate::simd::TSet;
 
+#[cfg(target_arch = "x86_64")]
 pub enum FwdPrefixSearch {
     Literal(crate::simd::FwdLiteralSearch),
     Prefix(crate::simd::FwdPrefixSearch),
 }
 
+#[cfg(target_arch = "x86_64")]
 impl FwdPrefixSearch {
     pub fn len(&self) -> usize {
         match self {
@@ -37,5 +40,24 @@ impl FwdPrefixSearch {
             }
             _ => false,
         }
+    }
+}
+
+// stub for non-x86_64: uninhabited enum, methods are unreachable
+#[cfg(not(target_arch = "x86_64"))]
+pub enum FwdPrefixSearch {}
+
+#[cfg(not(target_arch = "x86_64"))]
+impl FwdPrefixSearch {
+    pub fn len(&self) -> usize {
+        match *self {}
+    }
+
+    pub fn find_fwd(&self, _haystack: &[u8], _start: usize) -> Option<usize> {
+        match *self {}
+    }
+
+    pub fn find_all_literal(&self, _haystack: &[u8], _matches: &mut Vec<crate::Match>) -> bool {
+        match *self {}
     }
 }

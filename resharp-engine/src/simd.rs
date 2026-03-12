@@ -1,88 +1,5 @@
 pub use resharp_algebra::solver::TSet;
 
-use std::arch::x86_64::*;
-
-pub struct RevSearchBytes {
-    bytes: Vec<u8>,
-}
-
-impl RevSearchBytes {
-    pub fn new(bytes: Vec<u8>) -> Self {
-        debug_assert!(!bytes.is_empty() && bytes.len() <= 3);
-        Self { bytes }
-    }
-
-    pub fn bytes(&self) -> &[u8] {
-        &self.bytes
-    }
-
-    pub fn find_rev(&self, haystack: &[u8]) -> Option<usize> {
-        unsafe { self.find_rev_avx2(haystack) }
-    }
-
-    #[target_feature(enable = "avx2")]
-    unsafe fn find_rev_avx2(&self, haystack: &[u8]) -> Option<usize> {
-        let len = haystack.len();
-        if len == 0 {
-            return None;
-        }
-        let ptr = haystack.as_ptr();
-        let v0 = _mm256_set1_epi8(self.bytes[0] as i8);
-        let n = self.bytes.len();
-
-        if len >= 32 {
-            let mut pos = len - 32;
-            loop {
-                let chunk = _mm256_loadu_si256(ptr.add(pos) as *const __m256i);
-                let mut mask = _mm256_movemask_epi8(_mm256_cmpeq_epi8(chunk, v0)) as u32;
-                if n >= 2 {
-                    let v1 = _mm256_set1_epi8(self.bytes[1] as i8);
-                    mask |= _mm256_movemask_epi8(_mm256_cmpeq_epi8(chunk, v1)) as u32;
-                }
-                if n >= 3 {
-                    let v2 = _mm256_set1_epi8(self.bytes[2] as i8);
-                    mask |= _mm256_movemask_epi8(_mm256_cmpeq_epi8(chunk, v2)) as u32;
-                }
-                if mask != 0 {
-                    return Some(pos + 31 - mask.leading_zeros() as usize);
-                }
-                if pos < 32 {
-                    break;
-                }
-                pos -= 32;
-            }
-        }
-        // tail: overlapping load from position 0, mask to only check uncovered bytes
-        if len < 32 {
-            let mut buf = [0u8; 32];
-            buf[..len].copy_from_slice(&haystack[..len]);
-            let chunk = _mm256_loadu_si256(buf.as_ptr() as *const __m256i);
-            let mut mask = _mm256_movemask_epi8(_mm256_cmpeq_epi8(chunk, v0)) as u32;
-            if n >= 2 {
-                let v1 = _mm256_set1_epi8(self.bytes[1] as i8);
-                mask |= _mm256_movemask_epi8(_mm256_cmpeq_epi8(chunk, v1)) as u32;
-            }
-            if n >= 3 {
-                let v2 = _mm256_set1_epi8(self.bytes[2] as i8);
-                mask |= _mm256_movemask_epi8(_mm256_cmpeq_epi8(chunk, v2)) as u32;
-            }
-            mask &= (1u32 << len) - 1; // mask off padding bytes
-            if mask != 0 {
-                return Some(31 - mask.leading_zeros() as usize);
-            }
-        }
-        None
-    }
-}
-
-pub struct FwdLiteralSearch {
-    needle: Vec<u8>,
-    chunks: Vec<u64>,
-    rare_idx: usize,
-    rare_byte: u8,
-    confirm: (usize, u8),
-}
-
 pub static BYTE_FREQ: [u8; 256] = {
     let mut t = [255u8; 256];
     t[b'e' as usize] = 200;
@@ -161,6 +78,108 @@ pub static BYTE_FREQ: [u8; 256] = {
     t
 };
 
+#[inline]
+pub fn has_simd() -> bool {
+    #[cfg(target_arch = "x86_64")]
+    {
+        std::arch::is_x86_feature_detected!("avx2")
+    }
+    #[cfg(not(target_arch = "x86_64"))]
+    {
+        false
+    }
+}
+
+// ---- x86_64 AVX2 implementations ----
+
+#[cfg(target_arch = "x86_64")]
+use std::arch::x86_64::*;
+
+#[cfg(target_arch = "x86_64")]
+pub struct RevSearchBytes {
+    bytes: Vec<u8>,
+}
+
+#[cfg(target_arch = "x86_64")]
+impl RevSearchBytes {
+    pub fn new(bytes: Vec<u8>) -> Self {
+        debug_assert!(!bytes.is_empty() && bytes.len() <= 3);
+        Self { bytes }
+    }
+
+    pub fn bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+
+    pub fn find_rev(&self, haystack: &[u8]) -> Option<usize> {
+        unsafe { self.find_rev_avx2(haystack) }
+    }
+
+    #[target_feature(enable = "avx2")]
+    unsafe fn find_rev_avx2(&self, haystack: &[u8]) -> Option<usize> {
+        let len = haystack.len();
+        if len == 0 {
+            return None;
+        }
+        let ptr = haystack.as_ptr();
+        let v0 = _mm256_set1_epi8(self.bytes[0] as i8);
+        let n = self.bytes.len();
+
+        if len >= 32 {
+            let mut pos = len - 32;
+            loop {
+                let chunk = _mm256_loadu_si256(ptr.add(pos) as *const __m256i);
+                let mut mask = _mm256_movemask_epi8(_mm256_cmpeq_epi8(chunk, v0)) as u32;
+                if n >= 2 {
+                    let v1 = _mm256_set1_epi8(self.bytes[1] as i8);
+                    mask |= _mm256_movemask_epi8(_mm256_cmpeq_epi8(chunk, v1)) as u32;
+                }
+                if n >= 3 {
+                    let v2 = _mm256_set1_epi8(self.bytes[2] as i8);
+                    mask |= _mm256_movemask_epi8(_mm256_cmpeq_epi8(chunk, v2)) as u32;
+                }
+                if mask != 0 {
+                    return Some(pos + 31 - mask.leading_zeros() as usize);
+                }
+                if pos < 32 {
+                    break;
+                }
+                pos -= 32;
+            }
+        }
+        // tail: overlapping load from position 0, mask to only check uncovered bytes
+        if len < 32 {
+            let mut buf = [0u8; 32];
+            buf[..len].copy_from_slice(&haystack[..len]);
+            let chunk = _mm256_loadu_si256(buf.as_ptr() as *const __m256i);
+            let mut mask = _mm256_movemask_epi8(_mm256_cmpeq_epi8(chunk, v0)) as u32;
+            if n >= 2 {
+                let v1 = _mm256_set1_epi8(self.bytes[1] as i8);
+                mask |= _mm256_movemask_epi8(_mm256_cmpeq_epi8(chunk, v1)) as u32;
+            }
+            if n >= 3 {
+                let v2 = _mm256_set1_epi8(self.bytes[2] as i8);
+                mask |= _mm256_movemask_epi8(_mm256_cmpeq_epi8(chunk, v2)) as u32;
+            }
+            mask &= (1u32 << len) - 1; // mask off padding bytes
+            if mask != 0 {
+                return Some(31 - mask.leading_zeros() as usize);
+            }
+        }
+        None
+    }
+}
+
+#[cfg(target_arch = "x86_64")]
+pub struct FwdLiteralSearch {
+    needle: Vec<u8>,
+    chunks: Vec<u64>,
+    rare_idx: usize,
+    rare_byte: u8,
+    confirm: (usize, u8),
+}
+
+#[cfg(target_arch = "x86_64")]
 impl FwdLiteralSearch {
     pub fn len(&self) -> usize {
         self.needle.len()
@@ -342,6 +361,7 @@ impl FwdLiteralSearch {
     }
 }
 
+#[cfg(target_arch = "x86_64")]
 pub struct RevPrefixSearch {
     len: usize,
     num_simd: usize,
@@ -349,6 +369,7 @@ pub struct RevPrefixSearch {
     sets: Vec<TSet>,
 }
 
+#[cfg(target_arch = "x86_64")]
 impl RevPrefixSearch {
     pub fn new(len: usize, byte_sets_raw: &[Vec<u8>], all_sets: Vec<TSet>) -> Self {
         debug_assert_eq!(all_sets.len(), len);
@@ -647,6 +668,7 @@ impl RevPrefixSearch {
     }
 }
 
+#[cfg(target_arch = "x86_64")]
 pub struct FwdPrefixSearch {
     len: usize,
     num_simd: usize,
@@ -654,12 +676,14 @@ pub struct FwdPrefixSearch {
     sets: Vec<TSet>,
 }
 
+#[cfg(target_arch = "x86_64")]
 #[repr(align(32))]
 struct TeddyMasks {
     lo: [[u8; 32]; 3],
     hi: [[u8; 32]; 3],
 }
 
+#[cfg(target_arch = "x86_64")]
 impl FwdPrefixSearch {
     pub fn len(&self) -> usize {
         self.len
@@ -931,5 +955,75 @@ impl FwdPrefixSearch {
             bits &= bits - 1;
         }
         None
+    }
+}
+
+// ---- non-x86_64 stubs (never constructed, only needed for type-checking) ----
+
+#[cfg(not(target_arch = "x86_64"))]
+pub struct RevSearchBytes {
+    _private: (),
+}
+
+#[cfg(not(target_arch = "x86_64"))]
+impl RevSearchBytes {
+    pub fn bytes(&self) -> &[u8] {
+        unreachable!()
+    }
+
+    pub fn find_rev(&self, _haystack: &[u8]) -> Option<usize> {
+        unreachable!()
+    }
+}
+
+#[cfg(not(target_arch = "x86_64"))]
+pub struct FwdLiteralSearch {
+    _private: (),
+}
+
+#[cfg(not(target_arch = "x86_64"))]
+impl FwdLiteralSearch {
+    pub fn len(&self) -> usize {
+        unreachable!()
+    }
+
+    pub fn find_fwd(&self, _haystack: &[u8]) -> Option<usize> {
+        unreachable!()
+    }
+
+    pub fn find_all_fixed(&self, _haystack: &[u8], _matches: &mut Vec<(usize, usize)>) {
+        unreachable!()
+    }
+}
+
+#[cfg(not(target_arch = "x86_64"))]
+pub struct RevPrefixSearch {
+    _private: (),
+}
+
+#[cfg(not(target_arch = "x86_64"))]
+impl RevPrefixSearch {
+    pub fn len(&self) -> usize {
+        unreachable!()
+    }
+
+    pub fn find_rev(&self, _haystack: &[u8], _end: usize) -> Option<usize> {
+        unreachable!()
+    }
+}
+
+#[cfg(not(target_arch = "x86_64"))]
+pub struct FwdPrefixSearch {
+    _private: (),
+}
+
+#[cfg(not(target_arch = "x86_64"))]
+impl FwdPrefixSearch {
+    pub fn len(&self) -> usize {
+        unreachable!()
+    }
+
+    pub fn find_fwd(&self, _haystack: &[u8], _start: usize) -> Option<usize> {
+        unreachable!()
     }
 }

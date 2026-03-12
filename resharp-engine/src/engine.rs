@@ -300,6 +300,18 @@ pub fn build_fwd_prefix(
     b: &mut RegexBuilder,
     node: NodeId,
 ) -> Result<Option<crate::accel::FwdPrefixSearch>, crate::Error> {
+    if !crate::simd::has_simd() {
+        return Ok(None);
+    }
+
+    build_fwd_prefix_simd(b, node)
+}
+
+#[cfg(target_arch = "x86_64")]
+fn build_fwd_prefix_simd(
+    b: &mut RegexBuilder,
+    node: NodeId,
+) -> Result<Option<crate::accel::FwdPrefixSearch>, crate::Error> {
     let sets = calc_potential_start(b, node, 16, 64)?;
     if sets.is_empty() {
         return Ok(None);
@@ -349,6 +361,14 @@ pub fn build_fwd_prefix(
     Ok(Some(crate::accel::FwdPrefixSearch::Prefix(
         crate::simd::FwdPrefixSearch::new(sets.len(), &freq_order, &byte_sets_raw, all_sets),
     )))
+}
+
+#[cfg(not(target_arch = "x86_64"))]
+fn build_fwd_prefix_simd(
+    _b: &mut RegexBuilder,
+    _node: NodeId,
+) -> Result<Option<crate::accel::FwdPrefixSearch>, crate::Error> {
+    Ok(None)
 }
 
 pub fn transition_term(b: &mut RegexBuilder, der: TRegexId, set: TSetId) -> NodeId {
@@ -611,7 +631,15 @@ impl LazyDFA {
         }
     }
 
-    fn try_build_skip(&mut self, state: usize) {
+    fn try_build_skip(&mut self, _state: usize) {
+        #[cfg(target_arch = "x86_64")]
+        if crate::simd::has_simd() {
+            self.try_build_skip_simd(_state);
+        }
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    fn try_build_skip_simd(&mut self, state: usize) {
         let num_mt = self.num_minterms as usize;
         if state >= self.skip_ids.len() || self.skip_ids[state] != 0 {
             return;
@@ -655,6 +683,7 @@ impl LazyDFA {
         }
     }
 
+    #[cfg(target_arch = "x86_64")]
     fn get_or_create_skip(&mut self, mut bytes: Vec<u8>) -> u8 {
         bytes.sort();
         for (i, s) in self.skip_searchers.iter().enumerate() {
@@ -978,6 +1007,19 @@ impl LazyDFA {
     }
 
     pub fn compute_skip(&mut self, b: &mut RegexBuilder, rev_start: NodeId) -> Result<(), Error> {
+        if !crate::simd::has_simd() {
+            return Ok(());
+        }
+        self.compute_skip_simd(b, rev_start)
+    }
+
+    #[cfg(not(target_arch = "x86_64"))]
+    fn compute_skip_simd(&mut self, _b: &mut RegexBuilder, _rev_start: NodeId) -> Result<(), Error> {
+        Ok(())
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    fn compute_skip_simd(&mut self, b: &mut RegexBuilder, rev_start: NodeId) -> Result<(), Error> {
         // bail if rev_start is nullable - prefix skip would miss nullable paths
         if b.get_nulls_id(rev_start) != resharp_algebra::nulls::NullsId::EMPTY {
             return Ok(());

@@ -202,8 +202,26 @@ fn is_capture_char(c: char, first: bool) -> bool {
 pub fn is_meta_character(c: char) -> bool {
     match c {
         '\\' | '.' | '+' | '*' | '?' | '(' | ')' | '|' | '[' | ']' | '{' | '}' | '^' | '$'
-        | '#' | '&' | '-' | '~' => true,
+        | '#' | '&' | '-' | '~' | '_' => true,
         _ => false,
+    }
+}
+
+/// escapes all resharp meta characters in `text`.
+pub fn escape(text: &str) -> String {
+    let mut buf = String::new();
+    escape_into(text, &mut buf);
+    buf
+}
+
+/// escapes all resharp meta characters in `text` and appends to `buf`.
+pub fn escape_into(text: &str, buf: &mut String) {
+    buf.reserve(text.len());
+    for c in text.chars() {
+        if is_meta_character(c) {
+            buf.push('\\');
+        }
+        buf.push(c);
     }
 }
 
