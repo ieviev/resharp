@@ -33,9 +33,9 @@ Matches any single byte including newlines. `_*` means "any string".
 Standard `.` does **not** match `\n`. Use `_` when you need to cross line boundaries.
 
 ```
-_       matches any single character
-_*      matches any string (including empty)
-_{5,10} matches any string of 5-10 characters
+_       matches any single byte
+_*      matches any byte string (including empty)
+_{5,10} matches any byte string of 5-10 bytes
 _*cat_* any string containing "cat"
 ```
 
@@ -68,7 +68,10 @@ Matches everything the inner pattern does **not** match. Parentheses are require
 F.*&~(.*Finn)                       starts with F, doesn't end with "Finn"
 ~(_*\d\d_*)&[a-zA-Z\d]{8,}         8+ alphanumeric, no consecutive digits
 ~(_*\n\n_*)&_*keyword_*&\S_*\S     paragraph containing "keyword"
+_*&\p{utf8}                         any byte string that is valid UTF-8
 ```
+
+`\p{utf8}` constrains matches to valid UTF-8 byte sequences - just another intersection constraint, no special logic needed. More on this in the [blog post](https://iev.ee/blog/symbolic-derivatives-and-the-rust-rewrite-of-resharp/).
 
 ## Standard syntax
 
@@ -123,7 +126,7 @@ Lookarounds combine with intersection and complement:
 
 ```
 (?<=author).*&.*and.*   after "author", containing "and"
-(?<=ab).*&~(_*and_*)    after "ab", not containing "and"
+(?<=\s)_*(?=\.)         preceded by whitespace, followed by "."
 ```
 
 **Restriction: no nested lookarounds.** RE# normalizes all lookarounds into the form `(?<=R1)R2(?=R3)`, where R1, R2, and R3 are regular expressions that themselves cannot contain lookbehinds. This is what allows RE# to encode lookaround information directly into DFA states and maintain linear-time matching.
