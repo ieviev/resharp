@@ -19,12 +19,12 @@ debug-derivatives = []
 debug-nulls = []
 
 [dependencies]
-resharp-algebra = { version = "0.1.0", path = "../resharp-algebra" }
-resharp-parser = { version = "0.1.0", path = "../resharp-parser" }
+resharp-algebra = { version = "0.2.0", path = "../resharp-algebra" }
+resharp-parser = { version = "0.2.0", path = "../resharp-parser" }
 
 [dev-dependencies]
-resharp-algebra = { version = "0.1.0", path = "../resharp-algebra" }
-resharp-parser = { version = "0.1.0", path = "../resharp-parser" }
+resharp-algebra = { version = "0.2.0", path = "../resharp-algebra" }
+resharp-parser = { version = "0.2.0", path = "../resharp-parser" }
 toml = "0.8"
 criterion = "0.5"
 regex = "1"

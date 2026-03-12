@@ -13,4 +13,4 @@ readme = "../README.md"
 
 [dependencies]
 regex-syntax = "0.8.5"
-resharp-algebra = { version = "0.1.0", path = "../resharp-algebra" }
+resharp-algebra = { version = "0.2.0", path = "../resharp-algebra" }

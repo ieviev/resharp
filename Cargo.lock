@@ -403,7 +403,7 @@ checksum = "dc897dd8d9e8bd1ed8cdad82b5966c3e0ecae09fb1907d58efaa013543185d0a"
 
 [[package]]
 name = "resharp"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "criterion",
  "fancy-regex",
@@ -416,21 +416,21 @@ dependencies = [
 
 [[package]]
 name = "resharp-algebra"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "smallvec",
 ]
 
 [[package]]
 name = "resharp-ffi"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "resharp",
 ]
 
 [[package]]
 name = "resharp-parser"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "regex-syntax",
  "resharp-algebra",
