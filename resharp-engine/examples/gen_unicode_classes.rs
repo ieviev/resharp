@@ -41,7 +41,7 @@ fn build_class_from_ranges(b: &mut RegexBuilder, ranges: &[(char, char)], max_se
 }
 
 fn class_ranges(pattern: &str) -> Vec<(char, char)> {
-    use regex_syntax::hir::{self, Hir};
+    use regex_syntax::hir;
     let hir = regex_syntax::parse(pattern).unwrap();
     match hir.kind() {
         hir::HirKind::Class(hir::Class::Unicode(cls)) => {

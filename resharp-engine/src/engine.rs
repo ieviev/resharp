@@ -353,15 +353,23 @@ fn build_fwd_prefix_simd(
         .map(|&set| b.solver().collect_bytes(set))
         .collect();
 
-    // pure literal: every position is a single byte - use memchr + memcmp
-    if byte_sets_raw.iter().all(|bs| bs.len() == 1) {
-        let needle: Vec<u8> = byte_sets_raw.iter().map(|bs| bs[0]).collect();
-        return Ok((
-            Some(crate::accel::FwdPrefixSearch::Literal(
-                crate::simd::FwdLiteralSearch::new(&needle),
-            )),
-            stripped,
-        ));
+    let lit_len = byte_sets_raw.iter().take_while(|bs| bs.len() == 1).count();
+    if cfg!(feature = "debug-nulls") {
+        eprintln!("  [fwd-prefix] lit_len={} total={}", lit_len, byte_sets_raw.len());
+    }
+    if lit_len >= 3 {
+        let needle: Vec<u8> = byte_sets_raw[..lit_len].iter().map(|bs| bs[0]).collect();
+        let lit = crate::simd::FwdLiteralSearch::new(&needle);
+        if cfg!(feature = "debug-nulls") {
+            let freq = crate::simd::BYTE_FREQ[lit.rare_byte() as usize];
+            eprintln!("  [fwd-prefix] literal {:?} rare={} freq={}", std::str::from_utf8(&needle).unwrap_or("?"), lit.rare_byte() as char, freq);
+        }
+        if lit_len == byte_sets_raw.len() || crate::simd::BYTE_FREQ[lit.rare_byte() as usize] < 100 {
+            return Ok((
+                Some(crate::accel::FwdPrefixSearch::Literal(lit)),
+                stripped,
+            ));
+        }
     }
 
     let mut freqs: Vec<(usize, u64)> = byte_sets_raw
@@ -386,6 +394,13 @@ fn build_fwd_prefix_simd(
     }
 
     let freq_order: Vec<usize> = freqs.iter().map(|&(i, _)| i).collect();
+
+    if cfg!(feature = "debug-nulls") {
+        for &(i, f) in &freqs {
+            eprintln!("  [fwd-prefix] pos={} bytes={} freq={}", i, byte_sets_raw[i].len(), f);
+        }
+        eprintln!("  [fwd-prefix] anchor=pos{} ({} bytes)", freq_order[0], byte_sets_raw[freq_order[0]].len());
+    }
 
     let all_sets: Vec<crate::accel::TSet> = byte_sets_raw
         .iter()
@@ -2043,8 +2058,9 @@ pub struct BDFA {
     /// states as Counted node chains.
     pub states: Vec<NodeId>,
     state_map: HashMap<NodeId, u16>,
-    /// transition table (state << mt_log | mt -> state).
-    pub table: Vec<u16>,
+    /// packed transition table: entry = (match_rel << 16) | next_state.
+    /// 0 = uncached sentinel.
+    pub table: Vec<u32>,
     /// match rel per state (0 = no match).
     pub match_rel: Vec<u32>,
     /// number of minterms.
@@ -2080,7 +2096,7 @@ impl BDFA {
             initial_node,
             states: vec![NodeId::MISSING, NodeId::MISSING],
             state_map: HashMap::new(),
-            table: vec![DFA_MISSING; stride * 2],
+            table: vec![0u32; stride * 2],
             match_rel: vec![0, 0],
             num_mt,
             mt_log,
@@ -2101,8 +2117,12 @@ impl BDFA {
             return Ok(());
         }
         let prefix_sets = calc_prefix_sets_inner(b, pattern_node, false)?;
+        if cfg!(feature = "debug-nulls") {
+            let byte_counts: Vec<usize> = prefix_sets.iter().map(|&s| b.solver_ref().collect_bytes(s).len()).collect();
+            eprintln!("  [bdfa-build-prefix] linear_sets={} bytes={:?}", prefix_sets.len(), byte_counts);
+        }
         if prefix_sets.is_empty() {
-            return Ok(());
+            return self.build_prefix_potential(b, pattern_node);
         }
 
         let byte_sets_raw: Vec<Vec<u8>> = prefix_sets
@@ -2113,7 +2133,7 @@ impl BDFA {
         let search = Self::build_prefix_search(&byte_sets_raw);
         let search = match search {
             Some(s) => s,
-            None => return Ok(()),
+            None => return self.build_prefix_potential(b, pattern_node),
         };
 
         let mut state = self.initial;
@@ -2124,7 +2144,7 @@ impl BDFA {
                 Solver::is_sat(&mt_set, &prefix_set)
             });
             match mt_idx {
-                Some(idx) => state = self.transition(b, state, idx)?,
+                Some(idx) => state = (self.transition(b, state, idx)? & 0xFFFF) as u16,
                 None => return Ok(()), // shouldn't happen
             }
         }
@@ -2132,6 +2152,37 @@ impl BDFA {
         self.prefix = Some(search);
         self.prefix_len = prefix_sets.len();
         self.after_prefix = state;
+        Ok(())
+    }
+
+    fn build_prefix_potential(
+        &mut self,
+        b: &mut RegexBuilder,
+        pattern_node: NodeId,
+    ) -> Result<(), Error> {
+        let sets = calc_potential_start(b, pattern_node, 16, 64)?;
+        if cfg!(feature = "debug-nulls") {
+            eprintln!("  [bdfa-prefix-potential] node={:?} sets={}", pattern_node, sets.len());
+        }
+        if sets.is_empty() {
+            return Ok(());
+        }
+        let byte_sets_raw: Vec<Vec<u8>> = sets
+            .iter()
+            .map(|&s| b.solver_ref().collect_bytes(s))
+            .collect();
+        if cfg!(feature = "debug-nulls") {
+            for (i, bs) in byte_sets_raw.iter().enumerate() {
+                eprintln!("  [bdfa-prefix-potential] pos={} bytes={}", i, bs.len());
+            }
+        }
+        let search = match Self::build_prefix_search(&byte_sets_raw) {
+            Some(s) => s,
+            None => return Ok(()),
+        };
+        // PREFIX=1 (Teddy) transitions manually - no after_prefix needed
+        self.prefix = Some(search);
+        self.prefix_len = sets.len();
         Ok(())
     }
 
@@ -2232,21 +2283,21 @@ impl BDFA {
         self.state_map.insert(node, sid);
         self.match_rel.push(rel);
         self.table
-            .resize(self.table.len() + (1usize << self.mt_log), DFA_MISSING);
+            .resize(self.table.len() + (1usize << self.mt_log), 0u32);
         sid
     }
 
-    /// transition from state on minterm.
+    /// transition from state on minterm. returns packed (rel << 16 | next_state).
     #[inline(always)]
     pub fn transition(
         &mut self,
         b: &mut RegexBuilder,
         state: u16,
         mt_idx: usize,
-    ) -> Result<u16, Error> {
+    ) -> Result<u32, Error> {
         let delta = (state as usize) << self.mt_log | mt_idx;
         let cached = self.table[delta];
-        if cached != DFA_MISSING {
+        if cached != 0 {
             return Ok(cached);
         }
         self.transition_slow(b, state, mt_idx)
@@ -2293,7 +2344,7 @@ impl BDFA {
         b: &mut RegexBuilder,
         state: u16,
         mt_idx: usize,
-    ) -> Result<u16, Error> {
+    ) -> Result<u32, Error> {
         let head = self.states[state as usize];
         let mt = self.minterms[mt_idx];
 
@@ -2326,8 +2377,10 @@ impl BDFA {
             );
         }
 
+        let rel = self.match_rel[next_sid as usize];
+        let packed = (rel << 16) | next_sid as u32;
         let delta = (state as usize) << self.mt_log | mt_idx;
-        self.table[delta] = next_sid;
-        Ok(next_sid)
+        self.table[delta] = packed;
+        Ok(packed)
     }
 }

@@ -29,17 +29,48 @@ pub struct Match {
 
 ```rust
 let opts = resharp::EngineOptions {
-    dfa_threshold: 0,           // states to eagerly precompile (0 = fully lazy)
-    max_dfa_capacity: 65535,    // max DFA states (clamped to u16::MAX)
-    lookahead_context_max: 800, // max lookahead distance before AnchorLimit error
+    dfa_threshold: 0,              // states to eagerly precompile (0 = fully lazy)
+    max_dfa_capacity: 65535,       // max DFA states (clamped to u16::MAX)
+    lookahead_context_max: 800,    // max lookahead distance before AnchorLimit error
+    unicode: true,                 // \w/\d/\s match full Unicode (false = ASCII only)
+    case_insensitive: false,       // global case-insensitive matching
+    dot_matches_new_line: false,   // . matches \n (behaves like _)
+    ignore_whitespace: false,      // allow whitespace and # comments in pattern
 };
 ```
 
-All fields have sensible defaults via `Default::default()`.
+All fields have sensible defaults via `Default::default()`. Builder-style setters are available for chaining:
+
+```rust
+let re = Regex::with_options(
+    r"\w+@\w+\.\w+",
+    EngineOptions::default().unicode(false).case_insensitive(true),
+)?;
+```
+
+#### engine tuning
 
 - `dfa_threshold`: set >0 to precompile hot states at build time, trading compile cost for faster first match.
 - `max_dfa_capacity`: upper bound on cached DFA states. patterns with large state spaces return `Error::CapacityExceeded` instead of allocating unbounded memory.
 - `lookahead_context_max`: limits how far ahead the engine tracks lookaround context. increase if patterns with deep lookahead return `AlgebraError::AnchorLimit`.
+
+#### pattern flags
+
+- `unicode`: when false, `\w` = `[a-zA-Z0-9_]`, `\d` = `[0-9]`, `\s` = `[ \t\n\r\f\v]`. equivalent to inline `(?-u)`.
+- `case_insensitive`: equivalent to inline `(?i)`.
+- `dot_matches_new_line`: makes `.` match `\n`. equivalent to inline `(?s)`. note that `_` always matches any byte regardless of this flag.
+- `ignore_whitespace`: equivalent to inline `(?x)`.
+
+inline flags (`(?i)`, `(?s)`, `(?-u)`, etc.) override the global setting and can be scoped with groups: `(?s:a.b)c.d` - dot inside the group matches newline, dot outside does not.
+
+### escape
+
+```rust
+let pattern = format!("{}\\d+", resharp::escape("price: $"));
+let re = Regex::new(&pattern)?;
+```
+
+`resharp::escape(text)` backslash-escapes all resharp meta characters in `text`, returning a pattern that matches the literal string. `resharp::escape_into(text, &mut buf)` appends to an existing `String`.
 
 ### Error
 

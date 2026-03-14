@@ -2411,7 +2411,7 @@ impl RegexBuilder {
             }
             if self.get_kind(compl_body) == Kind::Concat {
                 let compl_head = compl_body.left(self);
-                // not starts with
+                // L & ~(R·_*) = BOT when L ⊂ R·_*
                 if compl_body.right(self) == NodeId::TS {
                     if compl_head == left {
                         return Some(NodeId::BOT);
@@ -2838,12 +2838,24 @@ impl RegexBuilder {
         if chain == NodeId::MISSING || body == NodeId::BOT {
             return chain;
         }
+        // nullable body → body·_* = _*, all chain candidates subsumed
+        if self.nullability(body) != Nullability::NEVER {
+            return NodeId::MISSING;
+        }
         let chain_body = chain.left(self);
         if chain_body == NodeId::BOT {
             return chain; // pending match, keep
         }
+        // min_length(body) <= min_length(chain_body) → chain_body ⊂ body·_*
+        let (body_min, _) = self.get_min_max_length(body);
+        let (chain_min, _) = self.get_min_max_length(chain_body);
+        if body_min > 0 && body_min <= chain_min {
+            return self.prune_counted_chain(body, chain.right(self));
+        }
         let not_begins = self.mk_not_begins_with(body);
-        if self.mk_inter(chain_body, not_begins) == NodeId::BOT {
+        let inter = self.mk_inter(chain_body, not_begins);
+        let is_empty = inter == NodeId::BOT;
+        if is_empty {
             self.prune_counted_chain(body, chain.right(self))
         } else {
             chain
@@ -3326,6 +3338,7 @@ impl RegexBuilder {
         let node_ts = self.mk_concat(node, NodeId::TS);
         self.mk_compl(node_ts)
     }
+
 
     pub fn mk_pred_not(&mut self, set: TSetId) -> NodeId {
         let notset = self.solver().not_id(set);

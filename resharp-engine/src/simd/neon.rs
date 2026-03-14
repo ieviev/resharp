@@ -860,6 +860,7 @@ impl RevPrefixSearch {
 pub struct FwdPrefixSearch {
     len: usize,
     num_simd: usize,
+    simd_offsets: [usize; 3],
     masks: Box<TeddyMasks>,
     sets: Vec<TSet>,
 }
@@ -871,7 +872,7 @@ impl FwdPrefixSearch {
 
     pub fn new(
         len: usize,
-        _freq_order: &[usize],
+        freq_order: &[usize],
         byte_sets_raw: &[Vec<u8>],
         all_sets: Vec<TSet>,
     ) -> Self {
@@ -879,15 +880,18 @@ impl FwdPrefixSearch {
         debug_assert_eq!(byte_sets_raw.len(), len);
 
         let num_simd = len.min(3);
+        let mut simd_offsets = [0usize; 3];
         let mut masks = Box::new(TeddyMasks {
             lo: [[0u8; 32]; 3],
             hi: [[0u8; 32]; 3],
         });
 
         for i in 0..num_simd {
+            let pos = freq_order[i];
+            simd_offsets[i] = pos;
             let mut lo = [0u8; 16];
             let mut hi = [0u8; 16];
-            for &b in &byte_sets_raw[i] {
+            for &b in &byte_sets_raw[pos] {
                 lo[(b & 0xF) as usize] |= 0x80;
                 hi[(b >> 4) as usize] |= 0x80;
             }
@@ -900,6 +904,7 @@ impl FwdPrefixSearch {
         Self {
             len,
             num_simd,
+            simd_offsets,
             masks,
             sets: all_sets,
         }
@@ -938,6 +943,7 @@ impl FwdPrefixSearch {
         let nib = vdupq_n_u8(0x0F);
         let vlo0 = vld1q_u8(self.masks.lo[0].as_ptr());
         let vhi0 = vld1q_u8(self.masks.hi[0].as_ptr());
+        let off0 = self.simd_offsets[0];
         let sets_ptr = self.sets.as_ptr();
         let len = self.len;
 
@@ -945,7 +951,7 @@ impl FwdPrefixSearch {
         let mut pos = start;
 
         while pos < simd_end {
-            let c0 = vld1q_u8(ptr.add(pos));
+            let c0 = vld1q_u8(ptr.add(pos + off0));
             let r0 = vandq_u8(
                 vqtbl1q_u8(vlo0, vandq_u8(c0, nib)),
                 vqtbl1q_u8(vhi0, vshrq_n_u8(c0, 4)),
@@ -968,6 +974,8 @@ impl FwdPrefixSearch {
         let vhi0 = vld1q_u8(self.masks.hi[0].as_ptr());
         let vlo1 = vld1q_u8(self.masks.lo[1].as_ptr());
         let vhi1 = vld1q_u8(self.masks.hi[1].as_ptr());
+        let off0 = self.simd_offsets[0];
+        let off1 = self.simd_offsets[1];
         let sets_ptr = self.sets.as_ptr();
         let len = self.len;
 
@@ -975,8 +983,8 @@ impl FwdPrefixSearch {
         let mut pos = start;
 
         while pos < simd_end {
-            let c0 = vld1q_u8(ptr.add(pos));
-            let c1 = vld1q_u8(ptr.add(pos + 1));
+            let c0 = vld1q_u8(ptr.add(pos + off0));
+            let c1 = vld1q_u8(ptr.add(pos + off1));
             let r0 = vandq_u8(
                 vqtbl1q_u8(vlo0, vandq_u8(c0, nib)),
                 vqtbl1q_u8(vhi0, vshrq_n_u8(c0, 4)),
@@ -1006,6 +1014,9 @@ impl FwdPrefixSearch {
         let vhi1 = vld1q_u8(self.masks.hi[1].as_ptr());
         let vlo2 = vld1q_u8(self.masks.lo[2].as_ptr());
         let vhi2 = vld1q_u8(self.masks.hi[2].as_ptr());
+        let off0 = self.simd_offsets[0];
+        let off1 = self.simd_offsets[1];
+        let off2 = self.simd_offsets[2];
 
         let simd_end = haystack.len().saturating_sub(15 + self.len - 1);
         let sets_ptr = self.sets.as_ptr();
@@ -1013,9 +1024,9 @@ impl FwdPrefixSearch {
         let mut pos = start;
 
         while pos + 16 < simd_end {
-            let c0a = vld1q_u8(ptr.add(pos));
-            let c1a = vld1q_u8(ptr.add(pos + 1));
-            let c2a = vld1q_u8(ptr.add(pos + 2));
+            let c0a = vld1q_u8(ptr.add(pos + off0));
+            let c1a = vld1q_u8(ptr.add(pos + off1));
+            let c2a = vld1q_u8(ptr.add(pos + off2));
             let ra = vandq_u8(
                 vandq_u8(
                     vandq_u8(
@@ -1033,9 +1044,9 @@ impl FwdPrefixSearch {
                 ),
             );
 
-            let c0b = vld1q_u8(ptr.add(pos + 16));
-            let c1b = vld1q_u8(ptr.add(pos + 17));
-            let c2b = vld1q_u8(ptr.add(pos + 18));
+            let c0b = vld1q_u8(ptr.add(pos + 16 + off0));
+            let c1b = vld1q_u8(ptr.add(pos + 16 + off1));
+            let c2b = vld1q_u8(ptr.add(pos + 16 + off2));
             let rb = vandq_u8(
                 vandq_u8(
                     vandq_u8(
@@ -1071,9 +1082,9 @@ impl FwdPrefixSearch {
         }
 
         while pos < simd_end {
-            let c0 = vld1q_u8(ptr.add(pos));
-            let c1 = vld1q_u8(ptr.add(pos + 1));
-            let c2 = vld1q_u8(ptr.add(pos + 2));
+            let c0 = vld1q_u8(ptr.add(pos + off0));
+            let c1 = vld1q_u8(ptr.add(pos + off1));
+            let c2 = vld1q_u8(ptr.add(pos + off2));
             let combined = vandq_u8(
                 vandq_u8(
                     vandq_u8(

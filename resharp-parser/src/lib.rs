@@ -23,6 +23,29 @@ use resharp_algebra::NodeId;
 
 type TB<'s> = resharp_algebra::RegexBuilder;
 
+/// global pattern-level flags, set from `EngineOptions`.
+pub struct PatternFlags {
+    /// `\w`/`\d`/`\s` match full Unicode (true) or ASCII only (false).
+    pub unicode: bool,
+    /// global case-insensitive matching.
+    pub case_insensitive: bool,
+    /// `.` matches `\n` (behaves like `_`).
+    pub dot_matches_new_line: bool,
+    /// allow whitespace and `#` comments in the pattern.
+    pub ignore_whitespace: bool,
+}
+
+impl Default for PatternFlags {
+    fn default() -> Self {
+        Self {
+            unicode: true,
+            case_insensitive: false,
+            dot_matches_new_line: false,
+            ignore_whitespace: false,
+        }
+    }
+}
+
 #[derive(Clone, Copy, PartialEq)]
 enum WordCharKind {
     Word,
@@ -170,6 +193,9 @@ pub struct ResharpParser<'s> {
     octal: bool,
     empty_min_range: bool,
     ignore_whitespace: Cell<bool>,
+    dot_all: Cell<bool>,
+    global_unicode: bool,
+    global_case_insensitive: bool,
     comments: RefCell<Vec<ast::Comment>>,
     stack_group: RefCell<Vec<GroupState>>,
     stack_class: RefCell<Vec<ClassState>>,
@@ -262,15 +288,23 @@ fn is_hex(c: char) -> bool {
 }
 
 impl<'s> ResharpParser<'s> {
-    fn default_translator_builder() -> TranslatorBuilder {
+    fn default_translator_builder(&self) -> TranslatorBuilder {
         let mut trb = TranslatorBuilder::new();
-        trb.unicode(true);
+        trb.unicode(self.global_unicode);
         trb.utf8(false);
+        trb.case_insensitive(self.global_case_insensitive);
         trb
     }
 
     pub fn new(pattern: &'s str) -> Self {
-        let trb = Self::default_translator_builder();
+        Self::with_flags(pattern, &PatternFlags::default())
+    }
+
+    pub fn with_flags(pattern: &'s str, flags: &PatternFlags) -> Self {
+        let mut trb = TranslatorBuilder::new();
+        trb.unicode(flags.unicode);
+        trb.utf8(false);
+        trb.case_insensitive(flags.case_insensitive);
         Self {
             translator: trb.build(),
             pattern,
@@ -280,7 +314,10 @@ impl<'s> ResharpParser<'s> {
             capture_index: Cell::new(0),
             octal: false,
             empty_min_range: false,
-            ignore_whitespace: Cell::new(false),
+            ignore_whitespace: Cell::new(flags.ignore_whitespace),
+            dot_all: Cell::new(flags.dot_matches_new_line),
+            global_unicode: flags.unicode,
+            global_case_insensitive: flags.case_insensitive,
             comments: RefCell::new(vec![]),
             stack_group: RefCell::new(vec![]),
             stack_class: RefCell::new(vec![]),
@@ -1090,7 +1127,6 @@ impl<'s> ResharpParser<'s> {
         kind: regex_syntax::ast::ClassPerlKind,
         tb: &mut TB<'s>,
     ) -> Result<NodeId> {
-        // find in array
         let w = self
             .perl_classes
             .iter()
@@ -1098,19 +1134,44 @@ impl<'s> ResharpParser<'s> {
         match w {
             Some((_, _, value)) => return Ok(*value),
             None => {
-                let translated = match kind {
-                    regex_syntax::ast::ClassPerlKind::Word => {
-                        self.unicode_classes.ensure_word(tb);
-                        if negated { self.unicode_classes.non_word } else { self.unicode_classes.word }
+                let translated = if self.global_unicode {
+                    match kind {
+                        regex_syntax::ast::ClassPerlKind::Word => {
+                            self.unicode_classes.ensure_word(tb);
+                            if negated { self.unicode_classes.non_word } else { self.unicode_classes.word }
+                        }
+                        regex_syntax::ast::ClassPerlKind::Digit => {
+                            self.unicode_classes.ensure_digit(tb);
+                            if negated { self.unicode_classes.non_digit } else { self.unicode_classes.digit }
+                        }
+                        regex_syntax::ast::ClassPerlKind::Space => {
+                            self.unicode_classes.ensure_space(tb);
+                            if negated { self.unicode_classes.non_space } else { self.unicode_classes.space }
+                        }
                     }
-                    regex_syntax::ast::ClassPerlKind::Digit => {
-                        self.unicode_classes.ensure_digit(tb);
-                        if negated { self.unicode_classes.non_digit } else { self.unicode_classes.digit }
-                    }
-                    regex_syntax::ast::ClassPerlKind::Space => {
-                        self.unicode_classes.ensure_space(tb);
-                        if negated { self.unicode_classes.non_space } else { self.unicode_classes.space }
-                    }
+                } else {
+                    let pos = match kind {
+                        regex_syntax::ast::ClassPerlKind::Word => {
+                            let az = tb.mk_range_u8(b'a', b'z');
+                            let big = tb.mk_range_u8(b'A', b'Z');
+                            let dig = tb.mk_range_u8(b'0', b'9');
+                            let us = tb.mk_u8(b'_');
+                            tb.mk_unions([az, big, dig, us].into_iter())
+                        }
+                        regex_syntax::ast::ClassPerlKind::Digit => {
+                            tb.mk_range_u8(b'0', b'9')
+                        }
+                        regex_syntax::ast::ClassPerlKind::Space => {
+                            let sp = tb.mk_u8(b' ');
+                            let tab = tb.mk_u8(b'\t');
+                            let nl = tb.mk_u8(b'\n');
+                            let cr = tb.mk_u8(b'\r');
+                            let ff = tb.mk_u8(0x0C);
+                            let vt = tb.mk_u8(0x0B);
+                            tb.mk_unions([sp, tab, nl, cr, ff, vt].into_iter())
+                        }
+                    };
+                    if negated { tb.mk_compl(pos) } else { pos }
                 };
                 self.perl_classes.push((negated, kind, translated));
                 Ok(translated)
@@ -1300,12 +1361,15 @@ impl<'s> ResharpParser<'s> {
         match ast {
             Ast::Empty(_) => Ok(NodeId::EPS),
             Ast::Flags(f) => {
-                let mut translator_builder = Self::default_translator_builder();
+                let mut translator_builder = self.default_translator_builder();
                 if let Some(state) = f.flags.flag_state(ast::Flag::CaseInsensitive) {
                     translator_builder.case_insensitive(state);
                 }
                 if let Some(state) = f.flags.flag_state(ast::Flag::Unicode) {
                     translator_builder.unicode(state);
+                }
+                if let Some(state) = f.flags.flag_state(ast::Flag::DotMatchesNewLine) {
+                    self.dot_all.set(state);
                 }
                 let concat_translator = Some(translator_builder.build());
                 *translator = concat_translator;
@@ -1317,8 +1381,12 @@ impl<'s> ResharpParser<'s> {
             }
             Ast::Top(_) => Ok(NodeId::TOP),
             Ast::Dot(_) => {
-                let hirv = hir::Hir::dot(hir::Dot::AnyByteExceptLF);
-                self.hir_to_node_id(&hirv, tb)
+                if self.dot_all.get() {
+                    Ok(NodeId::TOP)
+                } else {
+                    let hirv = hir::Hir::dot(hir::Dot::AnyByteExceptLF);
+                    self.hir_to_node_id(&hirv, tb)
+                }
             }
             Ast::Assertion(a) => match &a.kind {
                 ast::AssertionKind::StartText => Ok(NodeId::BEGIN),
@@ -1442,16 +1510,21 @@ impl<'s> ResharpParser<'s> {
             Ast::Group(g) => {
                 if let ast::GroupKind::NonCapturing(ref flags) = g.kind {
                     if !flags.items.is_empty() {
-                        let mut translator_builder = Self::default_translator_builder();
-                        translator_builder.utf8(false);
+                        let mut translator_builder = self.default_translator_builder();
                         if let Some(state) = flags.flag_state(ast::Flag::CaseInsensitive) {
                             translator_builder.case_insensitive(state);
                         }
                         if let Some(state) = flags.flag_state(ast::Flag::Unicode) {
                             translator_builder.unicode(state);
                         }
+                        let saved_dot_all = self.dot_all.get();
+                        if let Some(state) = flags.flag_state(ast::Flag::DotMatchesNewLine) {
+                            self.dot_all.set(state);
+                        }
                         let mut scoped = Some(translator_builder.build());
-                        return self.ast_to_node_id(&g.ast, &mut scoped, tb);
+                        let result = self.ast_to_node_id(&g.ast, &mut scoped, tb);
+                        self.dot_all.set(saved_dot_all);
+                        return result;
                     }
                 }
                 self.ast_to_node_id(&g.ast, translator, tb)
@@ -1474,13 +1547,15 @@ impl<'s> ResharpParser<'s> {
                     let ast = &c.asts[i];
                     match ast {
                         Ast::Flags(f) => {
-                            let mut translator_builder = Self::default_translator_builder();
-                            translator_builder.utf8(false);
+                            let mut translator_builder = self.default_translator_builder();
                             if let Some(state) = f.flags.flag_state(ast::Flag::CaseInsensitive) {
                                 translator_builder.case_insensitive(state);
                             }
                             if let Some(state) = f.flags.flag_state(ast::Flag::Unicode) {
                                 translator_builder.unicode(state);
+                            }
+                            if let Some(state) = f.flags.flag_state(ast::Flag::DotMatchesNewLine) {
+                                self.dot_all.set(state);
                             }
                             concat_translator = Some(translator_builder.build());
                             i += 1;
@@ -2518,6 +2593,14 @@ pub fn parse_ast<'s>(
     pattern: &'s str,
 ) -> std::result::Result<NodeId, ResharpError> {
     let mut p: ResharpParser<'s> = ResharpParser::new(pattern);
-    let result = p.parse(tb);
-    result
+    p.parse(tb)
+}
+
+pub fn parse_ast_with<'s>(
+    tb: &mut TB<'s>,
+    pattern: &'s str,
+    flags: &PatternFlags,
+) -> std::result::Result<NodeId, ResharpError> {
+    let mut p: ResharpParser<'s> = ResharpParser::with_flags(pattern, flags);
+    p.parse(tb)
 }

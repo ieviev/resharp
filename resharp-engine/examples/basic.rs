@@ -42,10 +42,6 @@ fn main() {
         b"first paragraph\nstill first\n\nsecond paragraph\n\nthird part",
     );
 
-    // starts with F, does not end with "Finn"
-    let re = Regex::new("F.*&~(.*Finn)").unwrap();
-    println!("\nF.* & ~(.*Finn):");
-    show(&re, b"Finn, Huckleberry Finn, and Tom");
 
     // password validation: 8+ alphanumeric, has upper, has lower,
     // has digit, no consecutive digits

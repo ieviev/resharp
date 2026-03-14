@@ -1097,6 +1097,7 @@ fn bounded_dfa_basic() {
 
 use resharp::{BDFA, NodeId, RegexBuilder};
 
+
 fn chain_len(node: NodeId, b: &RegexBuilder) -> usize {
     let mut n = 0;
     let mut cur = node;
@@ -1125,7 +1126,7 @@ fn bdfa_step_trace(pattern: &str, input: &[u8]) -> Vec<(usize, u16, usize, u32)>
     let mut trace = Vec::new();
     for pos in 0..input.len() {
         let mt = bdfa.minterms_lookup[input[pos] as usize] as usize;
-        state = bdfa.transition(&mut b, state, mt).unwrap();
+        state = (bdfa.transition(&mut b, state, mt).unwrap() & 0xFFFF) as u16;
         let rel = bdfa.match_rel[state as usize];
         let clen = chain_len(bdfa.states[state as usize], &b);
         trace.push((pos, state, clen, rel));
@@ -1141,7 +1142,7 @@ fn bdfa_state_pp(pattern: &str, input: &[u8]) -> Vec<String> {
     let mut result = Vec::new();
     for pos in 0..input.len() {
         let mt = bdfa.minterms_lookup[input[pos] as usize] as usize;
-        state = bdfa.transition(&mut b, state, mt).unwrap();
+        state = (bdfa.transition(&mut b, state, mt).unwrap() & 0xFFFF) as u16;
         let rel = bdfa.match_rel[state as usize];
         let entries = chain_pp(bdfa.states[state as usize], &b);
         result.push(format!(
@@ -1165,7 +1166,7 @@ fn bdfa_matches(pattern: &str, input: &[u8]) -> Vec<(usize, usize)> {
     let mut pos = 0;
     while pos < input.len() {
         let mt = bdfa.minterms_lookup[input[pos] as usize] as usize;
-        state = bdfa.transition(&mut b, state, mt).unwrap();
+        state = (bdfa.transition(&mut b, state, mt).unwrap() & 0xFFFF) as u16;
         let rel = bdfa.match_rel[state as usize];
         if rel > 0 {
             let end = pos;
@@ -1386,6 +1387,7 @@ fn bdfa_prefix_predicate_pp() {
     ]);
 }
 
+
 #[test]
 fn bdfa_prefix_has_prefix() {
     // verify the BDFA actually built a prefix for a literal pattern
@@ -1394,25 +1396,6 @@ fn bdfa_prefix_has_prefix() {
     let bdfa = BDFA::new(&mut b, node).unwrap();
     assert!(bdfa.prefix.is_some(), "expected prefix for Twain.{{0,5}}");
     assert!(bdfa.prefix_len >= 5, "expected prefix_len >= 5, got {}", bdfa.prefix_len);
-}
-
-fn bdfa_state_pp_bytes(pattern: &str, input: &[u8]) -> Vec<String> {
-    let mut b = RegexBuilder::new();
-    let node = resharp_parser::parse_ast(&mut b, pattern).unwrap();
-    let mut bdfa = BDFA::new(&mut b, node).unwrap();
-    let mut state = bdfa.initial;
-    let mut result = Vec::new();
-    for pos in 0..input.len() {
-        let mt = bdfa.minterms_lookup[input[pos] as usize] as usize;
-        state = bdfa.transition(&mut b, state, mt).unwrap();
-        let rel = bdfa.match_rel[state as usize];
-        let entries = chain_pp(bdfa.states[state as usize], &b);
-        result.push(format!(
-            "pos={} 0x{:02x} s={} rel={} [{}]",
-            pos, input[pos], state, rel, entries.join(", ")
-        ));
-    }
-    result
 }
 
 #[test]
@@ -1429,5 +1412,79 @@ fn bdfa_cyrillic_names() {
         "Шерлок Холмс|Джон Уотсон|Ирен Адлер|инспектор Лестрейд|профессор Мориарти",
         "zzz Шерлок Холмс и Джон Уотсон zzz".as_bytes(),
     );
+}
+
+#[test]
+fn opts_unicode_false() {
+    let re = Regex::with_options(
+        r"\w+",
+        EngineOptions::default().unicode(false),
+    ).unwrap();
+    // ASCII-only: "café" → "caf" matches, é (0xC3 0xA9) does not
+    let m = re.find_all("café".as_bytes()).unwrap();
+    assert_eq!(m.len(), 1);
+    assert_eq!((m[0].start, m[0].end), (0, 3));
+
+    // contrast: with unicode=true (default), the whole word matches
+    let re_u = Regex::new(r"\w+").unwrap();
+    let m_u = re_u.find_all("café".as_bytes()).unwrap();
+    assert_eq!(m_u.len(), 1);
+    assert!(m_u[0].end > 3); // includes the é bytes
+}
+
+#[test]
+fn opts_case_insensitive() {
+    let re = Regex::with_options(
+        "hello",
+        EngineOptions::default().case_insensitive(true),
+    ).unwrap();
+    let m = re.find_all(b"Hello HELLO hello").unwrap();
+    assert_eq!(m.len(), 3);
+}
+
+#[test]
+fn opts_dot_matches_new_line() {
+    let re = Regex::with_options(
+        "a.b",
+        EngineOptions::default().dot_matches_new_line(true),
+    ).unwrap();
+    let m = re.find_all(b"a\nb").unwrap();
+    assert_eq!(m.len(), 1);
+    assert_eq!((m[0].start, m[0].end), (0, 3));
+
+    // without the flag, should not match
+    let re2 = Regex::new("a.b").unwrap();
+    let m2 = re2.find_all(b"a\nb").unwrap();
+    assert_eq!(m2.len(), 0);
+}
+
+#[test]
+fn opts_dot_all_inline_flag() {
+    // (?s) inline should also work
+    let re = Regex::new("(?s)a.b").unwrap();
+    let m = re.find_all(b"a\nb").unwrap();
+    assert_eq!(m.len(), 1);
+}
+
+#[test]
+fn opts_dot_all_scoped_group() {
+    // (?s:.) scoped: dot inside matches newline, dot outside does not
+    let re = Regex::new("(?s:a.b).c").unwrap();
+    let m = re.find_all(b"a\nbxc").unwrap();
+    assert_eq!(m.len(), 1);
+
+    // dot outside group should NOT match newline
+    let m2 = re.find_all(b"a\nb\nc").unwrap();
+    assert_eq!(m2.len(), 0);
+}
+
+#[test]
+fn opts_ignore_whitespace() {
+    let re = Regex::with_options(
+        r"hello \ world",
+        EngineOptions::default().ignore_whitespace(true),
+    ).unwrap();
+    let m = re.find_all(b"hello world").unwrap();
+    assert_eq!(m.len(), 1);
 }
 

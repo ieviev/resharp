@@ -22,7 +22,7 @@ You combine all of these with `&` to get more complex patterns.
 - Lazy quantifiers: `*?`, `+?`, `??`, `{n,m}?` produce a parse error.
 - Backreferences: `\1`, `\2`, etc.
 - Nested lookarounds: `(?=(?<=a)b)` or `(?<=(?=a)b)c`
-- Alternatives of lookbehinds: `(?<=abc)de|(?<=def)gh`
+- Lookbehinds in different alternatives: `(?<=abc)de|(?<=def)gh`
 
 ## Extensions
 
@@ -50,7 +50,7 @@ _*cat_*&_*dog_*           contains both "cat" and "dog"
 _*cat_*&_*dog_*&_{5,30}   ...and is 5-30 characters long
 ```
 
-Intersection has higher precedence than alternation: `a|b&c` is parsed as `a|(b&c)`.
+Intersection has higher precedence than alternatives: `a|b&c` is parsed as `a|(b&c)`.
 
 ### `~(...)` -- complement
 
@@ -65,7 +65,7 @@ Matches everything the inner pattern does **not** match. Parentheses are require
 ### Combining operators
 
 ```
-F.*&~(.*Finn)                       starts with F, doesn't end with "Finn"
+F.*&~(_*Finn)                       starts with F, doesn't end with "Finn"
 ~(_*\d\d_*)&[a-zA-Z\d]{8,}         8+ alphanumeric, no consecutive digits
 ~(_*\n\n_*)&_*keyword_*&\S_*\S     paragraph containing "keyword"
 ```
@@ -156,7 +156,7 @@ Flags apply from the point they appear until the end of the enclosing group.
 
 ## Match semantics
 
-Matches are **leftmost-longest**. This differs from most regex engines which use leftmost-first (greedy or lazy). Lazy quantifiers (`*?`, `+?`, `??`, `{n,m}?`) are not supported and will produce a parse error.
+Matches are **leftmost-longest**. This differs from most regex engines which use leftmost-greedy (PCRE). Lazy quantifiers (`*?`, `+?`, `??`, `{n,m}?`) are not supported and will produce a parse error.
 
 ## Unicode
 
@@ -166,7 +166,7 @@ Scripts encoded as 3+ byte UTF-8 (U+0800+) -- Devanagari, Thai, CJK, etc. -- are
 
 | Shorthand | Covers | Full-range alternative |
 |-----------|--------|----------------------|
-| `\w` | word chars up to U+07FF | `\p{Letter}` \| `\p{Number}` \| `_` |
+| `\w` | word chars up to U+07FF | `\p{Letter}` \| `\p{Number}` \| `\_` |
 | `\d` | digits up to U+07FF | `\p{Number}` |
 | `\s` | whitespace up to U+07FF | `\p{White_Space}` |
 | `\W` | non-word (UTF-8 safe) | |
