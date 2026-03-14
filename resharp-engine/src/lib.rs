@@ -374,24 +374,28 @@ impl Regex {
         })
     }
 
-    /// number of algebra nodes created during compilation.
+    #[cfg(feature = "diag")]
+    #[allow(missing_docs)]
     pub fn node_count(&self) -> u32 {
         self.inner.lock().unwrap().b.num_nodes()
     }
 
-    /// (fwd_states, rev_states) count.
+    #[cfg(feature = "diag")]
+    #[allow(missing_docs)]
     pub fn dfa_stats(&self) -> (usize, usize) {
         let inner = self.inner.lock().unwrap();
         (inner.fwd.state_nodes.len(), inner.rev.state_nodes.len())
     }
 
-    /// BDFA stats: (states, minterms, prefix_len) if BDFA is active.
+    #[cfg(feature = "diag")]
+    #[allow(missing_docs)]
     pub fn bdfa_stats(&self) -> Option<(usize, usize, usize)> {
         let inner = self.inner.lock().unwrap();
         inner.bounded.as_ref().map(|b| (b.states.len(), b.num_mt, b.prefix_len))
     }
 
-    /// whether forward prefix or reverse skip acceleration is active.
+    #[cfg(feature = "diag")]
+    #[allow(missing_docs)]
     pub fn has_accel(&self) -> (bool, bool) {
         let inner = self.inner.lock().unwrap();
         let fwd = self.fwd_prefix.is_some();
@@ -453,7 +457,8 @@ impl Regex {
         self.find_all_dfa(input)
     }
 
-    /// debug: dump rev DFA effects_id and effects.
+    #[cfg(feature = "diag")]
+    #[allow(missing_docs)]
     pub fn effects_debug(&self) -> String {
         let inner = self.inner.lock().unwrap();
         let rev = &inner.rev;
@@ -470,7 +475,8 @@ impl Regex {
         out
     }
 
-    /// debug: run only the reverse DFA, return null positions.
+    #[cfg(feature = "diag")]
+    #[allow(missing_docs)]
     pub fn collect_rev_nulls_debug(&self, input: &[u8]) -> Vec<usize> {
         let inner = &mut *self.inner.lock().unwrap();
         inner.nulls_buf.clear();

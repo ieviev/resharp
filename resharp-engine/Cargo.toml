@@ -17,12 +17,14 @@ doctest = false
 
 [features]
 debug-nulls = []
+diag = []
 
 [dependencies]
 resharp-algebra = { version = "0.3.1", path = "../resharp-algebra" }
 resharp-parser = { version = "0.3.1", path = "../resharp-parser" }
 
 [dev-dependencies]
+resharp = { path = ".", features = ["diag"] }
 resharp-algebra = { version = "0.3.1", path = "../resharp-algebra" }
 resharp-parser = { version = "0.3.1", path = "../resharp-parser" }
 regex-syntax = "0.8.5"

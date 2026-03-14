@@ -410,6 +410,7 @@ dependencies = [
  "regex",
  "regex-automata",
  "regex-syntax",
+ "resharp",
  "resharp-algebra",
  "resharp-parser",
  "toml",
