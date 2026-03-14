@@ -290,10 +290,11 @@ impl RevSearchBytes {
                 pos -= 32;
             }
         }
-        // tail: overlapping load from position 0, mask to only check uncovered bytes
-        if len < 32 {
+        // tail: check remaining bytes at the beginning not covered by 32-byte chunks
+        let gap = if len >= 32 { len % 32 } else { len };
+        if gap > 0 {
             let mut buf = [0u8; 32];
-            buf[..len].copy_from_slice(&haystack[..len]);
+            buf[..gap].copy_from_slice(&haystack[..gap]);
             let chunk = _mm256_loadu_si256(buf.as_ptr() as *const __m256i);
             let mut mask = _mm256_movemask_epi8(_mm256_cmpeq_epi8(chunk, v0)) as u32;
             if n >= 2 {
@@ -304,7 +305,7 @@ impl RevSearchBytes {
                 let v2 = _mm256_set1_epi8(self.bytes[2] as i8);
                 mask |= _mm256_movemask_epi8(_mm256_cmpeq_epi8(chunk, v2)) as u32;
             }
-            mask &= (1u32 << len) - 1; // mask off padding bytes
+            mask &= (1u32 << gap) - 1;
             if mask != 0 {
                 return Some(31 - mask.leading_zeros() as usize);
             }
@@ -821,6 +822,7 @@ pub struct FwdPrefixSearch {
     num_simd: usize,
     masks: Box<TeddyMasks>,
     sets: Vec<TSet>,
+    verify_order: [u8; 16],
 }
 
 #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
@@ -838,7 +840,7 @@ impl FwdPrefixSearch {
 
     pub fn new(
         len: usize,
-        _freq_order: &[usize],
+        freq_order: &[usize],
         byte_sets_raw: &[Vec<u8>],
         all_sets: Vec<TSet>,
     ) -> Self {
@@ -864,11 +866,31 @@ impl FwdPrefixSearch {
             masks.hi[i][16..].copy_from_slice(&hi);
         }
 
+        // build verify order: non-SIMD positions first (rarest first),
+        // then SIMD positions last (already pre-filtered by SIMD)
+        let mut verify_order = [0u8; 16];
+        let mut vi = 0;
+        // non-SIMD positions in frequency order (rarest first)
+        for &pos in freq_order {
+            if pos >= num_simd && pos < len {
+                verify_order[vi] = pos as u8;
+                vi += 1;
+            }
+        }
+        // SIMD positions last (in frequency order)
+        for &pos in freq_order {
+            if pos < num_simd {
+                verify_order[vi] = pos as u8;
+                vi += 1;
+            }
+        }
+
         Self {
             len,
             num_simd,
             masks,
             sets: all_sets,
+            verify_order,
         }
     }
 
@@ -924,7 +946,7 @@ impl FwdPrefixSearch {
             );
             let mask = _mm256_movemask_epi8(r0) as u32;
             if mask != 0 {
-                if let Some(m) = Self::verify_inline(ptr, pos, mask, sets_ptr, len) {
+                if let Some(m) = Self::verify_inline(ptr, pos, mask, sets_ptr, len, self.verify_order.as_ptr()) {
                     return Some(m);
                 }
             }
@@ -961,7 +983,7 @@ impl FwdPrefixSearch {
             let combined = _mm256_and_si256(r0, r1);
             let mask = _mm256_movemask_epi8(combined) as u32;
             if mask != 0 {
-                if let Some(m) = Self::verify_inline(ptr, pos, mask, sets_ptr, len) {
+                if let Some(m) = Self::verify_inline(ptr, pos, mask, sets_ptr, len, self.verify_order.as_ptr()) {
                     return Some(m);
                 }
             }
@@ -1031,12 +1053,12 @@ impl FwdPrefixSearch {
             let mask_b = _mm256_movemask_epi8(rb) as u32;
             if (mask_a | mask_b) != 0 {
                 if mask_a != 0 {
-                    if let Some(m) = Self::verify_inline(ptr, pos, mask_a, sets_ptr, len) {
+                    if let Some(m) = Self::verify_inline(ptr, pos, mask_a, sets_ptr, len, self.verify_order.as_ptr()) {
                         return Some(m);
                     }
                 }
                 if mask_b != 0 {
-                    if let Some(m) = Self::verify_inline(ptr, pos + 32, mask_b, sets_ptr, len) {
+                    if let Some(m) = Self::verify_inline(ptr, pos + 32, mask_b, sets_ptr, len, self.verify_order.as_ptr()) {
                         return Some(m);
                     }
                 }
@@ -1066,7 +1088,7 @@ impl FwdPrefixSearch {
             );
             let mask = _mm256_movemask_epi8(combined) as u32;
             if mask != 0 {
-                if let Some(m) = Self::verify_inline(ptr, pos, mask, sets_ptr, len) {
+                if let Some(m) = Self::verify_inline(ptr, pos, mask, sets_ptr, len, self.verify_order.as_ptr()) {
                     return Some(m);
                 }
             }
@@ -1082,6 +1104,7 @@ impl FwdPrefixSearch {
         mut bits: u32,
         sets_ptr: *const TSet,
         len: usize,
+        verify_order: *const u8,
     ) -> Option<usize> {
         while bits != 0 {
             let bit = bits.trailing_zeros() as usize;
@@ -1090,7 +1113,8 @@ impl FwdPrefixSearch {
             let mut ok = true;
             let mut j = 0;
             while j < len {
-                if !(*sets_ptr.add(j)).contains_byte(*base.add(j)) {
+                let idx = *verify_order.add(j) as usize;
+                if !(*sets_ptr.add(idx)).contains_byte(*base.add(idx)) {
                     ok = false;
                     break;
                 }
@@ -1237,9 +1261,10 @@ impl RevSearchRanges {
                 pos -= 32;
             }
         }
-        if len < 32 {
+        let gap = if len >= 32 { len % 32 } else { len };
+        if gap > 0 {
             let mut buf = [0u8; 32];
-            buf[..len].copy_from_slice(&haystack[..len]);
+            buf[..gap].copy_from_slice(&haystack[..gap]);
             let chunk = _mm256_loadu_si256(buf.as_ptr() as *const __m256i);
             let ge0 = _mm256_cmpeq_epi8(_mm256_max_epu8(chunk, lo0), chunk);
             let le0 = _mm256_cmpeq_epi8(_mm256_min_epu8(chunk, hi0), chunk);
@@ -1258,7 +1283,7 @@ impl RevSearchRanges {
                 let le2 = _mm256_cmpeq_epi8(_mm256_min_epu8(chunk, hi2), chunk);
                 mask |= _mm256_movemask_epi8(_mm256_and_si256(ge2, le2)) as u32;
             }
-            mask &= (1u32 << len) - 1;
+            mask &= (1u32 << gap) - 1;
             if mask != 0 {
                 return Some(31 - mask.leading_zeros() as usize);
             }

@@ -92,14 +92,6 @@ fn main() {
         20,
     );
 
-    let cpython = load_haystack("cpython-226484e4.py");
-    bench_compare(
-        "aws-key",
-        r"((?:ASIA|AKIA|AROA|AIDA)([A-Z0-7]{16}))",
-        &cpython,
-        5,
-    );
-
     bench_compare(
         "chinese-alternation",
         "夏洛克·福尔摩斯|约翰华生|阿德勒|雷斯垂德|莫里亚蒂教授",

@@ -499,6 +499,11 @@ fn find_anchored() {
 }
 
 #[test]
+fn cloudflare_redos() {
+    run_file("cloudflare_redos.toml");
+}
+
+#[test]
 fn capacity_exceeded_at_match() {
     let re = Regex::with_options(
         "a.*b.*c.*d",
@@ -1486,5 +1491,39 @@ fn opts_ignore_whitespace() {
     ).unwrap();
     let m = re.find_all(b"hello world").unwrap();
     assert_eq!(m.len(), 1);
+}
+
+#[test]
+fn word_match_lengths_en_sampled() {
+    let path = format!("{}/../data/haystacks/en-sampled.txt", env!("CARGO_MANIFEST_DIR"));
+    let content = std::fs::read_to_string(&path).unwrap();
+    let input: String = content.lines().take(2500).collect::<Vec<_>>().join("\n");
+    let input = input.as_bytes();
+
+    let pattern = r"\b[0-9A-Za-z_]+\b";
+    let re = Regex::with_options(pattern, EngineOptions::default().unicode(false)).unwrap();
+    let matches = re.find_all(input).unwrap();
+
+    let rx = regex::bytes::RegexBuilder::new(pattern).unicode(false).build().unwrap();
+    let expected: Vec<(usize, usize)> = rx.find_iter(input).map(|m| (m.start(), m.end())).collect();
+
+    let sum: usize = matches.iter().map(|m| m.end - m.start).sum();
+    let expected_sum: usize = expected.iter().map(|(s, e)| e - s).sum();
+
+    assert_eq!(
+        expected_sum, 56_601,
+        "regex crate baseline changed: expected 56691, got {}",
+        expected_sum,
+    );
+    assert_eq!(
+        sum, 56_601,
+        "resharp total match length: expected 56691, got {}",
+        sum,
+    );
+    assert_eq!(
+        matches.len(), expected.len(),
+        "match count mismatch: resharp={} regex={}",
+        matches.len(), expected.len(),
+    );
 }
 

@@ -662,6 +662,7 @@ impl Regex {
                     let found = bounded.prefix.as_ref().unwrap().find_fwd(input, pos);
                     match found {
                         Some(p) => {
+
                             if PREFIX == 2 {
                                 pos = p + bounded.prefix_len;
                                 state = bounded.after_prefix;
@@ -688,6 +689,7 @@ impl Regex {
                             }
                             let rel = bounded.match_rel[state as usize];
                             if rel > 0 {
+
                                 if ISMATCH { return Ok(true); }
                                 matches.push(Match {
                                     start: pos - rel as usize,

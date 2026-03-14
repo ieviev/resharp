@@ -863,6 +863,7 @@ pub struct FwdPrefixSearch {
     simd_offsets: [usize; 3],
     masks: Box<TeddyMasks>,
     sets: Vec<TSet>,
+    verify_order: [u8; 16],
 }
 
 impl FwdPrefixSearch {
@@ -901,12 +902,28 @@ impl FwdPrefixSearch {
             masks.hi[i][16..].copy_from_slice(&hi);
         }
 
+        let mut verify_order = [0u8; 16];
+        let mut vi = 0;
+        for &pos in freq_order {
+            if pos >= num_simd && pos < len {
+                verify_order[vi] = pos as u8;
+                vi += 1;
+            }
+        }
+        for &pos in freq_order {
+            if pos < num_simd {
+                verify_order[vi] = pos as u8;
+                vi += 1;
+            }
+        }
+
         Self {
             len,
             num_simd,
             simd_offsets,
             masks,
             sets: all_sets,
+            verify_order,
         }
     }
 
@@ -958,7 +975,7 @@ impl FwdPrefixSearch {
             );
             if vmaxvq_u8(r0) != 0 {
                 let mask = neon_movemask(r0);
-                if let Some(m) = Self::verify_inline(ptr, pos, mask, sets_ptr, len) {
+                if let Some(m) = Self::verify_inline(ptr, pos, mask, sets_ptr, len, self.verify_order.as_ptr()) {
                     return Some(m);
                 }
             }
@@ -996,7 +1013,7 @@ impl FwdPrefixSearch {
             let combined = vandq_u8(r0, r1);
             if vmaxvq_u8(combined) != 0 {
                 let mask = neon_movemask(combined);
-                if let Some(m) = Self::verify_inline(ptr, pos, mask, sets_ptr, len) {
+                if let Some(m) = Self::verify_inline(ptr, pos, mask, sets_ptr, len, self.verify_order.as_ptr()) {
                     return Some(m);
                 }
             }
@@ -1067,13 +1084,13 @@ impl FwdPrefixSearch {
             if vmaxvq_u8(vorrq_u8(ra, rb)) != 0 {
                 if vmaxvq_u8(ra) != 0 {
                     let mask_a = neon_movemask(ra);
-                    if let Some(m) = Self::verify_inline(ptr, pos, mask_a, sets_ptr, len) {
+                    if let Some(m) = Self::verify_inline(ptr, pos, mask_a, sets_ptr, len, self.verify_order.as_ptr()) {
                         return Some(m);
                     }
                 }
                 if vmaxvq_u8(rb) != 0 {
                     let mask_b = neon_movemask(rb);
-                    if let Some(m) = Self::verify_inline(ptr, pos + 16, mask_b, sets_ptr, len) {
+                    if let Some(m) = Self::verify_inline(ptr, pos + 16, mask_b, sets_ptr, len, self.verify_order.as_ptr()) {
                         return Some(m);
                     }
                 }
@@ -1103,7 +1120,7 @@ impl FwdPrefixSearch {
             );
             if vmaxvq_u8(combined) != 0 {
                 let mask = neon_movemask(combined);
-                if let Some(m) = Self::verify_inline(ptr, pos, mask, sets_ptr, len) {
+                if let Some(m) = Self::verify_inline(ptr, pos, mask, sets_ptr, len, self.verify_order.as_ptr()) {
                     return Some(m);
                 }
             }
@@ -1119,6 +1136,7 @@ impl FwdPrefixSearch {
         mut bits: u16,
         sets_ptr: *const TSet,
         len: usize,
+        verify_order: *const u8,
     ) -> Option<usize> {
         while bits != 0 {
             let bit = bits.trailing_zeros() as usize;
@@ -1127,7 +1145,8 @@ impl FwdPrefixSearch {
             let mut ok = true;
             let mut j = 0;
             while j < len {
-                if !(*sets_ptr.add(j)).contains_byte(*base.add(j)) {
+                let idx = *verify_order.add(j) as usize;
+                if !(*sets_ptr.add(idx)).contains_byte(*base.add(idx)) {
                     ok = false;
                     break;
                 }

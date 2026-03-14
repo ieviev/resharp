@@ -1,0 +1,9 @@
+description = '''
+cloudflare WAF ReDoS pattern - the 2019 outage regex.
+'''
+
+[[test]]
+name = "cloudflare_redos_full"
+pattern = '''(?:(?:"|'|\]|\}|\\|\d|(?:nan|infinity|true|false|null|undefined|symbol|math)|`|-|\+)+[)]*;?((?:\s|-|\~|!|\{\}|\|\||\+)*.*(?:.*=.*)))'''
+input = "math x=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+matches = [[0, 107]]
