@@ -1511,12 +1511,12 @@ fn word_match_lengths_en_sampled() {
     let expected_sum: usize = expected.iter().map(|(s, e)| e - s).sum();
 
     assert_eq!(
-        expected_sum, 56_601,
+        expected_sum, 56_691,
         "regex crate baseline changed: expected 56691, got {}",
         expected_sum,
     );
     assert_eq!(
-        sum, 56_601,
+        sum, 56_691,
         "resharp total match length: expected 56691, got {}",
         sum,
     );

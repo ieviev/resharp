@@ -1297,9 +1297,17 @@ impl<'s> ResharpParser<'s> {
         tb: &mut TB<'s>,
     ) -> Result<(NodeId, usize)> {
         use WordCharKind::*;
-        self.unicode_classes.ensure_word(tb);
-        let word_id = self.unicode_classes.word;
-        let not_word_id = self.unicode_classes.non_word;
+        let (word_id, not_word_id) = if self.global_unicode {
+            self.unicode_classes.ensure_word(tb);
+            (self.unicode_classes.word, self.unicode_classes.non_word)
+        } else {
+            let az = tb.mk_range_u8(b'a', b'z');
+            let big = tb.mk_range_u8(b'A', b'Z');
+            let dig = tb.mk_range_u8(b'0', b'9');
+            let us = tb.mk_u8(b'_');
+            let w = tb.mk_unions([az, big, dig, us].into_iter());
+            (w, tb.mk_compl(w))
+        };
         let left = self.resolve_word_kind(asts, idx, -1, translator, tb, word_id, not_word_id)?;
         let right =
             self.resolve_word_kind(asts, idx, 1, translator, tb, word_id, not_word_id)?;
