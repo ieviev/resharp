@@ -1488,66 +1488,6 @@ impl LDFA {
         Ok(())
     }
 
-    pub fn any_nullable_rev(
-        &mut self,
-        b: &mut RegexBuilder,
-        start_pos: usize,
-        data: &[u8],
-    ) -> Result<bool, Error> {
-        let mt = self.minterms_lookup[data[start_pos] as usize];
-        let mut curr = self.begin_table[mt as usize] as u32;
-        if curr <= DFA_DEAD as u32 {
-            return Ok(false);
-        }
-
-        if has_any_null(&self.effects_id, &self.effects, curr, Nullability::CENTER) {
-            return Ok(true);
-        }
-
-        let mut pos = start_pos;
-
-        loop {
-            let tables = ScanTables {
-                center_table: self.center_table.as_ptr(),
-                effects_id: self.effects_id.as_ptr(),
-                effects: self.effects.as_ptr(),
-                data: data.as_ptr(),
-                minterms_lookup: self.minterms_lookup.as_ptr(),
-                mt_log: self.mt_log,
-            };
-
-            let (state, new_pos, found, cache_miss) = any_null_rev_noskip(&tables, curr, pos);
-
-            if found {
-                return Ok(true);
-            }
-
-            if !cache_miss {
-                curr = state;
-                pos = new_pos;
-                break;
-            }
-
-            let mt = self.minterms_lookup[data[new_pos] as usize] as u32;
-            curr = self.lazy_transition(b, state as u16, mt)? as u32;
-            pos = new_pos;
-            if curr <= DFA_DEAD as u32 {
-                break;
-            }
-
-            if has_any_null(&self.effects_id, &self.effects, curr, Nullability::CENTER) {
-                return Ok(true);
-            }
-        }
-
-        if pos == 0 && curr > DFA_DEAD as u32 {
-            if has_any_null(&self.effects_id, &self.effects, curr, Nullability::END) {
-                return Ok(true);
-            }
-        }
-
-        Ok(false)
-    }
 }
 
 pub(crate) fn has_any_null(
@@ -1723,41 +1663,6 @@ fn collect_rev_noskip(
         }
     }
     (curr, 0, false)
-}
-
-#[inline(never)]
-fn any_null_rev_noskip(t: &ScanTables, mut curr: u32, mut pos: usize) -> (u32, usize, bool, bool) {
-    let center_table = t.center_table;
-    let effects_id = t.effects_id;
-    let minterms_lookup = t.minterms_lookup;
-    let mt_log = t.mt_log;
-    while pos != 0 {
-        pos -= 1;
-
-        unsafe {
-            let mt = *minterms_lookup.add(*t.data.add(pos) as usize) as u32;
-            let delta = (curr << mt_log | mt) as usize;
-            let next = *center_table.add(delta);
-            if next == DFA_MISSING {
-                return (curr, pos, false, true); // cache miss
-            }
-            if next == DFA_DEAD {
-                return (DFA_DEAD as u32, pos, false, false); // dead state
-            }
-            curr = next as u32;
-            let eid = *effects_id.add(curr as usize) as u32;
-            if eid != 0 {
-                if eid == 1 {
-                    return (curr, pos, true, false);
-                }
-                let effects_vec = &*t.effects.add(eid as usize);
-                if effects_vec.iter().any(|n| n.mask.has(Nullability::CENTER)) {
-                    return (curr, pos, true, false);
-                }
-            }
-        }
-    }
-    (curr, 0, false, false)
 }
 
 #[inline(never)]

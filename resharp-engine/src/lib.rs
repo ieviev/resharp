@@ -491,24 +491,42 @@ impl Regex {
         matches_buf.clear();
         match bounded.prefix {
             Some(accel::FwdPrefixSearch::Literal(_)) => {
-                Self::bdfa_scan::<2>(bounded, b, input, matches_buf)?;
+                Self::bdfa_scan::<2, false>(bounded, b, input, matches_buf)?;
             }
             Some(accel::FwdPrefixSearch::Prefix(_)) => {
-                Self::bdfa_scan::<1>(bounded, b, input, matches_buf)?;
+                Self::bdfa_scan::<1, false>(bounded, b, input, matches_buf)?;
             }
             None => {
-                Self::bdfa_scan::<0>(bounded, b, input, matches_buf)?;
+                Self::bdfa_scan::<0, false>(bounded, b, input, matches_buf)?;
             }
         }
         Ok(matches_buf.clone())
     }
 
-    fn bdfa_scan<const PREFIX: u8>(
+    fn is_match_fwd_bounded(&self, input: &[u8]) -> Result<bool, Error> {
+        let RegexInner { b, bounded, matches_buf, .. } = &mut *self.inner.lock().unwrap();
+        let bounded = bounded.as_mut().unwrap();
+        matches_buf.clear();
+        let found = match bounded.prefix {
+            Some(accel::FwdPrefixSearch::Literal(_)) => {
+                Self::bdfa_scan::<2, true>(bounded, b, input, matches_buf)?
+            }
+            Some(accel::FwdPrefixSearch::Prefix(_)) => {
+                Self::bdfa_scan::<1, true>(bounded, b, input, matches_buf)?
+            }
+            None => {
+                Self::bdfa_scan::<0, true>(bounded, b, input, matches_buf)?
+            }
+        };
+        Ok(found)
+    }
+
+    fn bdfa_scan<const PREFIX: u8, const ISMATCH: bool>(
         bounded: &mut BDFA,
         b: &mut RegexBuilder,
         input: &[u8],
         matches: &mut Vec<Match>,
-    ) -> Result<(), Error> {
+    ) -> Result<bool, Error> {
         let initial = bounded.initial;
         let mt_log = bounded.mt_log;
         let ml = bounded.minterms_lookup;
@@ -518,12 +536,16 @@ impl Regex {
 
         if PREFIX == 0 {
             let data = input.as_ptr();
-            matches.reserve(2048);
+            if !ISMATCH {
+                matches.reserve(2048);
+            }
             loop {
-                if matches.len() == matches.capacity() {
-                    matches.reserve(matches.capacity().max(256));
+                if !ISMATCH {
+                    if matches.len() == matches.capacity() {
+                        matches.reserve(matches.capacity().max(256));
+                    }
                 }
-                let spare = matches.capacity() - matches.len();
+                let spare = if ISMATCH { 1 } else { matches.capacity() - matches.len() };
                 let buf_ptr = unsafe { matches.as_mut_ptr().add(matches.len()) };
                 let table = bounded.table.as_ptr();
                 let (s, p, mc) = bdfa_inner::<0>(
@@ -532,6 +554,9 @@ impl Regex {
                 );
                 state = s;
                 pos = p;
+                if ISMATCH && mc > 0 {
+                    return Ok(true);
+                }
                 unsafe { matches.set_len(matches.len() + mc) };
                 if pos >= len {
                     break;
@@ -541,6 +566,7 @@ impl Regex {
                 state = (entry & 0xFFFF) as u16;
                 let rel = entry >> 16;
                 if rel > 0 {
+                    if ISMATCH { return Ok(true); }
                     matches.push(Match {
                         start: pos - rel as usize,
                         end: pos,
@@ -587,6 +613,7 @@ impl Regex {
                             }
                             let rel = bounded.match_rel[state as usize];
                             if rel > 0 {
+                                if ISMATCH { return Ok(true); }
                                 matches.push(Match {
                                     start: pos - rel as usize,
                                     end: pos,
@@ -617,6 +644,7 @@ impl Regex {
                             continue 'main;
                         }
                         if rel > 0 {
+                            if ISMATCH { return Ok(true); }
                             matches.push(Match {
                                 start: pos - rel as usize,
                                 end: pos,
@@ -636,6 +664,7 @@ impl Regex {
                 state = (entry & 0xFFFF) as u16;
                 let rel = entry >> 16;
                 if rel > 0 {
+                    if ISMATCH { return Ok(true); }
                     matches.push(Match {
                         start: pos - rel as usize,
                         end: pos,
@@ -652,6 +681,7 @@ impl Regex {
             if node != NodeId::MISSING {
                 let best = BDFA::counted_best(node, b);
                 if best > 0 {
+                    if ISMATCH { return Ok(true); }
                     matches.push(Match {
                         start: len - best as usize,
                         end: len,
@@ -660,7 +690,7 @@ impl Regex {
             }
         }
 
-        Ok(())
+        Ok(false)
     }
 
     fn find_all_fwd_prefix(&self, input: &[u8]) -> Result<Vec<Match>, Error> {
@@ -800,12 +830,47 @@ impl Regex {
         if input.is_empty() {
             return Ok(self.empty_nullable);
         }
-        let inner = &mut *self.inner.lock().unwrap();
-        if inner.rev.effects_id[inner.rev.initial as usize] != 0 {
-            return Ok(true);
+        // 1. bounded → BDFA is_match
+        {
+            let inner = self.inner.lock().unwrap();
+            if inner.bounded.is_some() {
+                drop(inner);
+                return self.is_match_fwd_bounded(input);
+            }
         }
-        inner
-            .rev
-            .any_nullable_rev(&mut inner.b, input.len() - 1, input)
+        // 2. fwd prefix → find first candidate
+        if let Some(ref fwd_prefix) = self.fwd_prefix {
+            if let Some(fl) = self.fixed_length {
+                // prefix hit + fixed length = confirmed match
+                if let Some(candidate) = fwd_prefix.find_fwd(input, 0) {
+                    return Ok(candidate + fl as usize <= input.len());
+                }
+                return Ok(false);
+            }
+            // variable length: prefix hit + fwd DFA confirm
+            let inner = &mut *self.inner.lock().unwrap();
+            let prefix_len = fwd_prefix.len();
+            let mut search_start = 0;
+            while let Some(candidate) = fwd_prefix.find_fwd(input, search_start) {
+                let state = inner
+                    .fwd
+                    .walk_input(&mut inner.b, candidate, prefix_len, input)?;
+                if state != 0 {
+                    let max_end = inner.fwd.scan_fwd_from(
+                        &mut inner.b,
+                        state,
+                        candidate + prefix_len,
+                        input,
+                    )?;
+                    if max_end != engine::NO_MATCH && max_end > candidate {
+                        return Ok(true);
+                    }
+                }
+                search_start = candidate + 1;
+            }
+            return Ok(false);
+        }
+        // 3. fallback
+        Ok(!self.find_all(input)?.is_empty())
     }
 }
