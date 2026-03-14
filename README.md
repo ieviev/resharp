@@ -81,19 +81,19 @@ Throughput comparison with `regex` and `fancy-regex`, compiled with `--release`.
 
 | Benchmark | resharp | regex | fancy-regex |
 |---|---|---|---|
-| dictionary 2663 words (900KB, ~15 matches) | 287 MiB/s | 313 MiB/s | 312 MiB/s |
-| dictionary 2663 words (944KB, ~2678 matches) | **229 MiB/s** | 25 MiB/s | 8 MiB/s |
-| dictionary `(?i)` 2663 words (900KB) | **288 MiB/s** | 0.01 MiB/s | 0.01 MiB/s |
-| lookaround `(?<=\s)[A-Z][a-z]+(?=\s)` (900KB) | **204 MiB/s** | -- | 9 MiB/s |
-| literal alternation (900KB) | 1.70 GiB/s | 1.99 GiB/s | 1.94 GiB/s |
-| literal `"Sherlock Holmes"` (900KB) | 6.44 GiB/s | 7.11 GiB/s | 6.85 GiB/s |
+| dictionary 2663 words (900KB, ~15 matches) | 271 MiB/s | 315 MiB/s | 317 MiB/s |
+| dictionary 2663 words (944KB, ~2678 matches) | **214 MiB/s** | 25 MiB/s | 9 MiB/s |
+| dictionary `(?i)` 2663 words (900KB) | **271 MiB/s** | 0.01 MiB/s | 0.01 MiB/s |
+| lookaround `(?<=\s)[A-Z][a-z]+(?=\s)` (900KB) | **198 MiB/s** | -- | 10 MiB/s |
+| literal alternation (900KB) | 1.73 GiB/s | 2.00 GiB/s | 1.95 GiB/s |
+| literal `"Sherlock Holmes"` (900KB) | 6.74 GiB/s | 7.05 GiB/s | 6.78 GiB/s |
 
-<sub>(added because i find it pretty shocking - this is a tiny board smaller than a phone)</sub>
+<sub>(crazy how close a board smaller than a phone gets to desktop throughput these days. what a time to be alive)</sub>
 
 **Notes on the results:**
 
 - The first dictionary row is roughly tied - the prose haystack only contains ~15 matches, so the lazy DFA barely explores any states. RE#'s advantage is that its full DFA is smaller, but this isn't visible when most states are never materialized.
-- On longer inputs or denser matches, the other engines will degrade - take lazy-dfa benchmarks with a grain of salt, you will not be matching the exact same string over and over in the real world. The seeded dictionary row confirms this: with ~2678 matches, RE# holds at 535 MiB/s vs 58 MiB/s for `regex` on x86, and 229 MiB/s vs 25 MiB/s on ARM.
+- On longer inputs or denser matches, the other engines will degrade - take lazy-dfa benchmarks with a grain of salt, you will not be matching the exact same string over and over in the real world. The seeded dictionary row confirms this: with ~2678 matches, RE# holds at 535 MiB/s vs 58 MiB/s for `regex` on x86.
 - The `(?i)` row shows what happens when the pattern forces `regex` to fall back from its DFA to an NFA: throughput drops to 0.03 MiB/s. RE# handles case folding in the DFA and maintains full speed. You can increase `regex`'s DFA threshold to avoid this fallback, but only up to a point.
 - RE# compiles lookarounds directly into the automaton - no back-and-forth between forward and backward passes. `regex` doesn't support lookarounds except for anchors; `fancy-regex` handles them via backtracking, which is occasionally much slower.
 - The same patterns that win on x86 also win on ARM - the full DFA approach scales down well.
