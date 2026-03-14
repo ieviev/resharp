@@ -98,4 +98,34 @@ fn main() {
         &zh,
         50,
     );
+
+    bench_compare(
+        "unicode-letter-bounded-ru",
+        r"\p{L}{8,13}",
+        &ru,
+        5,
+    );
+
+    bench_compare(
+        "unicode-letter-bounded-en",
+        r"\p{L}{8,13}",
+        &en,
+        5,
+    );
+
+    bench_compare(
+        "ascii-letter-bounded-en",
+        "[A-Za-z]{8,13}",
+        &en,
+        5,
+    );
+
+    {
+        let haystack = std::fs::read_to_string(format!("{}/haystacks/en-medium.txt", data_dir())).unwrap();
+        let dict_path = format!("{}/regexes/length-15.txt", data_dir());
+        let pattern: String = std::fs::read_to_string(&dict_path).unwrap()
+            .lines().take(2663).collect::<Vec<_>>().join("|");
+        let input = haystack.as_bytes();
+        bench_compare("dictionary-full", &pattern, input, 20);
+    }
 }

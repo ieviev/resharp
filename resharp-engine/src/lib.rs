@@ -220,7 +220,7 @@ fn bdfa_inner<const PREFIX: u8>(
             let delta = (state as usize) << mt_log | mt;
             let entry = *table.add(delta);
             if entry == 0 {
-                return (state, pos, mc); // cache miss
+                return (state, pos, mc);
             }
             let rel = entry >> 16;
             state = (entry & 0xFFFF) as u16;
@@ -273,14 +273,23 @@ impl Regex {
             ignore_whitespace: opts.ignore_whitespace,
         };
         let node = resharp_parser::parse_ast_with(&mut b, pattern, &pflags)?;
-        Self::from_node(b, node, opts)
+        Self::from_node_inner(b, node, opts, pattern.len())
     }
 
     /// build from a pre-constructed AST node.
     pub fn from_node(
+        b: RegexBuilder,
+        node: NodeId,
+        opts: EngineOptions,
+    ) -> Result<Regex, Error> {
+        Self::from_node_inner(b, node, opts, 0)
+    }
+
+    fn from_node_inner(
         mut b: RegexBuilder,
         node: NodeId,
         opts: EngineOptions,
+        pattern_len: usize,
     ) -> Result<Regex, Error> {
         let empty_nullable = b
             .nullability_emptystring(node)
@@ -331,8 +340,8 @@ impl Regex {
         let use_bounded = max_length.is_some()
             && fixed_length.is_none()
             && !has_look
-            && !b.contains_anchors(node) // TBD: handle anchors in BDFA
-            && b.num_nodes() < 5000; // rev+fwd is better for large regexes
+            && !b.contains_anchors(node)
+            && pattern_len <= 150;
 
         if cfg!(feature = "debug-nulls") {
             eprintln!(

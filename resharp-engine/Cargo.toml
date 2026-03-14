@@ -35,3 +35,7 @@ regex-automata = "0.4.14"
 [[bench]]
 name = "comparison"
 harness = false
+
+[[bench]]
+name = "regression"
+harness = false
