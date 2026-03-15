@@ -98,6 +98,7 @@ Throughput comparison with `regex` and `fancy-regex`, compiled with `--release`.
 - RE# compiles lookarounds directly into the automaton - no back-and-forth between forward and backward passes. `regex` doesn't support lookarounds except for anchors; `fancy-regex` handles them via backtracking, which is occasionally much slower.
 - The same patterns that win on x86 also win on ARM - the full DFA approach scales down well.
 - If you encounter a bug or a pattern where RE# is >5x slower than `regex` or `fancy-regex`, please [open an issue](https://github.com/ieviev/resharp/issues) - it would help improve the library. Note that `regex` returns leftmost-greedy (PCRE) matches while RE# returns leftmost-longest, so match results may differ. The performance profile also differs - RE# works right to left while `regex` works left to right.
+- Also see [rebar](https://github.com/ieviev/rebar) comparison to `regex`. While it isn't perfect and obviously showcases the strengths of rust/regex, it's actually the most varied and considerate regex benchmark I've found - other benchmarks tend to bake in strings they know how to find or run entirely different configurations. rebar takes care to be fair to other (leftmost-first) engines, though our leftmost-longest semantics do a bit of extra work by definition. As it says, [all models are wrong but some are useful](https://github.com/BurntSushi/rebar/blob/master/MODELS.md).
 
 ## Crate structure
 
