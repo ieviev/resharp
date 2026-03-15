@@ -85,6 +85,53 @@ Without `&\p{utf8}`, a complement pattern will match any byte string that doesn'
 
 > `\W`, `\D`, `\S` already intersect with valid UTF-8 internally, so they never match invalid byte sequences. The `&\p{utf8}` constraint is only needed when using `~(...)` complement directly.
 
+## Unicode
+
+`\w`, `\d`, `\s` and `\b` are Unicode-aware by default, but **scoped to 2-byte UTF-8** sequences (U+0000..U+07FF): ASCII, Latin Extended, Greek, Cyrillic, Hebrew, Arabic, and other scripts through NKo.
+
+### Why not full Unicode `\w`?
+
+RE# lazily compiles automaton states on demand, but each new state requires deriving transitions for every character class in the pattern. Full Unicode `\w` covers ~140,000 codepoints across hundreds of disjoint byte ranges - deriving through that is expensive every time a new state is built. `\S`, by contrast, is the complement of just 6 whitespace codepoints. If you're using `\w` to mean "non-whitespace token character", `\S` is both more precise and orders of magnitude cheaper to derive.
+
+RE# defaults to 2-byte coverage (~1,600 codepoints) as a practical middle ground: it covers ASCII plus Latin, Greek, Cyrillic, Hebrew, Arabic, and other scripts through NKo - enough for most `\w` use cases without the derivation cost of full Unicode.
+
+Once states are compiled, match throughput is not significantly affected. But be prepared for milliseconds to seconds of compilation time for large patterns using full Unicode `\w` via `\p{Letter}` - the cost is entirely in building states, not in scanning input.
+
+`\b` uses this same 2-byte `\w` definition - characters outside that range are treated as non-word for boundary purposes.
+
+Scripts encoded as 3+ byte UTF-8 (U+0800+) - Devanagari, Thai, CJK, etc. - are not included in `\w`, `\d`, `\s`. For these, use `\p{Class}` which covers the full Unicode range:
+
+| Shorthand | Covers | Full-range alternative |
+|-----------|--------|----------------------|
+| `\w` | word chars up to U+07FF | `\p{Letter}` \| `\p{Number}` \| `\_` |
+| `\d` | digits up to U+07FF | `\p{Number}` |
+| `\s` | whitespace up to U+07FF | `\p{White_Space}` |
+| `\W` | non-word (UTF-8 safe) | |
+| `\D` | non-digit (UTF-8 safe) | |
+| `\S` | non-whitespace (UTF-8 safe) | |
+
+`\p{Class}` expands to the full Unicode range via `regex_syntax`, with no 2-byte limit. Any [Unicode general category or script name](https://www.unicode.org/reports/tr44/#General_Category_Values) works:
+
+```
+\p{Letter}           all Unicode letters (L)
+\p{Number}           all Unicode numbers (N)
+\p{White_Space}      all Unicode whitespace
+\p{Devanagari}       Devanagari script (U+0900..U+097F)
+\p{Greek}            Greek script
+\p{Han}              CJK Unified Ideographs
+\p{Uppercase}        uppercase letters
+```
+
+You can also use explicit ranges: `[\u{0900}-\u{097F}]`.
+
+### Special properties
+
+| Pattern | Description |
+|---------|-------------|
+| `\p{utf8}` | valid UTF-8 byte strings (for constraining complement) |
+| `\p{ascii}` | ASCII bytes (0x00..0x7F) |
+| `\p{hex}` | hexadecimal digits (`[0-9a-fA-F]`) |
+
 ## Standard syntax
 
 ### Character classes
@@ -157,50 +204,3 @@ Flags apply from the point they appear until the end of the enclosing group.
 ## Match semantics
 
 Matches are **leftmost-longest**. This differs from most regex engines which use leftmost-greedy (PCRE). Lazy quantifiers (`*?`, `+?`, `??`, `{n,m}?`) are not supported and will produce a parse error.
-
-## Unicode
-
-`\w`, `\d`, `\s` and `\b` are Unicode-aware by default, but **scoped to 2-byte UTF-8** sequences (U+0000..U+07FF): ASCII, Latin Extended, Greek, Cyrillic, Hebrew, Arabic, and other scripts through NKo.
-
-### Why not full Unicode `\w`?
-
-RE# lazily compiles automaton states on demand, but each new state requires deriving transitions for every character class in the pattern. Full Unicode `\w` covers ~140,000 codepoints across hundreds of disjoint byte ranges - deriving through that is expensive every time a new state is built. `\S`, by contrast, is the complement of just 6 whitespace codepoints. If you're using `\w` to mean "non-whitespace token character", `\S` is both more precise and orders of magnitude cheaper to derive.
-
-RE# defaults to 2-byte coverage (~1,600 codepoints) as a practical middle ground: it covers ASCII plus Latin, Greek, Cyrillic, Hebrew, Arabic, and other scripts through NKo - enough for most `\w` use cases without the derivation cost of full Unicode.
-
-Once states are compiled, match throughput is not significantly affected. But be prepared for milliseconds to seconds of compilation time for large patterns using full Unicode `\w` via `\p{Letter}` - the cost is entirely in building states, not in scanning input.
-
-`\b` uses this same 2-byte `\w` definition - characters outside that range are treated as non-word for boundary purposes.
-
-Scripts encoded as 3+ byte UTF-8 (U+0800+) - Devanagari, Thai, CJK, etc. - are not included in `\w`, `\d`, `\s`. For these, use `\p{Class}` which covers the full Unicode range:
-
-| Shorthand | Covers | Full-range alternative |
-|-----------|--------|----------------------|
-| `\w` | word chars up to U+07FF | `\p{Letter}` \| `\p{Number}` \| `\_` |
-| `\d` | digits up to U+07FF | `\p{Number}` |
-| `\s` | whitespace up to U+07FF | `\p{White_Space}` |
-| `\W` | non-word (UTF-8 safe) | |
-| `\D` | non-digit (UTF-8 safe) | |
-| `\S` | non-whitespace (UTF-8 safe) | |
-
-`\p{Class}` expands to the full Unicode range via `regex_syntax`, with no 2-byte limit. Any [Unicode general category or script name](https://www.unicode.org/reports/tr44/#General_Category_Values) works:
-
-```
-\p{Letter}           all Unicode letters (L)
-\p{Number}           all Unicode numbers (N)
-\p{White_Space}      all Unicode whitespace
-\p{Devanagari}       Devanagari script (U+0900..U+097F)
-\p{Greek}            Greek script
-\p{Han}              CJK Unified Ideographs
-\p{Uppercase}        uppercase letters
-```
-
-You can also use explicit ranges: `[\u{0900}-\u{097F}]`.
-
-### Special properties
-
-| Pattern | Description |
-|---------|-------------|
-| `\p{utf8}` | valid UTF-8 byte strings (for constraining complement) |
-| `\p{ascii}` | ASCII bytes (0x00..0x7F) |
-| `\p{hex}` | hexadecimal digits (`[0-9a-fA-F]`) |
