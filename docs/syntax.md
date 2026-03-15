@@ -160,9 +160,19 @@ Matches are **leftmost-longest**. This differs from most regex engines which use
 
 ## Unicode
 
-`\w`, `\d`, `\s` and `\b` are Unicode-aware by default, but scoped to 2-byte UTF-8 sequences (U+0000..U+07FF): ASCII, Latin Extended, Greek, Cyrillic, Hebrew, Arabic, and other scripts through NKo. Full Unicode `\w` is ~140,000 codepoints, but in practice `\w` is often used as shorthand for "non-whitespace token character" where `\S` would be more precise -- and **vastly cheaper**, since `\S` is the complement of just 6 whitespace codepoints. RE# defaults to 2-byte coverage (~1,600 codepoints) to keep automaton size down. `\b` uses this same 2-byte `\w` definition -- characters outside that range are treated as non-word for boundary purposes.
+`\w`, `\d`, `\s` and `\b` are Unicode-aware by default, but **scoped to 2-byte UTF-8** sequences (U+0000..U+07FF): ASCII, Latin Extended, Greek, Cyrillic, Hebrew, Arabic, and other scripts through NKo.
 
-Scripts encoded as 3+ byte UTF-8 (U+0800+) -- Devanagari, Thai, CJK, etc. -- are not included in `\w`, `\d`, `\s`. For these, use `\p{Class}` which covers the full Unicode range:
+### Why not full Unicode `\w`?
+
+RE# lazily compiles automaton states on demand, but each new state requires deriving transitions for every character class in the pattern. Full Unicode `\w` covers ~140,000 codepoints across hundreds of disjoint byte ranges - deriving through that is expensive every time a new state is built. `\S`, by contrast, is the complement of just 6 whitespace codepoints. If you're using `\w` to mean "non-whitespace token character", `\S` is both more precise and orders of magnitude cheaper to derive.
+
+RE# defaults to 2-byte coverage (~1,600 codepoints) as a practical middle ground: it covers ASCII plus Latin, Greek, Cyrillic, Hebrew, Arabic, and other scripts through NKo - enough for most `\w` use cases without the derivation cost of full Unicode.
+
+Once states are compiled, match throughput is not significantly affected. But be prepared for milliseconds to seconds of compilation time for large patterns using full Unicode `\w` via `\p{Letter}` - the cost is entirely in building states, not in scanning input.
+
+`\b` uses this same 2-byte `\w` definition - characters outside that range are treated as non-word for boundary purposes.
+
+Scripts encoded as 3+ byte UTF-8 (U+0800+) - Devanagari, Thai, CJK, etc. - are not included in `\w`, `\d`, `\s`. For these, use `\p{Class}` which covers the full Unicode range:
 
 | Shorthand | Covers | Full-range alternative |
 |-----------|--------|----------------------|
