@@ -45,14 +45,20 @@ impl MintermSearchValue {
 pub enum FwdPrefixSearch {
     Literal(crate::simd::FwdLiteralSearch),
     Prefix(crate::simd::FwdPrefixSearch),
+    Range(crate::simd::FwdRangeSearch),
 }
 
 #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
 impl FwdPrefixSearch {
+    pub fn is_literal(&self) -> bool {
+        matches!(self, FwdPrefixSearch::Literal(_))
+    }
+
     pub fn len(&self) -> usize {
         match self {
             FwdPrefixSearch::Literal(s) => s.len(),
             FwdPrefixSearch::Prefix(s) => s.len(),
+            FwdPrefixSearch::Range(s) => s.len(),
         }
     }
 
@@ -61,6 +67,7 @@ impl FwdPrefixSearch {
         match self {
             FwdPrefixSearch::Literal(s) => s.find_fwd(&haystack[start..]).map(|i| i + start),
             FwdPrefixSearch::Prefix(s) => s.find_fwd(haystack, start),
+            FwdPrefixSearch::Range(s) => s.find_fwd(haystack, start),
         }
     }
 
@@ -87,6 +94,10 @@ pub enum FwdPrefixSearch {}
 
 #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
 impl FwdPrefixSearch {
+    pub fn is_literal(&self) -> bool {
+        match *self {}
+    }
+
     pub fn len(&self) -> usize {
         match *self {}
     }

@@ -51,6 +51,11 @@ pub use engine::BDFA;
 #[doc(hidden)]
 pub use resharp_algebra::solver::TSetId;
 
+// bdfa_scan / bdfa_inner const-generic PREFIX modes
+const PREFIX_NONE: u8 = 0;
+const PREFIX_SEARCH: u8 = 1;
+const PREFIX_LITERAL: u8 = 2;
+
 pub use resharp_algebra::nulls::Nullability;
 pub use resharp_algebra::NodeId;
 pub use resharp_algebra::RegexBuilder;
@@ -138,6 +143,10 @@ pub struct EngineOptions {
     pub dot_matches_new_line: bool,
     /// allow whitespace and `#` comments in the pattern (default: false).
     pub ignore_whitespace: bool,
+    /// use O(N·S) forward scan for untrusted input (default: false).
+    /// prevents quadratic blowup on adversarial inputs at the cost of
+    /// higher constant overhead.
+    pub untrusted: bool,
 }
 
 impl Default for EngineOptions {
@@ -150,6 +159,7 @@ impl Default for EngineOptions {
             case_insensitive: false,
             dot_matches_new_line: false,
             ignore_whitespace: false,
+            untrusted: false,
         }
     }
 }
@@ -163,6 +173,8 @@ impl EngineOptions {
     pub fn dot_matches_new_line(mut self, yes: bool) -> Self { self.dot_matches_new_line = yes; self }
     /// set ignore-whitespace (verbose) mode.
     pub fn ignore_whitespace(mut self, yes: bool) -> Self { self.ignore_whitespace = yes; self }
+    /// enable O(N·S) forward scan for untrusted input.
+    pub fn untrusted(mut self, yes: bool) -> Self { self.untrusted = yes; self }
 }
 
 /// byte-offset range `[start, end)`.
@@ -186,7 +198,7 @@ struct RegexInner {
 
 /// compiled regex backed by a lazy DFA.
 ///
-/// uses a `Mutex` for mutable DFA state; clone for per-thread use.
+/// uses a `Mutex` for mutable DFA state.
 pub struct Regex {
     inner: Mutex<RegexInner>,
     fwd_prefix: Option<accel::FwdPrefixSearch>,
@@ -195,6 +207,7 @@ pub struct Regex {
     max_length: Option<u32>,
     empty_nullable: bool,
     fwd_end_nullable: bool,
+    untrusted: bool,
 }
 
 #[inline(never)]
@@ -213,7 +226,7 @@ fn bdfa_inner<const PREFIX: u8>(
     let mut mc: usize = 0;
     unsafe {
         while pos < len {
-            if PREFIX > 0 && state == initial {
+            if PREFIX != PREFIX_NONE && state == initial {
                 return (state, pos, mc);
             }
             let mt = *ml.add(*data.add(pos) as usize) as usize;
@@ -308,6 +321,11 @@ impl Regex {
             None
         };
         let has_look = b.contains_look(node);
+        if opts.untrusted && has_look {
+            return Err(Error::Algebra(
+                resharp_algebra::AlgebraError::UnsupportedPattern,
+            ));
+        }
 
         let max_cap = opts.max_dfa_capacity.min(u16::MAX as usize);
         let mut fwd = engine::LDFA::new(&mut b, fwd_start, max_cap)?;
@@ -320,7 +338,7 @@ impl Regex {
 
         let (fwd_prefix, fwd_prefix_stripped) = if min_len > 0 && !has_look {
             let (fp, stripped) = engine::build_fwd_prefix(&mut b, node)?;
-            let is_literal = matches!(&fp, Some(crate::accel::FwdPrefixSearch::Literal(_)));
+            let is_literal = fp.as_ref().map_or(false, |p| p.is_literal());
             if !stripped && !is_literal && b.is_infinite(node) {
                 let strict = engine::build_strict_literal_prefix(&mut b, node)?;
                 (strict, false)
@@ -335,9 +353,12 @@ impl Regex {
 
         if fwd_prefix_stripped {
             fwd.compute_fwd_skip(&mut b);
+        } else if !opts.untrusted && pattern_len <= 150 {
+            fwd.compute_fwd_skip_inner(&mut b, 10);
         }
 
         let use_bounded = max_length.is_some()
+            && max_len <= 100
             && fixed_length.is_none()
             && !has_look
             && !b.contains_anchors(node)
@@ -371,6 +392,7 @@ impl Regex {
             max_length,
             empty_nullable,
             fwd_end_nullable,
+            untrusted: opts.untrusted,
         })
     }
 
@@ -392,6 +414,31 @@ impl Regex {
     pub fn bdfa_stats(&self) -> Option<(usize, usize, usize)> {
         let inner = self.inner.lock().unwrap();
         inner.bounded.as_ref().map(|b| (b.states.len(), b.num_mt, b.prefix_len))
+    }
+
+    #[cfg(feature = "diag")]
+    #[allow(missing_docs)]
+    pub fn dump_fwd_dfa(&self) {
+        let inner = self.inner.lock().unwrap();
+        let fwd = &inner.fwd;
+        let stride = 1usize << fwd.mt_log;
+        eprintln!("fwd: minterms={} states={}", fwd.num_minterms, fwd.state_nodes.len());
+        eprintln!("  mt['A']={} mt['a']={} mt['\\n']={} mt[0]={}",
+            fwd.minterms_lookup[b'A' as usize],
+            fwd.minterms_lookup[b'a' as usize],
+            fwd.minterms_lookup[b'\n' as usize],
+            fwd.minterms_lookup[0]);
+        for sid in 2..fwd.state_nodes.len() {
+            let base = sid * stride;
+            if base + stride > fwd.center_table.len() { continue; }
+            let row: Vec<u16> = (0..fwd.num_minterms as usize)
+                .map(|mt| fwd.center_table[base + mt])
+                .collect();
+            let nullable = sid < fwd.effects_id.len() && fwd.effects_id[sid] != 0;
+            let node = inner.b.pp(fwd.state_nodes[sid]);
+            let skip = fwd.skip_ids.get(sid).copied().unwrap_or(0);
+            eprintln!("  s{}: null={} skip={} node={} tr={:?}", sid, nullable, skip, node, row);
+        }
     }
 
     #[cfg(feature = "diag")]
@@ -418,6 +465,9 @@ impl Regex {
             } else {
                 Ok(vec![])
             };
+        }
+        if self.untrusted {
+            return self.find_all_dfa(input);
         }
         // 1. bounded + fwd prefix → BDFA with prefix skip
         {
@@ -504,6 +554,9 @@ impl Regex {
         let rev_initial_nullable = inner.rev.effects_id[inner.rev.initial as usize] != 0;
 
         if rev_initial_nullable {
+            if cfg!(feature = "debug-nulls") {
+                eprintln!("  [find_all_dfa] rev_initial_nullable → nullable_slow");
+            }
             inner.matches_buf.clear();
             Self::find_all_nullable_slow(&mut inner.fwd, &mut inner.b, input, &mut inner.matches_buf)?;
             return Ok(inner.matches_buf.clone());
@@ -529,6 +582,10 @@ impl Regex {
                     last_end = start + fl;
                 }
             }
+        } else if self.untrusted {
+            inner
+                .fwd
+                .scan_fwd_all_untrusted(&mut inner.b, &inner.nulls_buf, input, self.max_length, matches)?;
         } else {
             inner
                 .fwd
@@ -555,6 +612,15 @@ impl Regex {
         matches: &mut Vec<Match>,
     ) -> Result<(), Error> {
         let mut pos = 0;
+        let max_end = fwd.scan_fwd(b, pos, input)?;
+        fwd.build_skip_all(b);
+        if max_end != engine::NO_MATCH && max_end > pos {
+            matches.push(Match { start: pos, end: max_end });
+            pos = max_end;
+        } else {
+            matches.push(Match { start: pos, end: pos });
+            pos += 1;
+        }
         while pos < input.len() {
             let max_end = fwd.scan_fwd(b, pos, input)?;
             if max_end != engine::NO_MATCH && max_end > pos {
@@ -579,15 +645,15 @@ impl Regex {
         let RegexInner { b, bounded, matches_buf, .. } = &mut *self.inner.lock().unwrap();
         let bounded = bounded.as_mut().unwrap();
         matches_buf.clear();
-        match bounded.prefix {
-            Some(accel::FwdPrefixSearch::Literal(_)) => {
-                Self::bdfa_scan::<2, false>(bounded, b, input, matches_buf)?;
+        match &bounded.prefix {
+            Some(p) if p.is_literal() => {
+                Self::bdfa_scan::<{ PREFIX_LITERAL }, false>(bounded, b, input, matches_buf)?;
             }
-            Some(accel::FwdPrefixSearch::Prefix(_)) => {
-                Self::bdfa_scan::<1, false>(bounded, b, input, matches_buf)?;
+            Some(_) => {
+                Self::bdfa_scan::<{ PREFIX_SEARCH }, false>(bounded, b, input, matches_buf)?;
             }
             None => {
-                Self::bdfa_scan::<0, false>(bounded, b, input, matches_buf)?;
+                Self::bdfa_scan::<{ PREFIX_NONE }, false>(bounded, b, input, matches_buf)?;
             }
         }
         Ok(matches_buf.clone())
@@ -597,15 +663,15 @@ impl Regex {
         let RegexInner { b, bounded, matches_buf, .. } = &mut *self.inner.lock().unwrap();
         let bounded = bounded.as_mut().unwrap();
         matches_buf.clear();
-        let found = match bounded.prefix {
-            Some(accel::FwdPrefixSearch::Literal(_)) => {
-                Self::bdfa_scan::<2, true>(bounded, b, input, matches_buf)?
+        let found = match &bounded.prefix {
+            Some(p) if p.is_literal() => {
+                Self::bdfa_scan::<{ PREFIX_LITERAL }, true>(bounded, b, input, matches_buf)?
             }
-            Some(accel::FwdPrefixSearch::Prefix(_)) => {
-                Self::bdfa_scan::<1, true>(bounded, b, input, matches_buf)?
+            Some(_) => {
+                Self::bdfa_scan::<{ PREFIX_SEARCH }, true>(bounded, b, input, matches_buf)?
             }
             None => {
-                Self::bdfa_scan::<0, true>(bounded, b, input, matches_buf)?
+                Self::bdfa_scan::<{ PREFIX_NONE }, true>(bounded, b, input, matches_buf)?
             }
         };
         Ok(found)
@@ -624,7 +690,7 @@ impl Regex {
         let mut state = initial;
         let mut pos: usize = 0;
 
-        if PREFIX == 0 {
+        if PREFIX == PREFIX_NONE {
             let data = input.as_ptr();
             if !ISMATCH {
                 matches.reserve(2048);
@@ -638,7 +704,7 @@ impl Regex {
                 let spare = if ISMATCH { 1 } else { matches.capacity() - matches.len() };
                 let buf_ptr = unsafe { matches.as_mut_ptr().add(matches.len()) };
                 let table = bounded.table.as_ptr();
-                let (s, p, mc) = bdfa_inner::<0>(
+                let (s, p, mc) = bdfa_inner::<{ PREFIX_NONE }>(
                     table, ml.as_ptr(), data, mt_log, initial, state, pos, len,
                     buf_ptr, spare,
                 );
@@ -667,7 +733,7 @@ impl Regex {
                 }
             }
         } else {
-            // PREFIX 1/2: unified loop with Teddy prefix inlined
+            // PREFIX_SEARCH / PREFIX_LITERAL: unified loop with prefix skip
             'main: loop {
                 if pos >= len {
                     break;
@@ -678,7 +744,7 @@ impl Regex {
                     match found {
                         Some(p) => {
 
-                            if PREFIX == 2 {
+                            if PREFIX == PREFIX_LITERAL {
                                 pos = p + bounded.prefix_len;
                                 state = bounded.after_prefix;
                             } else {
@@ -845,6 +911,7 @@ impl Regex {
         inner.fwd.precompile_state(&mut inner.b, initial)?;
         inner.matches_buf.clear();
         let mut search_start = 0;
+        let mut skip_rebuilt = false;
 
         while let Some(candidate) = fwd_prefix.find_fwd(input, search_start) {
             let mut state = initial;
@@ -865,6 +932,10 @@ impl Regex {
                 candidate + prefix_len,
                 input,
             )?;
+            if !skip_rebuilt {
+                skip_rebuilt = true;
+                inner.fwd.build_skip_all(&mut inner.b);
+            }
             if max_end == engine::NO_MATCH {
                 search_start = candidate + 1;
                 continue;

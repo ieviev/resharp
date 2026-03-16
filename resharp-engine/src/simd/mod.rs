@@ -176,7 +176,6 @@ pub fn has_simd() -> bool {
     }
 }
 
-// ---- x86_64 AVX2 implementations ----
 
 #[cfg(target_arch = "x86_64")]
 use std::arch::x86_64::*;
@@ -1129,7 +1128,195 @@ impl FwdPrefixSearch {
     }
 }
 
-// ---- RevSearchRanges (AVX2) ----
+#[cfg(target_arch = "x86_64")]
+pub struct FwdRangeSearch {
+    len: usize,
+    anchor_pos: usize,
+    ranges: Vec<(u8, u8)>,
+    sets: Vec<TSet>,
+}
+
+#[cfg(target_arch = "x86_64")]
+impl FwdRangeSearch {
+    pub fn new(len: usize, anchor_pos: usize, ranges: Vec<(u8, u8)>, sets: Vec<TSet>) -> Self {
+        debug_assert!(!ranges.is_empty() && ranges.len() <= 3);
+        debug_assert!(anchor_pos < len);
+        Self { len, anchor_pos, ranges, sets }
+    }
+
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    pub fn find_fwd(&self, haystack: &[u8], start: usize) -> Option<usize> {
+        unsafe { self.find_fwd_avx2(haystack, start) }
+    }
+
+    fn verify_tail_fwd(&self, haystack: &[u8], start: usize) -> Option<usize> {
+        if haystack.len() < self.len {
+            return None;
+        }
+        let end = haystack.len() - self.len;
+        let mut pos = start;
+        'outer: while pos <= end {
+            for i in 0..self.len {
+                if !self.sets[i].contains_byte(haystack[pos + i]) {
+                    pos += 1;
+                    continue 'outer;
+                }
+            }
+            return Some(pos);
+        }
+        None
+    }
+
+    #[target_feature(enable = "avx2")]
+    unsafe fn find_fwd_avx2(&self, haystack: &[u8], start: usize) -> Option<usize> {
+        let ptr = haystack.as_ptr();
+        let n = self.ranges.len();
+        let anchor = self.anchor_pos;
+        let lo0 = _mm256_set1_epi8(self.ranges[0].0 as i8);
+        let hi0 = _mm256_set1_epi8(self.ranges[0].1 as i8);
+
+        let simd_end = haystack.len().saturating_sub(31 + self.len - 1);
+        let mut pos = start;
+
+        while pos < simd_end {
+            let chunk = _mm256_loadu_si256(ptr.add(pos + anchor) as *const __m256i);
+            let ge0 = _mm256_cmpeq_epi8(_mm256_max_epu8(chunk, lo0), chunk);
+            let le0 = _mm256_cmpeq_epi8(_mm256_min_epu8(chunk, hi0), chunk);
+            let mut mask = _mm256_movemask_epi8(_mm256_and_si256(ge0, le0)) as u32;
+            if n >= 2 {
+                let lo1 = _mm256_set1_epi8(self.ranges[1].0 as i8);
+                let hi1 = _mm256_set1_epi8(self.ranges[1].1 as i8);
+                let ge1 = _mm256_cmpeq_epi8(_mm256_max_epu8(chunk, lo1), chunk);
+                let le1 = _mm256_cmpeq_epi8(_mm256_min_epu8(chunk, hi1), chunk);
+                mask |= _mm256_movemask_epi8(_mm256_and_si256(ge1, le1)) as u32;
+            }
+            if n >= 3 {
+                let lo2 = _mm256_set1_epi8(self.ranges[2].0 as i8);
+                let hi2 = _mm256_set1_epi8(self.ranges[2].1 as i8);
+                let ge2 = _mm256_cmpeq_epi8(_mm256_max_epu8(chunk, lo2), chunk);
+                let le2 = _mm256_cmpeq_epi8(_mm256_min_epu8(chunk, hi2), chunk);
+                mask |= _mm256_movemask_epi8(_mm256_and_si256(ge2, le2)) as u32;
+            }
+            while mask != 0 {
+                let bit = mask.trailing_zeros() as usize;
+                let candidate = pos + bit;
+                let mut ok = true;
+                for i in 0..self.len {
+                    if !self.sets[i].contains_byte(*ptr.add(candidate + i)) {
+                        ok = false;
+                        break;
+                    }
+                }
+                if ok {
+                    return Some(candidate);
+                }
+                mask &= mask - 1;
+            }
+            pos += 32;
+        }
+        self.verify_tail_fwd(haystack, pos)
+    }
+}
+
+#[cfg(target_arch = "aarch64")]
+pub struct FwdRangeSearch {
+    len: usize,
+    anchor_pos: usize,
+    ranges: Vec<(u8, u8)>,
+    sets: Vec<TSet>,
+}
+
+#[cfg(target_arch = "aarch64")]
+impl FwdRangeSearch {
+    pub fn new(len: usize, anchor_pos: usize, ranges: Vec<(u8, u8)>, sets: Vec<TSet>) -> Self {
+        debug_assert!(!ranges.is_empty() && ranges.len() <= 3);
+        debug_assert!(anchor_pos < len);
+        Self { len, anchor_pos, ranges, sets }
+    }
+
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    pub fn find_fwd(&self, haystack: &[u8], start: usize) -> Option<usize> {
+        unsafe { self.find_fwd_neon(haystack, start) }
+    }
+
+    fn verify_tail_fwd(&self, haystack: &[u8], start: usize) -> Option<usize> {
+        if haystack.len() < self.len {
+            return None;
+        }
+        let end = haystack.len() - self.len;
+        let mut pos = start;
+        'outer: while pos <= end {
+            for i in 0..self.len {
+                if !self.sets[i].contains_byte(haystack[pos + i]) {
+                    pos += 1;
+                    continue 'outer;
+                }
+            }
+            return Some(pos);
+        }
+        None
+    }
+
+    unsafe fn find_fwd_neon(&self, haystack: &[u8], start: usize) -> Option<usize> {
+        use std::arch::aarch64::*;
+        use neon::neon_movemask;
+
+        let ptr = haystack.as_ptr();
+        let n = self.ranges.len();
+        let anchor = self.anchor_pos;
+        let lo0 = vdupq_n_u8(self.ranges[0].0);
+        let hi0 = vdupq_n_u8(self.ranges[0].1);
+
+        let simd_end = haystack.len().saturating_sub(15 + self.len - 1);
+        let mut pos = start;
+
+        while pos < simd_end {
+            let chunk = vld1q_u8(ptr.add(pos + anchor));
+            let in0 = vandq_u8(vcgeq_u8(chunk, lo0), vcleq_u8(chunk, hi0));
+            let combined = if n >= 3 {
+                let lo1 = vdupq_n_u8(self.ranges[1].0);
+                let hi1 = vdupq_n_u8(self.ranges[1].1);
+                let lo2 = vdupq_n_u8(self.ranges[2].0);
+                let hi2 = vdupq_n_u8(self.ranges[2].1);
+                let in1 = vandq_u8(vcgeq_u8(chunk, lo1), vcleq_u8(chunk, hi1));
+                let in2 = vandq_u8(vcgeq_u8(chunk, lo2), vcleq_u8(chunk, hi2));
+                vorrq_u8(in0, vorrq_u8(in1, in2))
+            } else if n >= 2 {
+                let lo1 = vdupq_n_u8(self.ranges[1].0);
+                let hi1 = vdupq_n_u8(self.ranges[1].1);
+                let in1 = vandq_u8(vcgeq_u8(chunk, lo1), vcleq_u8(chunk, hi1));
+                vorrq_u8(in0, in1)
+            } else {
+                in0
+            };
+            let mut mask = neon_movemask(combined) as u32;
+            while mask != 0 {
+                let bit = mask.trailing_zeros() as usize;
+                let candidate = pos + bit;
+                let mut ok = true;
+                for i in 0..self.len {
+                    if !self.sets[i].contains_byte(*ptr.add(candidate + i)) {
+                        ok = false;
+                        break;
+                    }
+                }
+                if ok {
+                    return Some(candidate);
+                }
+                mask &= mask - 1;
+            }
+            pos += 16;
+        }
+        self.verify_tail_fwd(haystack, pos)
+    }
+}
+
 
 #[cfg(target_arch = "x86_64")]
 pub struct RevSearchRanges {
@@ -1292,7 +1479,6 @@ impl RevSearchRanges {
     }
 }
 
-// ---- stubs (never constructed, only needed for type-checking) ----
 
 #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
 pub struct RevSearchBytes {

@@ -224,3 +224,21 @@ name = "intersection_lookahead_nospace"
 pattern = '.*(?=.*-)&\S.*\S'
 input = "-aaaa-"
 matches = [[0, 5]]
+
+[[test]]
+name = "intersection_start_anchor_multiline"
+pattern = '(^#\[command.*\n.*&_*name_*)'
+input = "#[command(name = \"foo\")]\nfn foo() {}\n#[command(name = \"bar\")]\nfn bar() {}"
+matches = [[0, 36], [37, 73]]
+
+[[test]]
+name = "intersection_start_anchor_no_match_mid"
+pattern = '(^#\[command.*\n.*&_*name_*)'
+input = "  #[command(name = \"foo\")]\nfn foo() {}"
+matches = []
+
+[[test]]
+name = "intersection_string_anchor_multiline"
+pattern = '(\A#\[command.*\n.*&_*name_*)'
+input = "#[command(name = \"foo\")]\nfn foo() {}\n#[command(name = \"bar\")]\nfn bar() {}"
+matches = [[0, 36]]

@@ -1527,3 +1527,234 @@ fn word_match_lengths_en_sampled() {
     );
 }
 
+fn run_file_untrusted(filename: &str) {
+    let tests = load_tests(filename);
+    for tc in &tests {
+        if tc.ignore || tc.expect_error || tc.anchored {
+            continue;
+        }
+        let opts = EngineOptions::default().untrusted(true);
+        let re = match Regex::with_options(&tc.pattern, opts) {
+            Ok(re) => re,
+            Err(_) => continue,
+        };
+        let matches = re.find_all(tc.input.as_bytes()).unwrap();
+        let result: Vec<(usize, usize)> = matches.iter().map(|m| (m.start, m.end)).collect();
+        assert_eq!(
+            result, tc.matches,
+            "UNTRUSTED file={}, name={:?}, pattern={:?}, input={:?}",
+            filename, tc.name, tc.pattern, tc.input
+        );
+    }
+}
+
+#[test]
+fn untrusted_basic() {
+    run_file_untrusted("basic.toml");
+}
+
+#[test]
+fn untrusted_anchors() {
+    run_file_untrusted("anchors.toml");
+}
+
+#[test]
+fn untrusted_semantics() {
+    run_file_untrusted("semantics.toml");
+}
+
+#[test]
+fn untrusted_date_pattern() {
+    run_file_untrusted("date_pattern.toml");
+}
+
+#[test]
+fn untrusted_edge_cases() {
+    run_file_untrusted("edge_cases.toml");
+}
+
+#[test]
+fn untrusted_rejects_lookaround() {
+    let s = || EngineOptions::default().untrusted(true);
+    // lookaround patterns that survive algebra simplification are rejected
+    assert!(Regex::with_options(r".*(?=aaa)", s()).is_err());
+    assert!(Regex::with_options(r"(?<=__).*", s()).is_err());
+    assert!(Regex::with_options(r"foo(?!bar).*", s()).is_err());
+    assert!(Regex::with_options(r".*(?<!bar)foo", s()).is_err());
+    // trivially simplified lookarounds (e.g. (?=foo)bar → BOT) are fine
+    assert!(Regex::with_options(r"(?=foo)bar", s()).is_ok());
+    // non-lookaround patterns compile fine
+    assert!(Regex::with_options(r"foo|bar", s()).is_ok());
+}
+
+#[test]
+fn untrusted_pathological() {
+    let pattern = r".*[^A-Z]|[A-Z]";
+    let input = "A".repeat(1000);
+    let re_normal = Regex::new(pattern).unwrap();
+    let re_untrusted = Regex::with_options(
+        pattern,
+        EngineOptions::default().untrusted(true),
+    ).unwrap();
+    assert_eq!(
+        re_normal.find_all(input.as_bytes()).unwrap(),
+        re_untrusted.find_all(input.as_bytes()).unwrap(),
+        "pathological pattern mismatch"
+    );
+}
+
+fn check_untrusted_vs_normal(pattern: &str, input: &[u8]) {
+    let opts = EngineOptions::default().untrusted(true);
+    let re_s = match Regex::with_options(pattern, opts) {
+        Ok(re) => re,
+        Err(_) => return, // skip patterns that fail in untrusted mode (e.g. lookaround)
+    };
+    let re_n = Regex::new(pattern).unwrap();
+    let normal = re_n.find_all(input).unwrap();
+    let untrusted = re_s.find_all(input).unwrap();
+    assert_eq!(
+        normal, untrusted,
+        "untrusted vs normal mismatch: pattern={:?}, input={:?}",
+        pattern,
+        std::str::from_utf8(input).unwrap_or("<binary>")
+    );
+}
+
+#[test]
+fn untrusted_cross_validate() {
+    let en = std::fs::read_to_string(
+        format!("{}/../data/haystacks/en-sampled.txt", env!("CARGO_MANIFEST_DIR"))
+    ).unwrap();
+    let input = &en.as_bytes()[..2000];
+    let patterns = [
+        r"\d+",
+        r"[A-Z][a-z]+",
+        r"\w{3,8}",
+        r"[aeiou]+",
+        r"the|and|for|that|with",
+        r"[0-9]{1,3}\.[0-9]{1,3}",
+        r"[A-Z]{2,}",
+        r".*[^a-z]|[a-z]",
+        r"\d{4}-\d{2}-\d{2}",
+        r"[A-Za-z]{8,13}",
+        r"(Sherlock|Holmes|Watson)[a-z]{0,5}",
+    ];
+    for p in &patterns {
+        check_untrusted_vs_normal(p, input);
+    }
+    // pathological: dense candidates with dotstar
+    let aaaa = "A".repeat(500);
+    check_untrusted_vs_normal(r".*[^A-Z]|[A-Z]", aaaa.as_bytes());
+    check_untrusted_vs_normal(r"[A-Z]+", aaaa.as_bytes());
+    check_untrusted_vs_normal(r"A{1,3}", aaaa.as_bytes());
+}
+
+#[test]
+fn untrusted_bounded_repeat_tail() {
+    let s8 = "A".repeat(8);
+    let s500 = "A".repeat(500);
+    let s7 = "A".repeat(7);
+    let s10 = "A".repeat(10);
+    let cases: Vec<(&str, &str)> = vec![
+        (r"A{1,3}", &s8),
+        (r"A{1,3}", &s500),
+        (r"A{2,5}", &s7),
+        (r"[A-Z]{1,3}", &s10),
+    ];
+    for (pattern, input) in &cases {
+        let re_ref = regex::Regex::new(pattern).unwrap();
+        let expected: Vec<(usize, usize)> = re_ref
+            .find_iter(input)
+            .map(|m| (m.start(), m.end()))
+            .collect();
+
+        let re_u = Regex::with_options(pattern, EngineOptions::default().untrusted(true)).unwrap();
+        let got: Vec<(usize, usize)> = re_u
+            .find_all(input.as_bytes())
+            .unwrap()
+            .iter()
+            .map(|m| (m.start, m.end))
+            .collect();
+
+        assert_eq!(
+            expected, got,
+            "BDFA bounded repeat mismatch: pattern={:?}, len={}",
+            pattern,
+            input.len()
+        );
+    }
+}
+
+#[test]
+fn range_prefix_correctness() {
+    let en = std::fs::read_to_string(
+        format!("{}/../data/haystacks/en-sampled.txt", env!("CARGO_MANIFEST_DIR"))
+    ).unwrap();
+    let inputs: Vec<&[u8]> = vec![
+        en.as_bytes(),
+        b"hello world no caps here 123",
+        b"ABCDEFGhijklmnop",
+        b"aZbYcXdW",
+        b"",
+        b"Z",
+        b"ZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ", // > 32 bytes of matches
+        &[0u8; 100],                                // no ASCII letters
+    ];
+    // patterns with >16 byte char classes that should use range prefix
+    let patterns = [
+        r"[A-Z]+",
+        r"[A-Z][a-z]+",
+        r"[A-Z]{2,}",
+        r"[A-Za-z]+",
+        r"[A-Za-z0-9]+",
+        r"[A-Z][A-Z][a-z]",
+    ];
+    for p in &patterns {
+        let re = Regex::new(p).unwrap();
+        let re_untrusted = Regex::with_options(p, EngineOptions::default().untrusted(true)).unwrap();
+        for input in &inputs {
+            let normal = re.find_all(input).unwrap();
+            let untrusted = re_untrusted.find_all(input).unwrap();
+            assert_eq!(
+                normal, untrusted,
+                "range prefix mismatch: pattern={:?}, input={:?}",
+                p, std::str::from_utf8(input).unwrap_or("<binary>")
+            );
+        }
+    }
+}
+
+#[test]
+fn range_prefix_random_haystack() {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+
+    let patterns = [
+        r"[A-Z][a-z]+",
+        r"[A-Z]{2,5}",
+        r"[A-Za-z]{3,}",
+    ];
+    for seed in 0u64..50 {
+        let mut h = DefaultHasher::new();
+        seed.hash(&mut h);
+        let hash = h.finish();
+        // generate pseudorandom haystack mixing ASCII ranges
+        let input: Vec<u8> = (0..256).map(|i| {
+            let v = ((hash.wrapping_mul(i as u64 + 1).wrapping_add(seed)) >> 8) as u8;
+            // bias toward printable ASCII
+            32 + (v % 95)
+        }).collect();
+        for p in &patterns {
+            let re = Regex::new(p).unwrap();
+            let re_s = Regex::with_options(p, EngineOptions::default().untrusted(true)).unwrap();
+            let normal = re.find_all(&input).unwrap();
+            let untrusted = re_s.find_all(&input).unwrap();
+            assert_eq!(
+                normal, untrusted,
+                "random haystack mismatch: seed={}, pattern={:?}",
+                seed, p
+            );
+        }
+    }
+}
+

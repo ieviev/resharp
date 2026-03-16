@@ -33,6 +33,13 @@ macro_rules! bench_resharp {
             b.iter(|| black_box(re.find_all(black_box($input)).unwrap().len()));
         });
     }};
+    ($group:expr, $pattern:expr, $input:expr, $opts:expr) => {{
+        let re = resharp::Regex::with_options($pattern, $opts).unwrap();
+        re.find_all($input).ok();
+        $group.bench_function("resharp", |b| {
+            b.iter(|| black_box(re.find_all(black_box($input)).unwrap().len()));
+        });
+    }};
 }
 
 fn bench_resharp_regression(c: &mut Criterion) {
@@ -53,46 +60,11 @@ fn bench_resharp_regression(c: &mut Criterion) {
         g.finish();
     }
     {
-        let haystack = load_haystack_lines("en-sampled.txt", 5000);
+        let haystack = load_haystack_lines("en-sampled.txt", 2500);
         let input = haystack.as_bytes();
         let mut g = c.benchmark_group("resharp-only/bounded-repeat");
         g.throughput(Throughput::Bytes(input.len() as u64));
-        bench_resharp!(g, "[A-Za-z]{8,13}", input);
-        g.finish();
-    }
-    {
-        let haystack = load_haystack("rust-src-tools-3b0d4813.txt");
-        let input = haystack.as_bytes();
-        let mut g = c.benchmark_group("resharp-only/url");
-        g.throughput(Throughput::Bytes(input.len() as u64));
-        bench_resharp!(g, r"https?://[a-zA-Z0-9./_?&=#%-]+", input);
-        g.finish();
-    }
-    {
-        let haystack = load_haystack_lines("rust-src-tools-3b0d4813.txt", 500);
-        let input = haystack.as_bytes();
-        let pattern = r"[A-Za-z]{10}\s+[\s\S]{0,100}Result[\s\S]{0,100}\s+[A-Za-z]{10}";
-        let mut g = c.benchmark_group("resharp-only/bounded-repeat-context");
-        g.throughput(Throughput::Bytes(input.len() as u64));
-        bench_resharp!(g, pattern, input);
-        g.finish();
-    }
-    {
-        let haystack = load_haystack_lines("rust-src-tools-3b0d4813.txt", 10_000);
-        let pattern = load_regex("date.txt");
-        let input = haystack.as_bytes();
-        let mut g = c.benchmark_group("resharp-only/date-monster");
-        g.throughput(Throughput::Bytes(input.len() as u64));
-        bench_resharp!(g, &pattern, input);
-        g.finish();
-    }
-    {
-        let haystack = load_haystack("en-medium.txt");
-        let pattern = load_dictionary_pattern(500);
-        let input = haystack.as_bytes();
-        let mut g = c.benchmark_group("resharp-only/dictionary-500");
-        g.throughput(Throughput::Bytes(input.len() as u64));
-        bench_resharp!(g, &pattern, input);
+        bench_resharp!(g, r"\b[0-9A-Za-z_]{12,}\b", input);
         g.finish();
     }
     {
@@ -105,19 +77,20 @@ fn bench_resharp_regression(c: &mut Criterion) {
         g.finish();
     }
     {
-        let haystack = load_haystack_lines("en-sampled.txt", 5000);
-        let input = haystack.as_bytes();
-        let mut g = c.benchmark_group("resharp-only/phone");
-        g.throughput(Throughput::Bytes(input.len() as u64));
-        bench_resharp!(g, r"(\(?\+?[0-9]*\)?)?[0-9_\- ()]{7,}", input);
-        g.finish();
-    }
-    {
         let haystack = load_haystack("en-sampled.txt");
         let input = haystack.as_bytes();
         let mut g = c.benchmark_group("resharp-only/lookaround");
         g.throughput(Throughput::Bytes(input.len() as u64));
         bench_resharp!(g, r"(?<=\s)[A-Z][a-z]+(?=\s)", input);
+        g.finish();
+    }
+    {
+        let haystack = load_haystack_lines("en-sampled.txt", 10_000);
+        let pattern = load_regex("date.txt");
+        let input = haystack.as_bytes();
+        let mut g = c.benchmark_group("resharp-only/date-monster");
+        g.throughput(Throughput::Bytes(input.len() as u64));
+        bench_resharp!(g, &pattern, input);
         g.finish();
     }
     {
@@ -128,14 +101,6 @@ fn bench_resharp_regression(c: &mut Criterion) {
         let mut g = c.benchmark_group("resharp-only/dictionary-nocase");
         g.throughput(Throughput::Bytes(input.len() as u64));
         bench_resharp!(g, &pattern, input);
-        g.finish();
-    }
-    {
-        let haystack = load_haystack("cloud-flare-redos.txt");
-        let input = haystack.as_bytes();
-        let mut g = c.benchmark_group("resharp-only/dotstar-eq-redos");
-        g.throughput(Throughput::Bytes(input.len() as u64));
-        bench_resharp!(g, ".*=.*", input);
         g.finish();
     }
 }

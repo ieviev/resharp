@@ -53,6 +53,7 @@ let re = Regex::with_options(
 - `dfa_threshold`: set >0 to precompile hot states at build time, trading compile cost for faster first match.
 - `max_dfa_capacity`: upper bound on cached DFA states. patterns with large state spaces return `Error::CapacityExceeded` instead of allocating unbounded memory.
 - `lookahead_context_max`: limits how far ahead the engine tracks lookaround context. increase if patterns with deep lookahead return `AlgebraError::AnchorLimit`.
+- `untrusted`: use O(n·S) forward scan for untrusted input. see [features](features.md#untrusted-mode) for overhead benchmarks.
 
 #### pattern flags
 
