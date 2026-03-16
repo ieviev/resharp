@@ -2443,7 +2443,10 @@ impl BDFA {
         if !crate::simd::has_simd() {
             return Ok(());
         }
-        let prefix_sets = calc_prefix_sets_inner(b, pattern_node, false)?;
+        let mut prefix_sets = calc_prefix_sets_inner(b, pattern_node, false)?;
+        if prefix_sets.len() > 16 {
+            prefix_sets.truncate(16);
+        }
         if cfg!(feature = "debug-nulls") {
             let byte_counts: Vec<usize> = prefix_sets.iter().map(|&s| b.solver_ref().collect_bytes(s).len()).collect();
             eprintln!("  [bdfa-build-prefix] linear_sets={} bytes={:?}", prefix_sets.len(), byte_counts);

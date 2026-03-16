@@ -1758,3 +1758,11 @@ fn range_prefix_random_haystack() {
     }
 }
 
+#[test]
+fn fwd_prefix_search_long_prefix_no_panic() {
+    let re = Regex::new("[aA]bcdefghijklmnopqrs(x|xy)").unwrap();
+    let m = re.find_all(b"abcdefghijklmnopqrsx").unwrap();
+    let r: Vec<_> = m.iter().map(|m| (m.start, m.end)).collect();
+    assert_eq!(r, vec![(0, 20)]);
+}
+
