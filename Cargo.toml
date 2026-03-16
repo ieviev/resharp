@@ -16,6 +16,6 @@ opt-level = 3
 version = "0.3.5"
 edition = "2021"
 license = "MIT"
-repository = "https://github.com/ieviev/resharp-rs"
+repository = "https://github.com/ieviev/resharp"
 authors = ["Ian Erik Varatalu"]
 rust-version = "1.70"
