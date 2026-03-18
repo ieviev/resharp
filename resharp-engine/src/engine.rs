@@ -1627,10 +1627,30 @@ impl LDFA {
         data: &[u8],
         nulls: &mut Vec<usize>,
     ) -> Result<(), Error> {
+        self.collect_rev_inner::<false>(b, start_pos, data, nulls)
+    }
+
+    pub fn collect_rev_first(
+        &mut self,
+        b: &mut RegexBuilder,
+        start_pos: usize,
+        data: &[u8],
+        nulls: &mut Vec<usize>,
+    ) -> Result<(), Error> {
+        self.collect_rev_inner::<true>(b, start_pos, data, nulls)
+    }
+
+    fn collect_rev_inner<const EARLY_EXIT: bool>(
+        &mut self,
+        b: &mut RegexBuilder,
+        start_pos: usize,
+        data: &[u8],
+        nulls: &mut Vec<usize>,
+    ) -> Result<(), Error> {
         if self.prefix_skip.is_some() {
             let prefix_ptr =
                 self.prefix_skip.as_ref().unwrap() as *const crate::accel::RevPrefixSearch;
-            return self.collect_rev_prefix(b, prefix_ptr, start_pos, data, nulls);
+            return self.collect_rev_prefix::<EARLY_EXIT>(b, prefix_ptr, start_pos, data, nulls);
         }
 
         let mt = self.minterms_lookup[data[start_pos] as usize];
@@ -1652,6 +1672,9 @@ impl LDFA {
             begin_mask,
             nulls,
         );
+        if EARLY_EXIT && !nulls.is_empty() {
+            return Ok(());
+        }
 
         let mut pos = start_pos;
 
@@ -1667,7 +1690,7 @@ impl LDFA {
 
             let use_skip = self.can_skip();
             let (state, new_pos, cache_miss) = if use_skip {
-                collect_rev_skip(
+                collect_rev_skip::<EARLY_EXIT>(
                     &tables,
                     &self.skip_ids,
                     &self.skip_searchers,
@@ -1677,8 +1700,12 @@ impl LDFA {
                     nulls,
                 )
             } else {
-                collect_rev_noskip(&tables, curr, pos, nulls)
+                collect_rev_noskip::<EARLY_EXIT>(&tables, curr, pos, nulls)
             };
+
+            if EARLY_EXIT && !nulls.is_empty() {
+                return Ok(());
+            }
 
             if !cache_miss {
                 if cfg!(feature = "debug-nulls") {
@@ -1713,12 +1740,15 @@ impl LDFA {
                 Nullability::CENTER
             };
             collect_nulls(&self.effects_id, &self.effects, curr, pos, mask, nulls);
+            if EARLY_EXIT && !nulls.is_empty() {
+                return Ok(());
+            }
         }
 
         Ok(())
     }
 
-    fn collect_rev_prefix(
+    fn collect_rev_prefix<const EARLY_EXIT: bool>(
         &mut self,
         b: &mut RegexBuilder,
         prefix_ptr: *const crate::accel::RevPrefixSearch,
@@ -1770,6 +1800,9 @@ impl LDFA {
             Nullability::CENTER
         };
         collect_nulls(&self.effects_id, &self.effects, curr, pos, mask, nulls);
+        if EARLY_EXIT && !nulls.is_empty() {
+            return Ok(());
+        }
 
         if pos == 0 {
             return Ok(());
@@ -1787,7 +1820,7 @@ impl LDFA {
 
             let use_skip = self.can_skip();
             let (state, new_pos, cache_miss) = if use_skip {
-                collect_rev_skip(
+                collect_rev_skip::<EARLY_EXIT>(
                     &tables,
                     &self.skip_ids,
                     &self.skip_searchers,
@@ -1797,8 +1830,12 @@ impl LDFA {
                     nulls,
                 )
             } else {
-                collect_rev_noskip(&tables, curr, pos, nulls)
+                collect_rev_noskip::<EARLY_EXIT>(&tables, curr, pos, nulls)
             };
+
+            if EARLY_EXIT && !nulls.is_empty() {
+                return Ok(());
+            }
 
             if !cache_miss {
                 break;
@@ -1823,6 +1860,9 @@ impl LDFA {
                 Nullability::CENTER
             };
             collect_nulls(&self.effects_id, &self.effects, curr, pos, mask, nulls);
+            if EARLY_EXIT && !nulls.is_empty() {
+                return Ok(());
+            }
         }
 
         Ok(())
@@ -1941,7 +1981,7 @@ fn collect_nulls_fwd(
 }
 
 #[inline(never)]
-fn collect_rev_noskip(
+fn collect_rev_noskip<const EARLY_EXIT: bool>(
     t: &ScanTables,
     mut curr: u32,
     mut pos: usize,
@@ -1969,6 +2009,7 @@ fn collect_rev_noskip(
                         );
                     }
                     nulls.push(pos + 1);
+                    if EARLY_EXIT { return (curr, pos, false); }
                 } else {
                     if cfg!(feature = "debug-nulls") {
                         eprintln!(
@@ -1980,6 +2021,7 @@ fn collect_rev_noskip(
                         );
                     }
                     collect_rev_complex(t.effects, prev_eid, pos + 1, Nullability::CENTER, nulls);
+                    if EARLY_EXIT && !nulls.is_empty() { return (curr, pos, false); }
                 }
             }
             let delta = (curr << mt_log | mt) as usize;
@@ -2006,7 +2048,7 @@ fn collect_rev_noskip(
 }
 
 #[inline(never)]
-fn collect_rev_skip(
+fn collect_rev_skip<const EARLY_EXIT: bool>(
     t: &ScanTables,
     skip_ids: &[u8],
     skip_searchers: &[MintermSearchValue],
@@ -2024,13 +2066,14 @@ fn collect_rev_skip(
     while pos != 0 {
         let sid = skip_ids[curr as usize];
         if sid != 0 {
-            // flush deferred null before skip - old_pos is excluded
-            // from the batch range since it is already handled here
+            // flush deferred null before skip
             if prev_eid != 0 {
                 if prev_eid == 1 {
                     nulls.push(pos);
+                    if EARLY_EXIT { return (curr, pos, false); }
                 } else {
                     collect_rev_complex(effects, prev_eid, pos, Nullability::CENTER, nulls);
+                    if EARLY_EXIT && !nulls.is_empty() { return (curr, pos, false); }
                 }
                 prev_eid = 0;
             }
@@ -2047,18 +2090,26 @@ fn collect_rev_skip(
             if cfg!(feature = "debug-nulls") {
                 eprintln!("  [rev_skip] state={} skip {} -> {}", curr, old_pos, pos);
             }
-            // nullable self-loop: batch-emit for skipped positions.
-            // old_pos excluded - already flushed above or by collect_nulls
+            // nullable self-loop: batch-emit for skipped positions
             unsafe {
                 let eid = *effects_id.add(curr as usize) as u32;
                 if eid != 0 && pos < old_pos {
-                    if eid == 1 {
-                        for p in (pos..old_pos).rev() {
-                            nulls.push(p);
+                    if EARLY_EXIT {
+                        if eid == 1 {
+                            nulls.push(old_pos - 1);
+                        } else {
+                            collect_rev_complex(effects, eid, old_pos - 1, Nullability::CENTER, nulls);
                         }
+                        if !nulls.is_empty() { return (curr, pos, false); }
                     } else {
-                        for p in (pos..old_pos).rev() {
-                            collect_rev_complex(effects, eid, p, Nullability::CENTER, nulls);
+                        if eid == 1 {
+                            for p in (pos..old_pos).rev() {
+                                nulls.push(p);
+                            }
+                        } else {
+                            for p in (pos..old_pos).rev() {
+                                collect_rev_complex(effects, eid, p, Nullability::CENTER, nulls);
+                            }
                         }
                     }
                 }
@@ -2072,8 +2123,10 @@ fn collect_rev_skip(
                 if prev_eid != 0 {
                     if prev_eid == 1 {
                         nulls.push(pos + 1);
+                        if EARLY_EXIT { return (curr, pos, false); }
                     } else {
                         collect_rev_complex(effects, prev_eid, pos + 1, Nullability::CENTER, nulls);
+                        if EARLY_EXIT && !nulls.is_empty() { return (curr, pos, false); }
                     }
                 }
                 let delta = (curr << mt_log | mt) as usize;

@@ -1026,7 +1026,16 @@ impl Regex {
             }
             return Ok(false);
         }
-        // 3. fallback
-        Ok(!self.find_all(input)?.is_empty())
+        // 3. fallback: rev scan with early exit at first nullable
+        let inner = &mut *self.inner.lock().unwrap();
+        let rev_initial_nullable = inner.rev.effects_id[inner.rev.initial as usize] != 0;
+        if rev_initial_nullable {
+            return Ok(true);
+        }
+        inner.nulls_buf.clear();
+        inner
+            .rev
+            .collect_rev_first(&mut inner.b, input.len() - 1, input, &mut inner.nulls_buf)?;
+        Ok(!inner.nulls_buf.is_empty())
     }
 }
