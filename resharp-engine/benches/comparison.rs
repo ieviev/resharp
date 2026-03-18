@@ -26,6 +26,7 @@ fn load_dictionary_pattern(n: usize) -> String {
     contents.lines().take(n).collect::<Vec<_>>().join("|")
 }
 
+
 macro_rules! bench_three {
     ($group:expr, $pattern:expr, $input:expr) => {{
         let input = $input;

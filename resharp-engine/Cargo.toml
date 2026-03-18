@@ -33,6 +33,7 @@ criterion = "0.5"
 regex = "1"
 fancy-regex = "0.14"
 regex-automata = "0.4.14"
+aho-corasick = "1"
 
 [[bench]]
 name = "comparison"
@@ -40,4 +41,12 @@ harness = false
 
 [[bench]]
 name = "regression"
+harness = false
+
+[[bench]]
+name = "ismatch"
+harness = false
+
+[[bench]]
+name = "experiments"
 harness = false
