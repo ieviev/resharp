@@ -180,38 +180,20 @@ impl Solver {
                         continue;
                     }
 
-                    if let Some(currstart) = rangestart {
-                        if let Some(currprev) = prevchar {
-                            if currprev as u8 == cc as u8 - 1 {
-                                prevchar = Some(cc);
-                                continue;
-                            } else {
-                                if currstart == currprev {
-                                    ranges.insert((currstart, currstart));
-                                } else {
-                                    ranges.insert((currstart, currprev));
-                                }
-                                rangestart = Some(cc);
-                                prevchar = Some(cc);
-                            }
-                        } else {
+                    if let (Some(currstart), Some(currprev)) = (rangestart, prevchar) {
+                        if currprev == cc - 1 {
+                            prevchar = Some(cc);
+                            continue;
                         }
-                    } else {
+                        ranges.insert((currstart, currprev));
+                        rangestart = Some(cc);
+                        prevchar = Some(cc);
                     }
                 }
             }
         }
-        if let Some(start) = rangestart {
-            if let Some(prevchar) = prevchar {
-                if prevchar as u8 == start as u8 {
-                    ranges.insert((start, start));
-                } else {
-                    ranges.insert((start, prevchar));
-                }
-            } else {
-                // single char
-                ranges.insert((start, start));
-            }
+        if let (Some(start), Some(end)) = (rangestart, prevchar) {
+            ranges.insert((start, end));
         }
         ranges
     }

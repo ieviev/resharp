@@ -212,6 +212,9 @@ pub struct Regex {
     empty_nullable: bool,
     fwd_end_nullable: bool,
     hardened: bool,
+    has_bounded_prefix: bool,
+    has_rev_accel: bool,
+    has_bounded: bool,
 }
 
 #[inline(never)]
@@ -381,6 +384,10 @@ impl Regex {
             None
         };
 
+        let has_bounded = bounded.is_some();
+        let has_bounded_prefix = bounded.as_ref().map_or(false, |bd| bd.prefix.is_some());
+        let has_rev_accel = rev.prefix_skip.is_some() || rev.can_skip();
+
         Ok(Regex {
             inner: Mutex::new(RegexInner {
                 b,
@@ -397,6 +404,9 @@ impl Regex {
             empty_nullable,
             fwd_end_nullable,
             hardened: opts.hardened,
+            has_bounded_prefix,
+            has_rev_accel,
+            has_bounded,
         })
     }
 
@@ -473,41 +483,21 @@ impl Regex {
         if self.hardened {
             return self.find_all_dfa(input);
         }
-        // 1. bounded + fwd prefix → BDFA with prefix skip
-        {
-            let inner = self.inner.lock().unwrap();
-            if let Some(ref bd) = inner.bounded {
-                if bd.prefix.is_some() {
-                    drop(inner);
-                    return self.find_all_fwd_bounded(input);
-                }
-            }
+        if self.has_bounded_prefix {
+            return self.find_all_fwd_bounded(input);
         }
-        // 2. rare literal fwd prefix → left-right
         if self.fwd_prefix.is_some() {
             if self.fwd_prefix_stripped {
                 return self.find_all_fwd_prefix_stripped(input);
             }
             return self.find_all_fwd_prefix(input);
         }
-        // 3. rev prefix exists → right-left (standard DFA)
-        {
-            let inner = self.inner.lock().unwrap();
-            let has_rev_accel = inner.rev.prefix_skip.is_some() || inner.rev.can_skip();
-            if has_rev_accel {
-                drop(inner);
-                return self.find_all_dfa(input);
-            }
+        if self.has_rev_accel {
+            return self.find_all_dfa(input);
         }
-        // 4. bounded, no prefixes → BDFA
-        {
-            let inner = self.inner.lock().unwrap();
-            if inner.bounded.is_some() {
-                drop(inner);
-                return self.find_all_fwd_bounded(input);
-            }
+        if self.has_bounded {
+            return self.find_all_fwd_bounded(input);
         }
-        // 5. fallback → right-left
         self.find_all_dfa(input)
     }
 
@@ -1001,13 +991,8 @@ impl Regex {
         if input.is_empty() {
             return Ok(self.empty_nullable);
         }
-        // 1. bounded → BDFA is_match
-        {
-            let inner = self.inner.lock().unwrap();
-            if inner.bounded.is_some() {
-                drop(inner);
-                return self.is_match_fwd_bounded(input);
-            }
+        if self.has_bounded {
+            return self.is_match_fwd_bounded(input);
         }
         // 2. fwd prefix → find first candidate
         if let Some(ref fwd_prefix) = self.fwd_prefix {

@@ -108,32 +108,27 @@ pub fn collect_sets(b: &RegexBuilder, start_id: NodeId) -> HashSet<TSetId> {
     let mut visited = HashSet::new();
     let mut sets = HashSet::new();
     let mut stack = vec![start_id];
-    loop {
-        match stack.pop() {
-            Some(node_id) => {
-                if visited.contains(&node_id) {
-                    continue;
-                }
-                visited.insert(node_id);
-                match b.get_kind(node_id) {
-                    Kind::Begin | Kind::End => {}
-                    Kind::Pred => {
-                        sets.insert(node_id.pred_tset(b));
-                    }
-                    Kind::Union | Kind::Concat | Kind::Inter => {
-                        stack.push(node_id.left(b));
-                        stack.push(node_id.right(b));
-                    }
-                    Kind::Lookahead | Kind::Lookbehind | Kind::Counted => {
-                        stack.push(node_id.left(b));
-                        stack.push(node_id.right(b));
-                    }
-                    Kind::Star | Kind::Compl => {
-                        stack.push(node_id.left(b));
-                    }
-                }
+    while let Some(node_id) = stack.pop() {
+        if visited.contains(&node_id) {
+            continue;
+        }
+        visited.insert(node_id);
+        match b.get_kind(node_id) {
+            Kind::Begin | Kind::End => {}
+            Kind::Pred => {
+                sets.insert(node_id.pred_tset(b));
             }
-            None => break,
+            Kind::Union | Kind::Concat | Kind::Inter => {
+                stack.push(node_id.left(b));
+                stack.push(node_id.right(b));
+            }
+            Kind::Lookahead | Kind::Lookbehind | Kind::Counted => {
+                stack.push(node_id.left(b));
+                stack.push(node_id.right(b));
+            }
+            Kind::Star | Kind::Compl => {
+                stack.push(node_id.left(b));
+            }
         }
     }
     sets
@@ -2597,21 +2592,6 @@ impl BDFA {
     #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
     fn build_prefix_search(_byte_sets_raw: &[Vec<u8>]) -> Option<crate::accel::FwdPrefixSearch> {
         None
-    }
-
-    /// match rel from a nullable node.
-    pub fn node_rel(node: &NodeId, b: &RegexBuilder) -> u32 {
-        let nulls_id = b.get_nulls_id(*node);
-        if nulls_id.0 == 0 {
-            return 0;
-        }
-        let nulls = b.nulls_entry_vec(nulls_id.0);
-        for ns in &nulls {
-            if ns.mask.has(Nullability::CENTER) || ns.mask.has(Nullability::END) {
-                return ns.rel;
-            }
-        }
-        0
     }
 
     /// best match rel from packed extra.

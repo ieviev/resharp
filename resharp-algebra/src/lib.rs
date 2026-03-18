@@ -2821,6 +2821,10 @@ impl RegexBuilder {
         if body == NodeId::BOT && chain == NodeId::MISSING && !has_match {
             return NodeId::BOT;
         }
+        debug_assert!(
+            body == NodeId::BOT || !self.is_infinite(body),
+            "Counted body must have finite max length"
+        );
         let chain = self.prune_counted_chain(body, chain);
         let key = NodeKey {
             kind: Kind::Counted,

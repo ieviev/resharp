@@ -204,19 +204,13 @@ pub struct ResharpParser<'s> {
 }
 
 fn specialize_err<T>(result: Result<T>, from: ast::ErrorKind, to: ast::ErrorKind) -> Result<T> {
-    if let Err(e) = result {
+    result.map_err(|e| {
         if e.kind == from {
-            Err(ResharpError {
-                kind: to,
-                pattern: e.pattern,
-                span: e.span,
-            })
+            ResharpError { kind: to, pattern: e.pattern, span: e.span }
         } else {
-            Err(e)
+            e
         }
-    } else {
-        result
-    }
+    })
 }
 
 fn is_capture_char(c: char, first: bool) -> bool {
@@ -346,9 +340,7 @@ impl<'s> ResharpParser<'s> {
     }
 
     fn unsupported_error(&self, _: regex_syntax::hir::Error) -> ResharpError {
-        let emptyspan = Span::splat(self.pos());
-        let inner = self.error(emptyspan, ast::ErrorKind::UnsupportedResharpRegex);
-        inner
+        self.error(Span::splat(self.pos()), ast::ErrorKind::UnsupportedResharpRegex)
     }
 
     /// Return the current offset of the parser.
@@ -468,8 +460,7 @@ impl<'s> ResharpParser<'s> {
         if self.bump_if("?<!") {
             return Some((false, false));
         }
-        return None;
-        // self.bump_if("?=") || self.bump_if("?!") || self.bump_if("?<=") || self.bump_if("?<!")
+        None
     }
 
     fn bump_and_bump_space(&self) -> bool {
