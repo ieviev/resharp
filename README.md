@@ -93,7 +93,7 @@ Throughput comparison with `regex` and `fancy-regex`, compiled with `--release`.
 **Notes on the results:**
 
 - The first dictionary row is roughly tied - with only ~15 matches, both engines spend most of their time scanning past non-matching bytes, so the DFA strategy difference doesn't show up.
-- On denser matches the lazy DFA engines degrade: with ~2678 matches, RE# holds at 535 MiB/s vs 58 MiB/s for `regex` on x86.
+- On denser matches which force the engines to build more of the state machine the other engines degrade: with ~2678 matches, RE# holds at 535 MiB/s vs 58 MiB/s for `regex` on x86.
 - The `(?i)` row shows what happens when the pattern forces `regex` to fall back to a slower engine: throughput drops to 0.03 MiB/s. RE# handles case folding in the DFA and maintains full speed.
 - RE# compiles lookarounds directly into the automaton - no back-and-forth between forward and backward passes. `regex` doesn't support lookarounds except for anchors; `fancy-regex` handles them via backtracking, which is occasionally much slower.
 - If you encounter a bug or a pattern where RE# is >5x slower than `regex` or `fancy-regex`, please [open an issue](https://github.com/ieviev/resharp/issues) - it would help improve the library. Note that `regex` returns leftmost-greedy (PCRE) matches while RE# returns leftmost-longest, so match results may differ. The performance profile also differs - RE# works right to left while `regex` works left to right.
