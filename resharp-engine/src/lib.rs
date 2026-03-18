@@ -42,13 +42,17 @@ pub(crate) mod accel;
 pub(crate) mod engine;
 pub(crate) mod simd;
 
-#[doc(hidden)]
+#[cfg(feature = "diag")]
+#[allow(missing_docs)]
 pub use engine::calc_potential_start;
-#[doc(hidden)]
+#[cfg(feature = "diag")]
+#[allow(missing_docs)]
 pub use engine::calc_prefix_sets;
-#[doc(hidden)]
+#[cfg(feature = "diag")]
+#[allow(missing_docs)]
 pub use engine::BDFA;
-#[doc(hidden)]
+#[cfg(feature = "diag")]
+#[allow(missing_docs)]
 pub use resharp_algebra::solver::TSetId;
 
 // bdfa_scan / bdfa_inner const-generic PREFIX modes
@@ -173,7 +177,7 @@ impl EngineOptions {
     pub fn dot_matches_new_line(mut self, yes: bool) -> Self { self.dot_matches_new_line = yes; self }
     /// set ignore-whitespace (verbose) mode.
     pub fn ignore_whitespace(mut self, yes: bool) -> Self { self.ignore_whitespace = yes; self }
-    /// enable O(N·S) hardened forward scan (~5-20x constant overhead).
+    /// enable hardened mode for untrusted patterns: uses only O(N·S) forward scan (~5-20x constant overhead).
     pub fn hardened(mut self, yes: bool) -> Self { self.hardened = yes; self }
 }
 
@@ -678,7 +682,7 @@ impl Regex {
     }
 
     fn bdfa_scan<const PREFIX: u8, const ISMATCH: bool>(
-        bounded: &mut BDFA,
+        bounded: &mut engine::BDFA,
         b: &mut RegexBuilder,
         input: &[u8],
         matches: &mut Vec<Match>,
@@ -837,7 +841,7 @@ impl Regex {
         if state != initial {
             let node = bounded.states[state as usize];
             if node != NodeId::MISSING {
-                let best = BDFA::counted_best(node, b);
+                let best = engine::BDFA::counted_best(node, b);
                 if best > 0 {
                     if ISMATCH { return Ok(true); }
                     matches.push(Match {
