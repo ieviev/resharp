@@ -40,6 +40,7 @@
 
 pub(crate) mod accel;
 pub(crate) mod engine;
+pub(crate) mod precompiled;
 pub(crate) mod simd;
 
 #[cfg(feature = "diag")]
@@ -85,6 +86,8 @@ pub enum Error {
     Algebra(resharp_algebra::AlgebraError),
     /// DFA state cache exceeded `max_dfa_capacity`.
     CapacityExceeded,
+    /// serialization or deserialization failure.
+    Serialize(String),
 }
 
 impl std::fmt::Display for Error {
@@ -93,6 +96,7 @@ impl std::fmt::Display for Error {
             Error::Parse(e) => write!(f, "parse error: {}", e),
             Error::Algebra(e) => write!(f, "{}", e),
             Error::CapacityExceeded => write!(f, "DFA state capacity exceeded"),
+            Error::Serialize(ref s) => write!(f, "serialization error: {}", s),
         }
     }
 }
@@ -103,6 +107,7 @@ impl std::error::Error for Error {
             Error::Parse(e) => Some(e),
             Error::Algebra(e) => Some(e),
             Error::CapacityExceeded => None,
+            Error::Serialize(_) => None,
         }
     }
 }
@@ -191,30 +196,30 @@ pub struct Match {
     pub end: usize,
 }
 
-struct RegexInner {
-    b: RegexBuilder,
-    fwd: engine::LDFA,
-    rev: engine::LDFA,
-    nulls_buf: Vec<usize>,
-    matches_buf: Vec<Match>,
-    bounded: Option<engine::BDFA>,
+pub(crate) struct RegexInner {
+    pub(crate) b: RegexBuilder,
+    pub(crate) fwd: engine::LDFA,
+    pub(crate) rev: engine::LDFA,
+    pub(crate) nulls_buf: Vec<usize>,
+    pub(crate) matches_buf: Vec<Match>,
+    pub(crate) bounded: Option<engine::BDFA>,
 }
 
 /// compiled regex backed by a lazy DFA.
 ///
 /// uses a `Mutex` for mutable DFA state.
 pub struct Regex {
-    inner: Mutex<RegexInner>,
-    fwd_prefix: Option<accel::FwdPrefixSearch>,
-    fwd_prefix_stripped: bool,
-    fixed_length: Option<u32>,
-    max_length: Option<u32>,
-    empty_nullable: bool,
-    fwd_end_nullable: bool,
-    hardened: bool,
-    has_bounded_prefix: bool,
-    has_rev_accel: bool,
-    has_bounded: bool,
+    pub(crate) inner: Mutex<RegexInner>,
+    pub(crate) fwd_prefix: Option<accel::FwdPrefixSearch>,
+    pub(crate) fwd_prefix_stripped: bool,
+    pub(crate) fixed_length: Option<u32>,
+    pub(crate) max_length: Option<u32>,
+    pub(crate) empty_nullable: bool,
+    pub(crate) fwd_end_nullable: bool,
+    pub(crate) hardened: bool,
+    pub(crate) has_bounded_prefix: bool,
+    pub(crate) has_rev_accel: bool,
+    pub(crate) has_bounded: bool,
 }
 
 #[inline(never)]
@@ -1037,5 +1042,29 @@ impl Regex {
             .rev
             .collect_rev_first(&mut inner.b, input.len() - 1, input, &mut inner.nulls_buf)?;
         Ok(!inner.nulls_buf.is_empty())
+    }
+
+    /// serialize the fully-compiled DFA to bytes.
+    ///
+    /// forces full DFA compilation for both forward and reverse DFAs.
+    /// returns `Error::CapacityExceeded` if the pattern has too many states.
+    ///
+    /// ```
+    /// let re = resharp::Regex::new(r"\d{3}-\d{4}").unwrap();
+    /// let bytes = re.to_bytes().unwrap();
+    /// let re2 = resharp::Regex::from_bytes(&bytes).unwrap();
+    /// let m1 = re.find_all(b"call 555-1234").unwrap();
+    /// let m2 = re2.find_all(b"call 555-1234").unwrap();
+    /// assert_eq!(m1.len(), m2.len());
+    /// ```
+    pub fn to_bytes(&self) -> Result<Vec<u8>, Error> {
+        precompiled::to_bytes(self)
+    }
+
+    /// deserialize a regex from bytes produced by [`Regex::to_bytes`].
+    ///
+    /// the deserialized regex always uses the rev+fwd LDFA path.
+    pub fn from_bytes(data: &[u8]) -> Result<Regex, Error> {
+        precompiled::from_bytes(data)
     }
 }

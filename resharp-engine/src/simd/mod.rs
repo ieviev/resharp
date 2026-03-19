@@ -315,7 +315,7 @@ impl RevSearchBytes {
 
 #[cfg(target_arch = "x86_64")]
 pub struct FwdLiteralSearch {
-    needle: Vec<u8>,
+    pub(crate) needle: Vec<u8>,
     chunks: Vec<u64>,
     rare_idx: usize,
     rare_byte: u8,
@@ -513,7 +513,7 @@ pub struct RevPrefixSearch {
     len: usize,
     num_simd: usize,
     masks: Box<TeddyMasks>,
-    sets: Vec<TSet>,
+    pub(crate) sets: Vec<TSet>,
 }
 
 #[cfg(target_arch = "x86_64")]
@@ -820,7 +820,7 @@ pub struct FwdPrefixSearch {
     len: usize,
     num_simd: usize,
     masks: Box<TeddyMasks>,
-    sets: Vec<TSet>,
+    pub(crate) sets: Vec<TSet>,
     verify_order: [u8; 16],
 }
 
@@ -1131,9 +1131,9 @@ impl FwdPrefixSearch {
 #[cfg(target_arch = "x86_64")]
 pub struct FwdRangeSearch {
     len: usize,
-    anchor_pos: usize,
-    ranges: Vec<(u8, u8)>,
-    sets: Vec<TSet>,
+    pub(crate) anchor_pos: usize,
+    pub(crate) ranges: Vec<(u8, u8)>,
+    pub(crate) sets: Vec<TSet>,
 }
 
 #[cfg(target_arch = "x86_64")]
@@ -1224,9 +1224,9 @@ impl FwdRangeSearch {
 #[cfg(target_arch = "aarch64")]
 pub struct FwdRangeSearch {
     len: usize,
-    anchor_pos: usize,
-    ranges: Vec<(u8, u8)>,
-    sets: Vec<TSet>,
+    pub(crate) anchor_pos: usize,
+    pub(crate) ranges: Vec<(u8, u8)>,
+    pub(crate) sets: Vec<TSet>,
 }
 
 #[cfg(target_arch = "aarch64")]

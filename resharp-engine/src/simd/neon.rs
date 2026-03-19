@@ -289,7 +289,7 @@ impl RevSearchRanges {
 }
 
 pub struct FwdLiteralSearch {
-    needle: Vec<u8>,
+    pub(crate) needle: Vec<u8>,
     chunks: Vec<u64>,
     rare_idx: usize,
     rare_byte: u8,
@@ -562,7 +562,7 @@ pub struct RevPrefixSearch {
     len: usize,
     num_simd: usize,
     masks: Box<TeddyMasks>,
-    sets: Vec<TSet>,
+    pub(crate) sets: Vec<TSet>,
 }
 
 impl RevPrefixSearch {
@@ -862,7 +862,7 @@ pub struct FwdPrefixSearch {
     num_simd: usize,
     simd_offsets: [usize; 3],
     masks: Box<TeddyMasks>,
-    sets: Vec<TSet>,
+    pub(crate) sets: Vec<TSet>,
     verify_order: [u8; 16],
 }
 

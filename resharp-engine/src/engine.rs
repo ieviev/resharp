@@ -517,7 +517,7 @@ pub struct LDFA {
     pub skip_ids: Vec<u8>,
     pub skip_searchers: Vec<MintermSearchValue>,
     pub prefix_skip: Option<crate::accel::RevPrefixSearch>,
-    _prefix_transition: u32, // reserved: DFA state after consuming prefix (unused, per-byte walk used instead)
+    pub(crate) _prefix_transition: u32, // reserved: DFA state after consuming prefix (unused, per-byte walk used instead)
     pub max_capacity: usize,
 }
 
@@ -649,6 +649,9 @@ impl LDFA {
         }
 
         let node = self.state_nodes[state_id as usize];
+        if node == NodeId::MISSING {
+            return Ok(DFA_DEAD);
+        }
         let sder = b.der(node, Nullability::CENTER).map_err(Error::Algebra)?;
         let mt = self.minterms[minterm_idx as usize];
         let next_node = transition_term(b, sder, mt);
@@ -694,6 +697,9 @@ impl LDFA {
             visited.insert(sid);
 
             let node = self.state_nodes[sid as usize];
+            if node == NodeId::MISSING {
+                continue;
+            }
             self.ensure_capacity(sid);
             let sder = match b.der(node, Nullability::CENTER) {
                 Ok(d) => d,
@@ -706,6 +712,9 @@ impl LDFA {
                 let mt = self.minterms[mt_idx];
                 let next_node = transition_term(b, sder, mt);
                 let next_sid = self.get_or_register(b, next_node);
+                if self.state_nodes.len() > self.max_capacity {
+                    return false;
+                }
                 self.ensure_capacity(next_sid);
                 let delta = self.dfa_delta(sid, mt_idx as u32);
                 self.center_table[delta] = next_sid;
@@ -730,6 +739,9 @@ impl LDFA {
             return Ok(());
         }
         let node = self.state_nodes[state_id as usize];
+        if node == NodeId::MISSING {
+            return Ok(());
+        }
         let sder = b.der(node, Nullability::CENTER).map_err(Error::Algebra)?;
         for mt_idx in 0..self.minterms.len() {
             let delta = self.dfa_delta(state_id, mt_idx as u32);

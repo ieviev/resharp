@@ -30,6 +30,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c08606f8c3cbf4ce6ec8e28fb0014a2c086708fe954eaa885384a6165172e7e8"
 
 [[package]]
+name = "bincode"
+version = "1.3.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b1f45e9417d87227c7a56d22e471c6206462cba514c7590c09aff4cf6d1ddcad"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "bit-set"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -406,6 +415,7 @@ name = "resharp"
 version = "0.3.7"
 dependencies = [
  "aho-corasick",
+ "bincode",
  "criterion",
  "fancy-regex",
  "regex",
@@ -414,6 +424,7 @@ dependencies = [
  "resharp",
  "resharp-algebra",
  "resharp-parser",
+ "serde",
  "toml",
 ]
 

@@ -58,7 +58,7 @@ let opts = resharp::EngineOptions {
     dfa_threshold: 0,             // eagerly compile up to N states (default: 0 = fully lazy)
     max_dfa_capacity: 65535,       // max automata states (default: u16::MAX)
     lookahead_context_max: 800,    // max lookahead context distance (default: 800)
-    hardened: false,               // O(N·S) forward scan, slower but worst-case safe
+    hardened: false,               // slower in the average case but truly linear all matches
     ..Default::default()
 };
 let re = resharp::Regex::with_options(r"pattern", opts).unwrap();
