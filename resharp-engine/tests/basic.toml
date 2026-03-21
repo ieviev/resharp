@@ -62,3 +62,57 @@ name = "negation_intersection"
 pattern = '~(_*(d_*){2})&.*down.*'
 input = "asd asd down asdasd asd asd "
 matches = [[7, 15]]
+
+[[test]]
+name = "alt_no_false_positive_ba"
+pattern = "(aa|bb|cc)"
+input = "ba"
+matches = []
+
+[[test]]
+name = "alt_no_false_positive_ab"
+pattern = "(aa|bb|cc)"
+input = "ab"
+matches = []
+
+[[test]]
+name = "alt_no_false_positive_ca"
+pattern = "(aa|bb|cc)"
+input = "ca"
+matches = []
+
+[[test]]
+name = "alt_correct_match"
+pattern = "(aa|bb|cc)"
+input = "xbbx"
+matches = [[1, 3]]
+
+[[test]]
+name = "alt_no_match_in_text"
+pattern = "(aa|bb|cc)"
+input = "We'll be back."
+matches = []
+
+[[test]]
+name = "alt_list_hash_no_match"
+pattern = "list|hash"
+input = "Your blood is good to the last drop."
+matches = []
+
+[[test]]
+name = "alt_foo_bar_no_match"
+pattern = "((foo)|(bar))"
+input = "It must have been difficult for..."
+matches = []
+
+[[test]]
+name = "optional_suffix_correct_start"
+pattern = 'Download( (Image|File))?'
+input = "Download Download"
+matches = [[0, 8], [9, 17]]
+
+[[test]]
+name = "optional_suffix_with_match"
+pattern = 'Download( (Image|File))?'
+input = "Download Image"
+matches = [[0, 14]]

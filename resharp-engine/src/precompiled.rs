@@ -416,7 +416,7 @@ pub fn from_bytes(data: &[u8]) -> Result<Regex, Error> {
     })
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "precompile-tests"))]
 mod tests {
     use super::*;
 

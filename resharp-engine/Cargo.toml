@@ -18,6 +18,7 @@ doctest = false
 [features]
 debug-nulls = []
 diag = []
+precompile-tests = []
 
 [dependencies]
 resharp-algebra = { version = "0.3.1", path = "../resharp-algebra" }
@@ -36,6 +37,7 @@ regex = "1"
 fancy-regex = "0.14"
 regex-automata = "0.4.14"
 aho-corasick = "1"
+serde_json = "1"
 
 [[bench]]
 name = "comparison"

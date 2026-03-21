@@ -425,6 +425,7 @@ dependencies = [
  "resharp-algebra",
  "resharp-parser",
  "serde",
+ "serde_json",
  "toml",
 ]
 

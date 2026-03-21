@@ -1174,8 +1174,9 @@ fn bdfa_matches(pattern: &str, input: &[u8]) -> Vec<(usize, usize)> {
         state = (bdfa.transition(&mut b, state, mt).unwrap() & 0xFFFF) as u16;
         let rel = bdfa.match_rel[state as usize];
         if rel > 0 {
-            let end = pos;
-            let start = end - rel as usize;
+            let end_off = bdfa.match_end_off[state as usize];
+            let start = pos + 1 - rel as usize;
+            let end = pos + 1 - end_off as usize;
             matches.push((start, end));
             state = bdfa.initial;
             continue;
@@ -1205,8 +1206,8 @@ fn bdfa_literal_abc() {
     for &(pos, s, vl, rel) in &trace {
         eprintln!("  pos={} state={} vec_len={} rel={}", pos, s, vl, rel);
     }
-    // after 'c' at pos=3, should have a match with rel=3
-    assert!(trace.iter().any(|&(_, _, _, rel)| rel == 3), "expected match with rel=3");
+    // after 'x' at pos=4, body dies with step=4 (match is 3 bytes starting at pos+1-step=1)
+    assert!(trace.iter().any(|&(_, _, _, rel)| rel == 4), "expected match with rel=4 (step)");
 }
 
 #[test]
@@ -1373,22 +1374,22 @@ fn bdfa_prefix_predicate_pp() {
         "pos=1 'e' s=3 rel=0 [#((|(|[a-z])[a-z]))s2b2]",
         "pos=2 'l' s=4 rel=0 [#((|[a-z]))s3b3]",
         "pos=3 'l' s=5 rel=0 [#()s4b4]",
-        "pos=4 'o' s=6 rel=4 [#(\u{22a5})s5b4]",
-        "pos=5 ' ' s=7 rel=4 [#(\u{22a5})s6b4]",
-        "pos=6 'W' s=8 rel=4 [#(\u{22a5})s7b4, #([a-z]{1,3})s1b0]",
-        "pos=7 'o' s=9 rel=4 [#(\u{22a5})s8b4, #((|(|[a-z])[a-z]))s2b2]",
-        "pos=8 'r' s=10 rel=4 [#(\u{22a5})s9b4, #((|[a-z]))s3b3]",
-        "pos=9 'l' s=11 rel=4 [#(\u{22a5})s10b4, #()s4b4]",
-        "pos=10 'd' s=12 rel=4 [#(\u{22a5})s11b4, #(\u{22a5})s5b4]",
-        "pos=11 ' ' s=13 rel=4 [#(\u{22a5})s12b4, #(\u{22a5})s6b4]",
-        "pos=12 'F' s=14 rel=4 [#(\u{22a5})s13b4, #(\u{22a5})s7b4, #([a-z]{1,3})s1b0]",
-        "pos=13 'o' s=15 rel=4 [#(\u{22a5})s14b4, #(\u{22a5})s8b4, #((|(|[a-z])[a-z]))s2b2]",
-        "pos=14 'o' s=16 rel=4 [#(\u{22a5})s15b4, #(\u{22a5})s9b4, #((|[a-z]))s3b3]",
-        "pos=15 ' ' s=17 rel=4 [#(\u{22a5})s16b4, #(\u{22a5})s10b4, #(\u{22a5})s4b3]",
-        "pos=16 'B' s=18 rel=4 [#(\u{22a5})s17b4, #(\u{22a5})s11b4, #(\u{22a5})s5b3, #([a-z]{1,3})s1b0]",
-        "pos=17 ' ' s=19 rel=4 [#(\u{22a5})s18b4, #(\u{22a5})s12b4, #(\u{22a5})s6b3]",
-        "pos=18 'x' s=20 rel=4 [#(\u{22a5})s19b4, #(\u{22a5})s13b4, #(\u{22a5})s7b3]",
-        "pos=19 'y' s=21 rel=4 [#(\u{22a5})s20b4, #(\u{22a5})s14b4, #(\u{22a5})s8b3]",
+        "pos=4 'o' s=6 rel=5 [#(\u{22a5})s5b4]",
+        "pos=5 ' ' s=6 rel=5 [#(\u{22a5})s5b4]",
+        "pos=6 'W' s=7 rel=5 [#(\u{22a5})s5b4, #([a-z]{1,3})s1b0]",
+        "pos=7 'o' s=8 rel=5 [#(\u{22a5})s5b4, #((|(|[a-z])[a-z]))s2b2]",
+        "pos=8 'r' s=9 rel=5 [#(\u{22a5})s5b4, #((|[a-z]))s3b3]",
+        "pos=9 'l' s=10 rel=5 [#(\u{22a5})s5b4, #()s4b4]",
+        "pos=10 'd' s=11 rel=5 [#(\u{22a5})s5b4, #(\u{22a5})s5b4]",
+        "pos=11 ' ' s=11 rel=5 [#(\u{22a5})s5b4, #(\u{22a5})s5b4]",
+        "pos=12 'F' s=12 rel=5 [#(\u{22a5})s5b4, #(\u{22a5})s5b4, #([a-z]{1,3})s1b0]",
+        "pos=13 'o' s=13 rel=5 [#(\u{22a5})s5b4, #(\u{22a5})s5b4, #((|(|[a-z])[a-z]))s2b2]",
+        "pos=14 'o' s=14 rel=5 [#(\u{22a5})s5b4, #(\u{22a5})s5b4, #((|[a-z]))s3b3]",
+        "pos=15 ' ' s=15 rel=5 [#(\u{22a5})s5b4, #(\u{22a5})s5b4, #(\u{22a5})s4b3]",
+        "pos=16 'B' s=16 rel=5 [#(\u{22a5})s5b4, #(\u{22a5})s5b4, #(\u{22a5})s4b3, #([a-z]{1,3})s1b0]",
+        "pos=17 ' ' s=15 rel=5 [#(\u{22a5})s5b4, #(\u{22a5})s5b4, #(\u{22a5})s4b3]",
+        "pos=18 'x' s=15 rel=5 [#(\u{22a5})s5b4, #(\u{22a5})s5b4, #(\u{22a5})s4b3]",
+        "pos=19 'y' s=15 rel=5 [#(\u{22a5})s5b4, #(\u{22a5})s5b4, #(\u{22a5})s4b3]",
     ]);
 }
 

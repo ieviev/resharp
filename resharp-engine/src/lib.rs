@@ -229,6 +229,7 @@ fn bdfa_inner<const PREFIX: u8>(
     data: *const u8,
     mt_log: u32,
     initial: u16,
+    match_end_off: *const u32,
     mut state: u16,
     mut pos: usize,
     len: usize,
@@ -253,9 +254,10 @@ fn bdfa_inner<const PREFIX: u8>(
                 if mc >= match_cap {
                     return (state, pos, mc);
                 }
+                let end_off = *match_end_off.add(state as usize);
                 *match_buf.add(mc) = Match {
-                    start: pos - rel as usize,
-                    end: pos,
+                    start: pos + 1 - rel as usize,
+                    end: pos + 1 - end_off as usize,
                 };
                 mc += 1;
                 state = initial;
@@ -392,7 +394,6 @@ impl Regex {
         let has_bounded = bounded.is_some();
         let has_bounded_prefix = bounded.as_ref().map_or(false, |bd| bd.prefix.is_some());
         let has_rev_accel = rev.prefix_skip.is_some() || rev.can_skip();
-
         Ok(Regex {
             inner: Mutex::new(RegexInner {
                 b,
@@ -611,32 +612,26 @@ impl Regex {
         matches: &mut Vec<Match>,
     ) -> Result<(), Error> {
         let mut pos = 0;
-        let max_end = fwd.scan_fwd(b, pos, input)?;
         fwd.build_skip_all(b);
-        if max_end != engine::NO_MATCH && max_end > pos {
-            matches.push(Match { start: pos, end: max_end });
-            pos = max_end;
-        } else {
-            matches.push(Match { start: pos, end: pos });
-            pos += 1;
-        }
         while pos < input.len() {
-            let max_end = fwd.scan_fwd(b, pos, input)?;
+            let max_end = fwd.scan_fwd_slow(b, pos, input)?;
             if max_end != engine::NO_MATCH && max_end > pos {
-                matches.push(Match {
-                    start: pos,
-                    end: max_end,
-                });
+                matches.push(Match { start: pos, end: max_end });
                 pos = max_end;
-            } else {
+            } else if max_end != engine::NO_MATCH {
                 matches.push(Match { start: pos, end: pos });
+                pos += 1;
+            } else {
                 pos += 1;
             }
         }
-        matches.push(Match {
-            start: input.len(),
-            end: input.len(),
-        });
+        // trailing empty at end-of-input
+        let end_null = engine::has_any_null(
+            &fwd.effects_id, &fwd.effects, fwd.initial as u32, Nullability::END,
+        );
+        if end_null {
+            matches.push(Match { start: input.len(), end: input.len() });
+        }
         Ok(())
     }
 
@@ -703,8 +698,9 @@ impl Regex {
                 let spare = if ISMATCH { 1 } else { matches.capacity() - matches.len() };
                 let buf_ptr = unsafe { matches.as_mut_ptr().add(matches.len()) };
                 let table = bounded.table.as_ptr();
+                let meo = bounded.match_end_off.as_ptr();
                 let (s, p, mc) = bdfa_inner::<{ PREFIX_NONE }>(
-                    table, ml.as_ptr(), data, mt_log, initial, state, pos, len,
+                    table, ml.as_ptr(), data, mt_log, initial, meo, state, pos, len,
                     buf_ptr, spare,
                 );
                 state = s;
@@ -722,9 +718,10 @@ impl Regex {
                 let rel = entry >> 16;
                 if rel > 0 {
                     if ISMATCH { return Ok(true); }
+                    let end_off = bounded.match_end_off[state as usize];
                     matches.push(Match {
-                        start: pos - rel as usize,
-                        end: pos,
+                        start: pos + 1 - rel as usize,
+                        end: pos + 1 - end_off as usize,
                     });
                     state = initial;
                 } else {
@@ -732,7 +729,7 @@ impl Regex {
                 }
             }
         } else {
-            // PREFIX_SEARCH / PREFIX_LITERAL: unified loop with prefix skip
+            // PREFIX_SEARCH / PREFIX_LITERAL
             'main: loop {
                 if pos >= len {
                     break;
@@ -771,9 +768,10 @@ impl Regex {
                             if rel > 0 {
 
                                 if ISMATCH { return Ok(true); }
+                                let end_off = bounded.match_end_off[state as usize];
                                 matches.push(Match {
-                                    start: pos - rel as usize,
-                                    end: pos,
+                                    start: pos - rel as usize + 1,
+                                    end: pos - end_off as usize + 1,
                                 });
                                 state = initial;
                             }
@@ -787,6 +785,7 @@ impl Regex {
                     let table = bounded.table.as_ptr();
                     let data = input.as_ptr();
                     let ml_ptr = ml.as_ptr();
+                    let meo = bounded.match_end_off.as_ptr();
 
                     while pos < len {
                         let mt = *ml_ptr.add(*data.add(pos) as usize) as usize;
@@ -802,9 +801,10 @@ impl Regex {
                         }
                         if rel > 0 {
                             if ISMATCH { return Ok(true); }
+                            let end_off = *meo.add(state as usize);
                             matches.push(Match {
-                                start: pos - rel as usize,
-                                end: pos,
+                                start: pos + 1 - rel as usize,
+                                end: pos + 1 - end_off as usize,
                             });
                             state = initial;
                             continue 'main;
@@ -822,9 +822,10 @@ impl Regex {
                 let rel = entry >> 16;
                 if rel > 0 {
                     if ISMATCH { return Ok(true); }
+                    let end_off = bounded.match_end_off[state as usize];
                     matches.push(Match {
-                        start: pos - rel as usize,
-                        end: pos,
+                        start: pos + 1 - rel as usize,
+                        end: pos + 1 - end_off as usize,
                     });
                     state = initial;
                 } else {
@@ -836,12 +837,25 @@ impl Regex {
         if state != initial {
             let node = bounded.states[state as usize];
             if node != NodeId::MISSING {
-                let best = engine::BDFA::counted_best(node, b);
-                if best > 0 {
+                // walk chain: find best match among all chain nodes
+                let mut best_val = 0u32;
+                let mut best_step = 0u32;
+                let mut cur = node;
+                while cur.0 > NodeId::BOT.0 {
+                    let packed = b.get_extra(cur);
+                    let step = (packed & 0xFFFF) as u32;
+                    let best = (packed >> 16) as u32;
+                    if best > best_val {
+                        best_val = best;
+                        best_step = step;
+                    }
+                    cur = cur.right(b);
+                }
+                if best_val > 0 {
                     if ISMATCH { return Ok(true); }
                     matches.push(Match {
-                        start: len - best as usize,
-                        end: len,
+                        start: len - best_step as usize,
+                        end: len - best_step as usize + best_val as usize,
                     });
                 }
             }
@@ -860,7 +874,7 @@ impl Regex {
         if self.fixed_length == Some(fwd_prefix.len() as u32)
             && fwd_prefix.find_all_literal(input, matches)
         {
-        } else if let Some(fl) = self.fixed_length {
+        } else if let Some(fl) = self.fixed_length.filter(|_| fwd_prefix.is_literal()) {
             while let Some(candidate) = fwd_prefix.find_fwd(input, search_start) {
                 let end = candidate + fl as usize;
                 if end <= input.len() {
@@ -978,7 +992,7 @@ impl Regex {
             };
         }
         let inner = &mut *self.inner.lock().unwrap();
-        let max_end = inner.fwd.scan_fwd(&mut inner.b, 0, input)?;
+        let max_end = inner.fwd.scan_fwd_slow(&mut inner.b, 0, input)?;
         if max_end != engine::NO_MATCH {
             Ok(Some(Match {
                 start: 0,
@@ -1033,8 +1047,7 @@ impl Regex {
         }
         // 3. fallback: rev scan with early exit at first nullable
         let inner = &mut *self.inner.lock().unwrap();
-        let rev_initial_nullable = inner.rev.effects_id[inner.rev.initial as usize] != 0;
-        if rev_initial_nullable {
+        if inner.rev.effects_id[inner.rev.initial as usize] != 0 {
             return Ok(true);
         }
         inner.nulls_buf.clear();

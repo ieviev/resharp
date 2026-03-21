@@ -875,17 +875,18 @@ impl LDFA {
         self.skip_searchers.len() as u8
     }
 
-    pub fn scan_fwd(
+    pub fn scan_fwd_slow(
         &mut self,
         b: &mut RegexBuilder,
         pos_begin: usize,
         data: &[u8],
     ) -> Result<usize, Error> {
+        let empty_mask = if pos_begin == 0 { Nullability::BEGIN } else { Nullability::CENTER };
         let has_empty = has_any_null(
             &self.effects_id,
             &self.effects,
             self.initial as u32,
-            Nullability::BEGIN,
+            empty_mask,
         );
 
         let mt = self.minterms_lookup[data[pos_begin] as usize];
@@ -1032,14 +1033,31 @@ impl LDFA {
                 None => data_end,
             };
 
+            let mut pos = begin_pos;
+            let mut max_end: usize = 0;
+
+            // check nullability before consuming any byte (empty match at begin_pos)
+            let pre_mask = if pos == 0 { Nullability::BEGIN } else { Nullability::CENTER };
+            collect_nulls_fwd(
+                &self.effects_id,
+                &self.effects,
+                self.initial as u32,
+                pos,
+                pre_mask,
+                &mut max_end,
+            );
+
             let mt = self.minterms_lookup[data[begin_pos] as usize];
             let mut curr = self.begin_table[mt as usize] as u32;
             if curr <= DFA_DEAD as u32 {
+                if max_end > 0 {
+                    matches.push(Match { start: begin_pos, end: max_end });
+                    skip_until = if max_end > begin_pos { max_end } else { begin_pos + 1 };
+                }
                 continue;
             }
 
-            let mut pos = begin_pos + 1;
-            let mut max_end: usize = 0;
+            pos = begin_pos + 1;
 
             let init_mask = if pos >= end {
                 Nullability::END
@@ -2448,8 +2466,10 @@ pub struct BDFA {
     /// packed transition table: entry = (match_rel << 16) | next_state.
     /// 0 = uncached sentinel.
     pub table: Vec<u32>,
-    /// match rel per state (0 = no match).
+    /// match start rel per state: step (0 = no match).
     pub match_rel: Vec<u32>,
+    /// match end offset per state: step - best (distance from pos to match end).
+    pub match_end_off: Vec<u32>,
     /// number of minterms.
     pub num_mt: usize,
     /// log2 of minterm stride.
@@ -2485,6 +2505,7 @@ impl BDFA {
             state_map: HashMap::new(),
             table: vec![0u32; stride * 2],
             match_rel: vec![0, 0],
+            match_end_off: vec![0, 0],
             num_mt,
             mt_log,
             minterms,
@@ -2669,24 +2690,36 @@ impl BDFA {
             return sid;
         }
         let sid = self.states.len() as u16;
-        // leftmost with body=BOT and best>0 -> match
-        let body = node.left(b);
-        let rel = if body == NodeId::BOT {
-            Self::counted_best(node, b)
-        } else {
-            0
-        };
+        // walk chain to find best match among body=BOT nodes
+        let mut match_step = 0u32;
+        let mut match_best = 0u32;
+        let mut cur = node;
+        while cur.0 > NodeId::BOT.0 {
+            debug_assert_eq!(b.get_kind(cur), Kind::Counted);
+            let body = cur.left(b);
+            if body == NodeId::BOT {
+                let best = Self::counted_best(cur, b);
+                if best > match_best {
+                    let packed = b.get_extra(cur);
+                    match_step = (packed & 0xFFFF) as u32;
+                    match_best = best;
+                }
+            }
+            cur = cur.right(b);
+        }
         if cfg!(feature = "debug-nulls") {
             eprintln!(
-                "  [bounded] register state {} node={} rel={}",
+                "  [bounded] register state {} node={} step={} best={}",
                 sid,
                 b.pp(node),
-                rel,
+                match_step,
+                match_best,
             );
         }
         self.states.push(node);
         self.state_map.insert(node, sid);
-        self.match_rel.push(rel);
+        self.match_rel.push(match_step);
+        self.match_end_off.push(match_step - match_best);
         self.table
             .resize(self.table.len() + (1usize << self.mt_log), 0u32);
         sid
@@ -2714,15 +2747,19 @@ impl BDFA {
         while cur.0 > NodeId::BOT.0 {
             debug_assert_eq!(b.get_kind(cur), Kind::Counted);
             let chain = cur.right(b);
+            let body = cur.left(b);
+            if body == NodeId::BOT {
+                // skip dead wrappers, keep pending matches
+                if Self::counted_best(cur, b) > 0 {
+                    result.push(cur);
+                }
+                cur = chain;
+                continue;
+            }
             let der = b.der(cur, Nullability::CENTER).map_err(Error::Algebra)?;
             let next = transition_term(b, der, mt);
             if next != NodeId::BOT {
                 result.push(next);
-            } else {
-                let best = Self::counted_best(next, b);
-                if best > 0 {
-                    result.push(next);
-                }
             }
             cur = chain;
         }

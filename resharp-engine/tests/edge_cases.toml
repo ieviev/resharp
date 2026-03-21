@@ -275,3 +275,39 @@ name = "trailing_newline_dot_plus"
 pattern = ".+"
 input = "foo\nbar\n"
 matches = [[0, 3], [4, 7]]
+
+[[test]]
+name = "bounded_rep_word_context"
+pattern = '\w\w-\w\w'
+input = "xxxxx00-00yyyyy"
+matches = [[5, 10]]
+
+[[test]]
+name = "bounded_rep_word_odd_prefix"
+pattern = '\w\w-\w\w'
+input = "xab-cd"
+matches = [[1, 6]]
+
+[[test]]
+name = "bounded_rep_word_even_prefix"
+pattern = '\w\w-\w\w'
+input = "xxab-cd"
+matches = [[2, 7]]
+
+[[test]]
+name = "bounded_rep_word_no_prefix"
+pattern = '\w\w-\w\w'
+input = "ab-cd"
+matches = [[0, 5]]
+
+[[test]]
+name = "bounded_rep_long"
+pattern = '\w{8}-\w{4}'
+input = "xxxxx00000000-0000yyyyy"
+matches = [[5, 18]]
+
+[[test]]
+name = "bounded_rep_uuid"
+pattern = '\w{8}-\w{4}-\w{4}-\w{4}-\w{12}'
+input = "xxxxx00000000-0000-0000-0000-000000000000yyyyy"
+matches = [[5, 41]]
