@@ -1825,13 +1825,31 @@ impl RegexBuilder {
     }
 
     pub fn strip_lb(&mut self, node_id: NodeId) -> Result<NodeId, AlgebraError> {
+        // strip leading BEGIN anchor (\A) - only at top level
+        if self.get_kind(node_id) == Kind::Concat && node_id.left(self) == NodeId::BEGIN {
+            return self.strip_lb(node_id.right(self));
+        }
+        self.strip_lb_inner(node_id)
+    }
+
+    fn strip_lb_inner(&mut self, node_id: NodeId) -> Result<NodeId, AlgebraError> {
         if !self.contains_look(node_id) {
             return Ok(node_id);
         }
         if self.get_kind(node_id) == Kind::Concat
             && self.get_kind(node_id.left(self)) == Kind::Lookbehind
         {
-            return self.strip_lb(node_id.right(self));
+            return self.strip_lb_inner(node_id.right(self));
+        }
+        if self.get_kind(node_id) == Kind::Inter {
+            let left = self.strip_lb_inner(node_id.left(self))?;
+            let right = self.strip_lb_inner(node_id.right(self))?;
+            return Ok(self.mk_inter(left, right));
+        }
+        if self.get_kind(node_id) == Kind::Union {
+            let left = self.strip_lb_inner(node_id.left(self))?;
+            let right = self.strip_lb_inner(node_id.right(self))?;
+            return Ok(self.mk_union(left, right));
         }
         match self.get_kind(node_id) {
             Kind::Lookbehind | Kind::Lookahead => Err(AlgebraError::UnsupportedPattern),

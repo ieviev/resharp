@@ -1,1 +1,3 @@
 target/
+data/corpus/
+data/fuzz/
