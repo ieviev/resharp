@@ -113,3 +113,129 @@ name = "algebra_bounded_repeat_lookahead"
 pattern = '[ab]{2,4}&(?=.*c).*'
 input = "abc"
 matches = [[0, 2]]
+
+[[test]]
+name = "compl_in_lookaround_err_la"
+pattern = '~((?=a).*)'
+expect_error = true
+input = "x"
+
+[[test]]
+name = "compl_in_lookaround_err_lb"
+pattern = '~((?<=a).*)'
+expect_error = true
+input = "x"
+
+[[test]]
+name = "inter_lookbehind_word"
+pattern = '(?<=a)\w+&.*c'
+input = "xabcx"
+matches = [[2, 4]]
+
+[[test]]
+name = "inter_lookbehind_digit"
+pattern = '\d+&(?<=x)\d+'
+input = "x123y"
+matches = [[1, 4]]
+
+[[test]]
+name = "inter_lookbehind_space"
+pattern = '(?<=\s)\w+&[a-z]+'
+input = " hello "
+matches = [[1, 6]]
+
+[[test]]
+name = "inter_lookahead_word_z"
+pattern = '\w+&(?=\w*z)\w+'
+input = "abcz"
+matches = [[0, 4]]
+
+[[test]]
+name = "inter_lookahead_word_z_no_match"
+pattern = '\w+&(?=\w*z)\w+'
+input = "abcd"
+matches = []
+
+[[test]]
+name = "inter_lookahead_bang"
+pattern = '.+&(?=.*!).+'
+input = "hello!"
+matches = [[0, 6]]
+
+[[test]]
+name = "inter_lookahead_bang_no_match"
+pattern = '.+&(?=.*!).+'
+input = "hello"
+matches = []
+
+[[test]]
+name = "compl_inter_no_x"
+pattern = '~(.*x.*)&[a-z]+'
+input = "abc"
+matches = [[0, 3]]
+
+[[test]]
+name = "compl_inter_has_x"
+pattern = '~(.*x.*)&[a-z]+'
+input = "axc"
+matches = [[0, 1], [2, 3]]
+
+[[test]]
+name = "inter_compl_no_digit"
+pattern = '\w+&~(.*\d.*)'
+input = "hello"
+matches = [[0, 5]]
+
+[[test]]
+name = "inter_compl_has_digit"
+pattern = '\w+&~(.*\d.*)'
+input = "he11o"
+matches = [[0, 2], [4, 5]]
+
+[[test]]
+name = "double_complement"
+pattern = '~(~(abc))'
+input = "xabcx"
+matches = [[1, 4]]
+
+[[test]]
+name = "inter_compl_lookahead_no_y"
+pattern = '(?=.*z).*&~(.*y.*)'
+input = "axz"
+matches = [[0, 3]]
+
+[[test]]
+name = "lb_la_inter_compl_match"
+pattern = '(?<=\().*(?=\))&~(.*,.*)'
+input = "(hello)"
+matches = [[1, 6]]
+
+[[test]]
+name = "lb_la_inter_compl_no_match"
+pattern = '(?<=\().*(?=\))&~(.*,.*)'
+input = "(a,b)"
+matches = []
+
+[[test]]
+name = "bounded_inter_lookahead_5"
+pattern = '[a-z]{3,5}&(?=.*x).*'
+input = "abxyz"
+matches = [[0, 5]]
+
+[[test]]
+name = "bounded_inter_lookahead_no_x"
+pattern = '[a-z]{3,5}&(?=.*x).*'
+input = "abcde"
+matches = []
+
+[[test]]
+name = "la_compl_has_y"
+pattern = '(?=.*z)~(.*y.*)'
+input = "ayz"
+matches = [[0, 1], [2, 3]]
+
+[[test]]
+name = "la_compl_no_y"
+pattern = '(?=.*z)~(.*y.*)'
+input = "axz"
+matches = [[0, 3]]

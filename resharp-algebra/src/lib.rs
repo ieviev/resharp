@@ -1891,6 +1891,9 @@ impl RegexBuilder {
                 self.mk_star(body)
             }
             Kind::Compl => {
+                if self.contains_look(node_id.left(self)) {
+                    return Err(AlgebraError::UnsupportedPattern);
+                }
                 let body = self.reverse(node_id.left(self))?;
                 self.mk_compl(body)
             }
@@ -2025,7 +2028,12 @@ impl RegexBuilder {
             let la_tail = self.get_lookahead_tail(head);
             let new_la_tail = self.mk_concat(la_tail.missing_to_eps(), tail);
             if new_la_tail.is_center_nullable(self) {
-                return None;
+                let non_null_tail = self.mk_non_nullable_safe(new_la_tail);
+                if non_null_tail == NodeId::BOT {
+                    return None;
+                }
+                let la_body = self.get_lookahead_inner(head);
+                return Some(self.mk_lookahead_internal(la_body, non_null_tail, u32::MAX));
             }
             let la_body = self.get_lookahead_inner(head);
             let la_rel = self.get_lookahead_rel(head);

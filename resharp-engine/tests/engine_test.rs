@@ -86,7 +86,9 @@ fn run_file(filename: &str) {
             }
             continue;
         }
-        let re = Regex::new(&tc.pattern).unwrap();
+        let re = Regex::new(&tc.pattern).unwrap_or_else(|e| panic!(
+            "file={}, name={:?}, pattern={:?}: compile error: {}", filename, tc.name, tc.pattern, e
+        ));
         if tc.anchored {
             let m = re.find_anchored(tc.input.as_bytes()).unwrap();
             let result: Vec<(usize, usize)> = m.iter().map(|m| (m.start, m.end)).collect();
