@@ -1852,7 +1852,10 @@ impl RegexBuilder {
             return Ok(self.mk_union(left, right));
         }
         match self.get_kind(node_id) {
-            Kind::Lookbehind | Kind::Lookahead => Err(AlgebraError::UnsupportedPattern),
+            Kind::Lookbehind => Err(AlgebraError::UnsupportedPattern),
+            Kind::Lookahead if self.get_lookahead_tail(node_id).is_missing() => {
+                Err(AlgebraError::UnsupportedPattern)
+            }
             _ => Ok(node_id),
         }
     }
@@ -2417,9 +2420,38 @@ impl RegexBuilder {
             if right.is_kind(self, Kind::Concat) {}
         }
 
-        if right.is_lookahead(&self) {
-            if left.is_never_nullable(&self) {
-                return Some(NodeId::BOT);
+        // hoist lookahead out of intersection:
+        //   L & (?=X)T  → (?=X)(L & T)                  [bare Lookahead]
+        //   L & ((?=X)·body) → (?=X)(L & body)           [Concat with leading Lookahead]
+        {
+            let l_is_la = left.is_lookahead(&self);
+            let r_is_la = right.is_lookahead(&self);
+            let l_is_cla = !l_is_la
+                && self.get_kind(left) == Kind::Concat
+                && self.get_kind(left.left(self)) == Kind::Lookahead;
+            let r_is_cla = !r_is_la
+                && self.get_kind(right) == Kind::Concat
+                && self.get_kind(right.left(self)) == Kind::Lookahead;
+            if l_is_la || r_is_la || l_is_cla || r_is_cla {
+                let (la_node, other, concat_body) = if r_is_la {
+                    (right, left, NodeId::MISSING)
+                } else if l_is_la {
+                    (left, right, NodeId::MISSING)
+                } else if r_is_cla {
+                    (right.left(self), left, right.right(self))
+                } else {
+                    (left.left(self), right, left.right(self))
+                };
+                let la_body = la_node.left(self);
+                let la_tail = self.get_lookahead_tail(la_node).missing_to_eps();
+                let inter_right = if concat_body.is_missing() {
+                    la_tail
+                } else {
+                    self.mk_concat(la_tail, concat_body)
+                };
+                let new_body = self.mk_inter(other, inter_right);
+                let la = self.mk_lookahead_internal(la_body, NodeId::MISSING, 0);
+                return Some(self.mk_concat(la, new_body));
             }
         }
 

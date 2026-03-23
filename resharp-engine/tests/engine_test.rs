@@ -147,6 +147,12 @@ fn edge_cases() {
     run_file("edge_cases.toml");
 }
 
+#[test]
+fn cross_feature() {
+    run_file("cross_feature.toml");
+}
+
+
 /// cross-validate resharp against regex crate
 fn check_vs_regex(pattern: &str, input: &[u8]) {
     let re = Regex::new(pattern).unwrap();
