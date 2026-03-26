@@ -21,15 +21,15 @@ diag = []
 precompile-tests = []
 
 [dependencies]
-resharp-algebra = { version = "0.3.1", path = "../resharp-algebra" }
-resharp-parser = { version = "0.3.1", path = "../resharp-parser" }
+resharp-algebra = { version = "0.3.8", path = "../resharp-algebra" }
+resharp-parser = { version = "0.3.8", path = "../resharp-parser" }
 serde = { version = "1", features = ["derive"] }
 bincode = "1"
 
 [dev-dependencies]
 resharp = { path = ".", features = ["diag"] }
-resharp-algebra = { version = "0.3.1", path = "../resharp-algebra" }
-resharp-parser = { version = "0.3.1", path = "../resharp-parser" }
+resharp-algebra = { version = "0.3.8", path = "../resharp-algebra" }
+resharp-parser = { version = "0.3.8", path = "../resharp-parser" }
 regex-syntax = "0.8.5"
 toml = "0.8"
 criterion = "0.5"
