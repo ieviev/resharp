@@ -222,11 +222,8 @@ fn is_capture_char(c: char, first: bool) -> bool {
 }
 
 pub fn is_meta_character(c: char) -> bool {
-    match c {
-        '\\' | '.' | '+' | '*' | '?' | '(' | ')' | '|' | '[' | ']' | '{' | '}' | '^' | '$'
-        | '#' | '&' | '-' | '~' | '_' => true,
-        _ => false,
-    }
+    matches!(c, '\\' | '.' | '+' | '*' | '?' | '(' | ')' | '|' | '[' | ']' | '{' | '}' | '^' | '$'
+        | '#' | '&' | '-' | '~' | '_')
 }
 
 /// escapes all resharp meta characters in `text`.
@@ -278,7 +275,7 @@ pub fn is_escapeable_character(c: char) -> bool {
 }
 
 fn is_hex(c: char) -> bool {
-    ('0' <= c && c <= '9') || ('a' <= c && c <= 'f') || ('A' <= c && c <= 'F')
+    c.is_ascii_digit() || ('a'..='f').contains(&c) || ('A'..='F').contains(&c)
 }
 
 impl<'s> ResharpParser<'s> {
@@ -805,7 +802,6 @@ impl<'s> ResharpParser<'s> {
         }
         // ignore groups for now
         else {
-            // dbg!(&group);
             prior_concat.asts.push(Ast::group(group));
         }
         Ok(prior_concat)
@@ -820,7 +816,6 @@ impl<'s> ResharpParser<'s> {
     #[inline(never)]
     fn pop_group_end(&self, mut concat: ast::Concat) -> Result<Ast> {
         concat.span.end = self.pos();
-        // dbg!(&concat);
         let mut stack = self.parser().stack_group.borrow_mut();
         let ast = match stack.pop() {
             None => Ok(concat.into_ast()),
@@ -833,7 +828,6 @@ impl<'s> ResharpParser<'s> {
                 int.span.end = self.pos();
                 int.asts.push(concat.into_ast());
 
-                // dbg!("end intersection2");
                 Ok(Ast::intersection(int))
             }
             Some(GroupState::Group { group, .. }) => {
@@ -1024,7 +1018,6 @@ impl<'s> ResharpParser<'s> {
                 }
             }
             hir::HirKind::Class(class) => {
-                // dbg!(class);
                 match class {
                     hir::Class::Unicode(class_unicode) => {
                         let ranges = class_unicode.ranges();
@@ -1084,14 +1077,9 @@ impl<'s> ResharpParser<'s> {
         orig_ast: &regex_syntax::ast::Ast,
         tb: &mut TB<'s>,
     ) -> Result<NodeId> {
-        // let unboxed = class_perl.deref();
-        // let orig_ast = regex_syntax::ast::Ast::class_perl(unboxed.clone());
         match self.translator.translate("", orig_ast) {
-            Err(_) => return Err(self.error(self.span(), ast::ErrorKind::UnicodeClassInvalid)),
-            Ok(hir) => {
-                let mapped = self.hir_to_node_id(&hir, tb);
-                mapped
-            }
+            Err(_) => Err(self.error(self.span(), ast::ErrorKind::UnicodeClassInvalid)),
+            Ok(hir) => self.hir_to_node_id(&hir, tb),
         }
     }
 
@@ -1104,11 +1092,11 @@ impl<'s> ResharpParser<'s> {
         match translator {
             Some(tr) => {
                 let hir = tr
-                    .translate("", &orig_ast)
+                    .translate("", orig_ast)
                     .map_err(|e| self.unsupported_error(e))?;
                 self.hir_to_node_id(&hir, tb)
             }
-            None => self.translate_ast_to_hir(&orig_ast, tb),
+            None => self.translate_ast_to_hir(orig_ast, tb),
         }
     }
 
@@ -1123,7 +1111,7 @@ impl<'s> ResharpParser<'s> {
             .iter()
             .find(|(c_neg, c_kind, _)| *c_kind == kind && *c_neg == negated);
         match w {
-            Some((_, _, value)) => return Ok(*value),
+            Some((_, _, value)) => Ok(*value),
             None => {
                 let translated = if self.global_unicode {
                     match kind {
@@ -1216,7 +1204,7 @@ impl<'s> ResharpParser<'s> {
         }
     }
 
-    fn edge_class_ast<'a>(ast: &'a Ast, left: bool) -> Option<&'a Ast> {
+    fn edge_class_ast(ast: &Ast, left: bool) -> Option<&Ast> {
         match ast {
             Ast::Literal(_) | Ast::ClassPerl(_) | Ast::ClassBracketed(_)
             | Ast::ClassUnicode(_) | Ast::Dot(_) | Ast::Top(_) => Some(ast),
@@ -1323,7 +1311,7 @@ impl<'s> ResharpParser<'s> {
             }
             // TODO: (Unknown, Unknown) is possible via make_full_word_boundary but
             // the full expansion (lb(\w)·la(\W) | lb(\W)·la(\w)) is too expensive
-            _ => return Err(self.error(self.span(), ast::ErrorKind::UnsupportedResharpRegex)),
+            _ => Err(self.error(self.span(), ast::ErrorKind::UnsupportedResharpRegex)),
         }
     }
 
@@ -1391,22 +1379,22 @@ impl<'s> ResharpParser<'s> {
                 ast::AssertionKind::StartText => Ok(NodeId::BEGIN),
                 ast::AssertionKind::EndText => Ok(NodeId::END),
                 ast::AssertionKind::WordBoundary => {
-                    return Err(
+                    Err(
                         self.error(self.span(), ast::ErrorKind::UnsupportedResharpRegex),
                     )
                 }
                 ast::AssertionKind::NotWordBoundary => {
-                    return Err(self.error(self.span(), ast::ErrorKind::UnsupportedResharpRegex))
+                    Err(self.error(self.span(), ast::ErrorKind::UnsupportedResharpRegex))
                 }
                 ast::AssertionKind::StartLine => {
                     let left = NodeId::BEGIN;
-                    let right = tb.mk_u8('\n' as u8);
+                    let right = tb.mk_u8(b'\n');
                     let union = tb.mk_union(left, right);
                     Ok(tb.mk_lookbehind(union, NodeId::MISSING))
                 }
                 ast::AssertionKind::EndLine => {
                     let left = NodeId::END;
-                    let right = tb.mk_u8('\n' as u8);
+                    let right = tb.mk_u8(b'\n');
                     let union = tb.mk_union(left, right);
                     Ok(tb.mk_lookahead(union, NodeId::MISSING, 0))
                 }
@@ -1424,34 +1412,31 @@ impl<'s> ResharpParser<'s> {
                     kind: c.kind.clone(),
                 };
                 if !c.negated {
-                    match &c.kind {
-                        regex_syntax::ast::ClassUnicodeKind::Named(s) => match s.as_str() {
-                            // \p{ascii} for ascii, \p{ascii}&\p{Letter} => [A-Za-z]
-                            "ascii" => return Ok(tb.mk_range_u8(0, 127)),
-                            // restricts matches to valid utf8, \p{utf8}*&~(a) => non a, but valid utf8
-                            "utf8" => {
-                                let ascii = tb.mk_range_u8(0, 127);
-                                let beta = tb.mk_range_u8(128, 0xBF);
-                                let c0 = tb.mk_range_u8(0xC0, 0xDF);
-                                let c0s = tb.mk_concats([c0, beta].into_iter());
-                                let e0 = tb.mk_range_u8(0xE0, 0xEF);
-                                let e0s = tb.mk_concats([e0, beta, beta].into_iter());
-                                let f0 = tb.mk_range_u8(0xF0, 0xF7);
-                                let f0s = tb.mk_concats([f0, beta, beta, beta].into_iter());
-                                let merged = tb.mk_unions([ascii, c0s, e0s, f0s].into_iter());
-                                return Ok(tb.mk_star(merged));
-                            }
-                            "hex" => {
-                                let nums = tb.mk_range_u8(b'0', b'9');
-                                let lets = tb.mk_range_u8(b'a', b'f');
-                                let lets2 = tb.mk_range_u8(b'A', b'F');
-                                let merged = tb.mk_unions([nums, lets, lets2].into_iter());
-                                return Ok(merged);
-                            }
-                            _ => {}
-                        },
+                    if let regex_syntax::ast::ClassUnicodeKind::Named(s) = &c.kind { match s.as_str() {
+                        // \p{ascii} for ascii, \p{ascii}&\p{Letter} => [A-Za-z]
+                        "ascii" => return Ok(tb.mk_range_u8(0, 127)),
+                        // restricts matches to valid utf8, \p{utf8}*&~(a) => non a, but valid utf8
+                        "utf8" => {
+                            let ascii = tb.mk_range_u8(0, 127);
+                            let beta = tb.mk_range_u8(128, 0xBF);
+                            let c0 = tb.mk_range_u8(0xC0, 0xDF);
+                            let c0s = tb.mk_concats([c0, beta].into_iter());
+                            let e0 = tb.mk_range_u8(0xE0, 0xEF);
+                            let e0s = tb.mk_concats([e0, beta, beta].into_iter());
+                            let f0 = tb.mk_range_u8(0xF0, 0xF7);
+                            let f0s = tb.mk_concats([f0, beta, beta, beta].into_iter());
+                            let merged = tb.mk_unions([ascii, c0s, e0s, f0s].into_iter());
+                            return Ok(tb.mk_star(merged));
+                        }
+                        "hex" => {
+                            let nums = tb.mk_range_u8(b'0', b'9');
+                            let lets = tb.mk_range_u8(b'a', b'f');
+                            let lets2 = tb.mk_range_u8(b'A', b'F');
+                            let merged = tb.mk_unions([nums, lets, lets2].into_iter());
+                            return Ok(merged);
+                        }
                         _ => {}
-                    };
+                    } };
                 }
 
                 let orig_ast = regex_syntax::ast::Ast::class_unicode(tmp);
@@ -1641,9 +1626,7 @@ impl<'s> ResharpParser<'s> {
             }
         }
         let ast = self.pop_group_end(concat)?;
-        // dbg!(&ast);
-        let node_id = self.ast_to_node_id(&ast, &mut None, tb);
-        node_id
+        self.ast_to_node_id(&ast, &mut None, tb)
     }
 
     #[inline(never)]
@@ -2111,10 +2094,7 @@ impl<'s> ResharpParser<'s> {
     ) -> Result<Option<ast::AssertionKind>> {
         assert_eq!(self.char(), '{');
 
-        let is_valid_char = |c| match c {
-            'A'..='Z' | 'a'..='z' | '-' => true,
-            _ => false,
-        };
+        let is_valid_char = |c| matches!(c, 'A'..='Z' | 'a'..='z' | '-');
         let start = self.pos();
         if !self.bump_and_bump_space() {
             return Err(self.error(
@@ -2297,7 +2277,7 @@ impl<'s> ResharpParser<'s> {
         if digits.is_empty() {
             return Err(self.error(span, ast::ErrorKind::DecimalEmpty));
         }
-        match u32::from_str_radix(digits, 10).ok() {
+        match digits.parse::<u32>().ok() {
             Some(n) => Ok(n),
             None => Err(self.error(span, ast::ErrorKind::DecimalInvalid)),
         }

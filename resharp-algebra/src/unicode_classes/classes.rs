@@ -89,8 +89,7 @@ let n84 = b.mk_union(n12, n83);
 let n85 = b.mk_union(n9, n84);
 let n86 = b.mk_union(n6, n85);
 let n87 = b.mk_union(n3, n86);
-let n88 = b.mk_union(n0, n87);
-n88
+b.mk_union(n0, n87)
 }
 
 pub fn build_digit_class(b: &mut RegexBuilder) -> NodeId {
@@ -106,8 +105,7 @@ let n8 = b.mk_range_u8(0x80, 0x89);
 let n9 = b.mk_concat(n7, n8);
 let n10 = b.mk_union(n6, n9);
 let n11 = b.mk_union(n3, n10);
-let n12 = b.mk_union(n0, n11);
-n12
+b.mk_union(n0, n11)
 }
 
 pub fn build_space_class(b: &mut RegexBuilder) -> NodeId {
@@ -115,8 +113,7 @@ let n0 = b.mk_ranges_u8(&[(0x09, 0x0D), (0x20, 0x20)]);
 let n1 = b.mk_range_u8(0xC2, 0xC2);
 let n2 = b.mk_ranges_u8(&[(0x85, 0x85), (0xA0, 0xA0)]);
 let n3 = b.mk_concat(n1, n2);
-let n4 = b.mk_union(n0, n3);
-n4
+b.mk_union(n0, n3)
 }
 
 

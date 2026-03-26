@@ -203,7 +203,7 @@ fn collect_rev_intersection_abc() {
 #[test]
 fn prefix_dotdot_g() {
     let p = prefix_pp("..g");
-    assert!(p.len() >= 1, "expected at least 1 prefix position");
+    assert!(!p.is_empty(), "expected at least 1 prefix position");
     assert_eq!(p[0], "g");
 }
 

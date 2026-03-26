@@ -583,10 +583,8 @@ fn collect_rev_readme_lookahead_scaling() {
 
 #[test]
 fn collect_rev_lookahead_simple() {
-    // 2 matches, ideal=2, BUG: 3 nulls [4, 1, 1] (dup at 1)
     let nulls = rev_nulls(r"a(?=b)", b"_ab_ab_");
-    eprintln!("a(?=b): {} nulls {:?}", nulls.len(), nulls);
-    assert!(nulls.len() <= 2);
+    assert_eq!(nulls.len(), 2);
 }
 
 #[test]
@@ -1583,17 +1581,33 @@ fn hardened_edge_cases() {
 }
 
 #[test]
-fn hardened_rejects_lookaround() {
-    let s = || EngineOptions::default().hardened(true);
-    // lookaround patterns that survive algebra simplification are rejected
-    assert!(Regex::with_options(r".*(?=aaa)", s()).is_err());
-    assert!(Regex::with_options(r"(?<=__).*", s()).is_err());
-    assert!(Regex::with_options(r"foo(?!bar).*", s()).is_err());
-    assert!(Regex::with_options(r".*(?<!bar)foo", s()).is_err());
-    // trivially simplified lookarounds (e.g. (?=foo)bar → BOT) are fine
-    assert!(Regex::with_options(r"(?=foo)bar", s()).is_ok());
-    // non-lookaround patterns compile fine
-    assert!(Regex::with_options(r"foo|bar", s()).is_ok());
+fn hardened_lookaround() {
+    run_file_hardened("lookaround.toml");
+}
+
+#[test]
+fn hardened_boolean() {
+    run_file_hardened("boolean.toml");
+}
+
+#[test]
+fn hardened_cross_feature() {
+    run_file_hardened("cross_feature.toml");
+}
+
+#[test]
+fn hardened_paragraph() {
+    run_file_hardened("paragraph.toml");
+}
+
+#[test]
+fn hardened_cloudflare_redos() {
+    run_file_hardened("cloudflare_redos.toml");
+}
+
+#[test]
+fn hardened_find_anchored() {
+    run_file_hardened("find_anchored.toml");
 }
 
 #[test]
@@ -1775,3 +1789,68 @@ fn fwd_prefix_search_long_prefix_no_panic() {
     assert_eq!(r, vec![(0, 20)]);
 }
 
+#[test]
+fn hardened_nullable_empty_after_dedup() {
+    let cases: Vec<(&str, &str)> = vec![
+        (r".*(?=aaa)", "baaa"),
+        (r".*(?=b_)", "_ab_ab_"),
+        (r"a*", "bab"),
+        (r"a*", "aab"),
+        (r"[a-z]*", "1a2"),
+        (r"_*", "ab"),
+    ];
+    for (pattern, input) in &cases {
+        let re_normal = Regex::new(pattern).unwrap();
+        let normal: Vec<(usize, usize)> = re_normal
+            .find_all(input.as_bytes())
+            .unwrap()
+            .iter()
+            .map(|m| (m.start, m.end))
+            .collect();
+
+        let opts = EngineOptions::default().hardened(true);
+        let re_h = Regex::with_options(pattern, opts).unwrap();
+        let hardened: Vec<(usize, usize)> = re_h
+            .find_all(input.as_bytes())
+            .unwrap()
+            .iter()
+            .map(|m| (m.start, m.end))
+            .collect();
+        assert_eq!(hardened, normal, "hardened mismatch: pattern={:?} input={:?}\n  normal:   {:?}\n  hardened: {:?}", pattern, input, normal, hardened);
+    }
+}
+
+#[test]
+fn hardened_cross_validate_all_toml() {
+    let files = [
+        "basic.toml", "anchors.toml", "semantics.toml", "date_pattern.toml",
+        "edge_cases.toml", "lookaround.toml", "boolean.toml", "cross_feature.toml",
+        "paragraph.toml", "cloudflare_redos.toml", "find_anchored.toml", "accel_skip.toml",
+    ];
+    let mut tested = 0;
+    let mut activated = 0;
+    for file in &files {
+        let tests = load_tests(file);
+        for tc in &tests {
+            if tc.ignore || tc.expect_error || tc.anchored { continue; }
+            let opts = EngineOptions::default().hardened(true);
+            let re = match Regex::with_options(&tc.pattern, opts) {
+                Ok(re) => re,
+                Err(_) => continue,
+            };
+            tested += 1;
+            if re.is_hardened() {
+                activated += 1;
+            }
+            let matches = re.find_all(tc.input.as_bytes()).unwrap();
+            let result: Vec<(usize, usize)> = matches.iter().map(|m| (m.start, m.end)).collect();
+            assert_eq!(
+                result, tc.matches,
+                "HARDENED-XVAL file={}, name={:?}, pattern={:?}, input={:?}, is_hardened={}",
+                file, tc.name, tc.pattern, tc.input, re.is_hardened()
+            );
+        }
+    }
+    eprintln!("hardened_cross_validate_all_toml: {tested} tested, {activated} activated hardened mode");
+    assert!(activated >= 10, "expected at least 10 patterns to activate hardened, got {activated}");
+}

@@ -2,7 +2,7 @@ use resharp::Regex;
 use std::cell::RefCell;
 use std::slice;
 
-thread_local!(static LAST_ERR: RefCell<String> = RefCell::new(String::new()));
+thread_local!(static LAST_ERR: RefCell<String> = const { RefCell::new(String::new()) });
 
 fn set_err(e: impl std::fmt::Display) {
     LAST_ERR.with(|s| *s.borrow_mut() = e.to_string());
@@ -18,6 +18,10 @@ unsafe fn bytes<'a>(ptr: *const u8, len: usize) -> &'a [u8] {
     }
 }
 
+/// Compile a regex pattern. Returns null on error (call `resharp_last_error`).
+///
+/// # Safety
+/// `pat` must be valid for reading `len` bytes.
 #[no_mangle]
 pub unsafe extern "C" fn resharp_compile(pat: *const u8, len: usize) -> *mut Regex {
     let Ok(s) = std::str::from_utf8(bytes(pat, len)) else {
@@ -33,6 +37,10 @@ pub unsafe extern "C" fn resharp_compile(pat: *const u8, len: usize) -> *mut Reg
     }
 }
 
+/// Free a compiled regex. No-op if `r` is null.
+///
+/// # Safety
+/// `r` must be null or a pointer returned by `resharp_compile` that has not been freed.
 #[no_mangle]
 pub unsafe extern "C" fn resharp_free(r: *mut Regex) {
     if !r.is_null() {
@@ -40,6 +48,10 @@ pub unsafe extern "C" fn resharp_free(r: *mut Regex) {
     }
 }
 
+/// Returns 1 if `input` matches, 0 if not, -1 on error.
+///
+/// # Safety
+/// `r` must be a live pointer from `resharp_compile`. `input` must be valid for `len` bytes.
 #[no_mangle]
 pub unsafe extern "C" fn resharp_is_match(r: *const Regex, input: *const u8, len: usize) -> i32 {
     match (*r).is_match(bytes(input, len)) {
@@ -51,6 +63,12 @@ pub unsafe extern "C" fn resharp_is_match(r: *const Regex, input: *const u8, len
     }
 }
 
+/// Find all matches. Writes `(start, end)` pairs into `out` (max `cap/2` matches).
+/// Returns total match count (may exceed `cap/2`), or -1 on error.
+///
+/// # Safety
+/// `r` must be a live pointer from `resharp_compile`. `input` must be valid for `len` bytes.
+/// `out` must be valid for writing `cap` `u32` values.
 #[no_mangle]
 pub unsafe extern "C" fn resharp_find_all(
     r: *const Regex,
@@ -77,6 +95,12 @@ pub unsafe extern "C" fn resharp_find_all(
     }
 }
 
+/// Find an anchored match at position 0. Writes `(start, end)` into `out`.
+/// Returns 1 if found, 0 if not, -1 on error.
+///
+/// # Safety
+/// `r` must be a live pointer from `resharp_compile`. `input` must be valid for `len` bytes.
+/// `out` must be valid for writing 2 `u32` values.
 #[no_mangle]
 pub unsafe extern "C" fn resharp_find_anchored(
     r: *const Regex,
@@ -98,6 +122,11 @@ pub unsafe extern "C" fn resharp_find_anchored(
     }
 }
 
+/// Copy the last error message into `buf`. Returns the full error length
+/// (may exceed `cap`; not null-terminated).
+///
+/// # Safety
+/// `buf` must be valid for writing `cap` bytes.
 #[no_mangle]
 pub unsafe extern "C" fn resharp_last_error(buf: *mut u8, cap: usize) -> usize {
     LAST_ERR.with(|s| {

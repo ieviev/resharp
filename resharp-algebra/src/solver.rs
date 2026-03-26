@@ -128,6 +128,12 @@ pub struct Solver {
     pub array: Vec<TSet>,
 }
 
+impl Default for Solver {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Solver {
     pub fn new() -> Solver {
         let mut inst = Self {
@@ -232,7 +238,7 @@ impl Solver {
             }
         };
 
-        if ranges.len() == 0 {
+        if ranges.is_empty() {
             return "\u{22a5}".to_owned();
         }
         if ranges.len() == 1 {
@@ -240,27 +246,21 @@ impl Solver {
             if s == e {
                 return Self::pp_byte(*s);
             } else {
-                return format!(
-                    "{}",
-                    ranges
+                return ranges
                         .iter()
                         .map(|(s, e)| display_range(*s, *e))
                         .collect::<Vec<_>>()
-                        .join("")
-                );
+                        .join("").to_string();
             }
         }
         if ranges.len() > 20 {
             return "\u{03c6}".to_owned();
         }
-        return format!(
-            "{}",
-            ranges
+        ranges
                 .iter()
                 .map(|(s, e)| display_range(*s, *e))
                 .collect::<Vec<_>>()
-                .join("")
-        );
+                .join("").to_string()
     }
 
     pub fn pp_first(&self, tset: &TSet) -> char {
@@ -312,7 +312,7 @@ impl Solver {
                 }
             }
         }
-        return 0;
+        0
     }
 
     pub fn pp(&self, tset: TSetId) -> String {
@@ -335,7 +335,7 @@ impl Solver {
             let content = Self::pp_content(&not_ranges);
             return format!("[^{}]", content);
         }
-        if ranges.len() == 0 {
+        if ranges.is_empty() {
             return "\u{22a5}".to_owned();
         }
         if ranges.len() == 1 {
@@ -348,7 +348,7 @@ impl Solver {
             }
         }
         let content = Self::pp_content(&ranges);
-        return format!("[{}]", content);
+        format!("[{}]", content)
     }
 }
 
@@ -438,7 +438,7 @@ impl Solver {
 
     pub fn u8_to_set_id(&mut self, byte: u8) -> TSetId {
         let mut result = TSet::splat(u64::MIN);
-        let nthbit = 1u64 << byte % 64;
+        let nthbit = 1u64 << (byte % 64);
         match byte {
             0..=63 => {
                 result[0] = nthbit;
@@ -459,7 +459,7 @@ impl Solver {
     pub fn range_to_set_id(&mut self, start: u8, end: u8) -> TSetId {
         let mut result = TSet::splat(u64::MIN);
         for byte in start..=end {
-            let nthbit = 1u64 << byte % 64;
+            let nthbit = 1u64 << (byte % 64);
             match byte {
                 0..=63 => {
                     result[0] |= nthbit;
@@ -515,7 +515,7 @@ impl Solver {
 
     pub fn u8_to_set(byte: u8) -> TSet {
         let mut result = TSet::splat(u64::MIN);
-        let nthbit = 1u64 << byte % 64;
+        let nthbit = 1u64 << (byte % 64);
         match byte {
             0..=63 => {
                 result[0] = nthbit;
@@ -536,7 +536,7 @@ impl Solver {
     pub fn range_to_set(start: u8, end: u8) -> TSet {
         let mut result = TSet::splat(u64::MIN);
         for byte in start..=end {
-            let nthbit = 1u64 << byte % 64;
+            let nthbit = 1u64 << (byte % 64);
             match byte {
                 0..=63 => {
                     result[0] |= nthbit;

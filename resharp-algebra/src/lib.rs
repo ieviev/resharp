@@ -109,7 +109,7 @@ impl MetaFlags {
 
     #[inline]
     pub(crate) fn nullability(self) -> Nullability {
-        Nullability(self.0 as u8 & Self::NULL_MASK as u8)
+        Nullability(self.0 & Self::NULL_MASK)
     }
 
     #[inline]
@@ -188,14 +188,12 @@ mod helpers {
 
 impl MetadataBuilder {
     fn new() -> MetadataBuilder {
-        let mut arr = Vec::new();
-        arr.push(Metadata {
-            flags: MetaFlags::ZERO,
-            nulls: NullsId::EMPTY,
-        });
         Self {
             index: FxHashMap::default(),
-            array: arr,
+            array: vec![Metadata {
+                flags: MetaFlags::ZERO,
+                nulls: NullsId::EMPTY,
+            }],
             solver: Solver::new(),
             num_created: 0,
             nb: NullsBuilder::new(),
@@ -463,11 +461,10 @@ impl NodeId {
         if b.get_kind(self) == Kind::Concat {
             let left = self.left(b);
             let right = self.right(b);
-            if left.is_kind(b, Kind::Compl) {
-                if left.left(b) == NodeId::TOPPLUS {
+            if left.is_kind(b, Kind::Compl)
+                && left.left(b) == NodeId::TOPPLUS {
                     return right == NodeId::END;
                 }
-            }
         }
         false
     }
@@ -524,6 +521,12 @@ impl NodeId {
         if continue_loop {
             f(b, curr);
         }
+    }
+}
+
+impl Default for RegexBuilder {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -635,8 +638,8 @@ impl RegexBuilder {
         // attempt left side flattening: ITE(.,ITE(a,ε,⊥),⊥) -> ITE(a,ε,⊥)
         match self.get_tregex(_clean_then) {
             TRegex::ITE(leftcond, _inner_then, leftg) if *leftg == _clean_else => {
-                let _cond_then = leftcond.clone();
-                let new_then = _inner_then.clone();
+                let _cond_then = *leftcond;
+                let new_then = *_inner_then;
                 let sand = self.solver().and_id(cond, _cond_then);
                 return self.mk_ite(sand, new_then, _clean_else);
             }
@@ -646,8 +649,8 @@ impl RegexBuilder {
         match self.get_tregex(_clean_else) {
             // ITE(a,ε,ITE(b,ε,⊥)) -> ITE([ab],ε,⊥)
             TRegex::ITE(_c2, _t2, _e2) if *_t2 == _clean_then => {
-                let e2clone = _e2.clone();
-                let new_cond = self.mb.solver.or_id(cond, _c2.clone());
+                let e2clone = *_e2;
+                let new_cond = self.mb.solver.or_id(cond, *_c2);
                 return self.mk_ite(new_cond, _clean_then, e2clone);
             }
             _ => {}
@@ -740,11 +743,11 @@ impl RegexBuilder {
                     if c1.0 > c2.0 {
                         let _then = self.mk_binary_result(_then1, right, apply)?;
                         let _else = self.mk_binary_result(_else1, right, apply)?;
-                        return Ok(self.mk_ite(c1, _then, _else));
+                        Ok(self.mk_ite(c1, _then, _else))
                     } else {
                         let _then = self.mk_binary_result(left, _then2, apply)?;
                         let _else = self.mk_binary_result(left, _else2, apply)?;
-                        return Ok(self.mk_ite(c2, _then, _else));
+                        Ok(self.mk_ite(c2, _then, _else))
                     }
                 }
             },
@@ -883,7 +886,7 @@ impl RegexBuilder {
             }
             Kind::Counted => {
                 let packed = self.get_extra(node_id);
-                let best = (packed >> 16) as u32;
+                let best = packed >> 16;
                 if best > 0 {
                     acc.insert(NullState::new(mask, pending_rel + best));
                 }
@@ -1087,7 +1090,7 @@ impl RegexBuilder {
                 cache.resize(node_id.0 as usize + 1, TRegexId::MISSING);
             }
         }
-        return None;
+        None
     }
 
     pub(crate) fn transition_term(&mut self, der: TRegexId, set: TSetId) -> NodeId {
@@ -1166,15 +1169,12 @@ impl RegexBuilder {
                         this.mk_binary(ldr, rightd, &mut (|b, left, right| b.mk_union(left, right)))
                     }
                 } else {
-                    let ldr = {
-                        let this = &mut *self;
-                        this.mk_binary(
-                            head_der,
-                            tail_leaf,
-                            &mut (|b, left, right| b.mk_concat(left, right)),
-                        )
-                    };
-                    ldr
+                    let this = &mut *self;
+                    this.mk_binary(
+                        head_der,
+                        tail_leaf,
+                        &mut (|b, left, right| b.mk_concat(left, right)),
+                    )
                 }
             }
             Kind::Star => {
@@ -1184,15 +1184,12 @@ impl RegexBuilder {
                     let left = node_id.left(self);
                     let r_decr_leaf = self.mk_leaf(node_id);
                     let r_der = self.der(left, mask)?;
-                    let result = {
-                        let this = &mut *self;
-                        this.mk_binary(
-                            r_der,
-                            r_decr_leaf,
-                            &mut (|b, left, right| b.mk_concat(left, right)),
-                        )
-                    };
-                    result
+                    let this = &mut *self;
+                    this.mk_binary(
+                        r_der,
+                        r_decr_leaf,
+                        &mut (|b, left, right| b.mk_concat(left, right)),
+                    )
                 }
             }
             Kind::Lookbehind => {
@@ -1340,7 +1337,7 @@ impl RegexBuilder {
             }
             Kind::Begin | Kind::End => TRegexId::BOT,
             Kind::Pred => {
-                let psi = node_id.pred_tset(&self);
+                let psi = node_id.pred_tset(self);
                 if psi == TSetId::EMPTY {
                     TRegexId::BOT
                 } else {
@@ -1427,9 +1424,7 @@ impl RegexBuilder {
                         flags: self.mb.flags_inter(m1, m2),
                         nulls,
                     };
-                    let new_id = self.mb.get_meta_id(new_meta);
-
-                    new_id
+                    self.mb.get_meta_id(new_meta)
                 };
                 self.init_metadata(node_id, meta_id);
             }
@@ -1444,8 +1439,7 @@ impl RegexBuilder {
                         flags: self.mb.flags_union(m1, m2),
                         nulls,
                     };
-                    let new_id = self.mb.get_meta_id(new_meta);
-                    new_id
+                    self.mb.get_meta_id(new_meta)
                 };
                 self.init_metadata(node_id, meta_id);
             }
@@ -1465,7 +1459,7 @@ impl RegexBuilder {
 
                 let new_id = self.mb.get_meta_id(Metadata {
                     flags,
-                    nulls: nulls,
+                    nulls,
                 });
                 self.init_metadata(node_id, new_id);
             }
@@ -1476,7 +1470,7 @@ impl RegexBuilder {
                     flags: self
                         .mb
                         .flags_star(self.get_node_meta_id(inst.left), inst.left),
-                    nulls: nulls,
+                    nulls,
                 });
                 self.init_metadata(node_id, meta_id);
             }
@@ -1484,7 +1478,7 @@ impl RegexBuilder {
                 let nulls = self.mb.nb.not_id(self.get_nulls_id(inst.left));
                 let meta_id = self.mb.get_meta_id(Metadata {
                     flags: self.mb.flags_compl(self.get_node_meta_id(inst.left)),
-                    nulls: nulls,
+                    nulls,
                 });
                 self.init_metadata(node_id, meta_id);
             }
@@ -1504,7 +1498,7 @@ impl RegexBuilder {
                         null,
                         contains_flags.or(MetaFlags::CONTAINS_LOOKAROUND),
                     ),
-                    nulls: nulls,
+                    nulls,
                 });
                 self.init_metadata(node_id, meta_id);
             }
@@ -1530,12 +1524,12 @@ impl RegexBuilder {
                         null,
                         contains_flags.or(MetaFlags::CONTAINS_LOOKAROUND),
                     ),
-                    nulls: nulls,
+                    nulls,
                 });
                 self.init_metadata(node_id, meta_id);
             }
             Kind::Counted => {
-                let best = (inst.extra >> 16) as u32;
+                let best = inst.extra >> 16;
                 let (null, nulls) = if best > 0 {
                     let mut ns = BTreeSet::new();
                     ns.insert(NullState::new(Nullability::CENTER, best));
@@ -1565,7 +1559,7 @@ impl RegexBuilder {
             Kind::Concat => {
                 let lhs = node_id.left(self);
                 let rhs = node_id.right(self);
-                if let Some(_) = lhs.is_pred_star(self) {
+                if lhs.is_pred_star(self).is_some() {
                     if let Some(opttail) = rhs.is_opt_v(self) {
                         if let Some(true) = self.subsumes(lhs, opttail) {
                             // return self.override_as(node_id, lhs);
@@ -1971,15 +1965,14 @@ impl RegexBuilder {
             return NodeId::BOT;
         }
 
-        if let Some(contains_body) = body.is_contains(&self) {
-            if contains_body.is_pred(&self) {
-                let pred = contains_body.pred_tset(&self);
+        if let Some(contains_body) = body.is_contains(self) {
+            if contains_body.is_pred(self) {
+                let pred = contains_body.pred_tset(self);
                 let notpred = self.mk_pred_not(pred);
                 let node = self.mk_star(notpred);
                 return self.init_as(key, node);
             } else if contains_body == NodeId::END {
                 return self.init_as(key, NodeId::BOT);
-            } else {
             }
         };
 
@@ -1987,8 +1980,7 @@ impl RegexBuilder {
             return self.get_node(body).left;
         }
 
-        let node_id = self.get_node_id(key);
-        node_id
+        self.get_node_id(key)
     }
 
     pub(crate) fn extract_nulls_mask(&mut self, body: NodeId, mask: Nullability) -> NodeId {
@@ -2017,12 +2009,8 @@ impl RegexBuilder {
 
         if self.get_kind(tail) == Kind::Lookbehind {
             let lbleft = self.mk_concat(head, self.get_lookbehind_prev(tail).missing_to_eps());
-            return match self
-                .mk_lookbehind_internal(self.get_lookbehind_inner(tail).missing_to_eps(), lbleft)
-            {
-                Ok(node) => Some(node),
-                Err(_) => None,
-            };
+            return self
+                .mk_lookbehind_internal(self.get_lookbehind_inner(tail).missing_to_eps(), lbleft).ok();
         }
         if self.get_kind(head) == Kind::Lookahead {
             let la_tail = self.get_lookahead_tail(head);
@@ -2047,31 +2035,27 @@ impl RegexBuilder {
             return Some(self.mk_lookahead_internal(la_body, new_la_tail, la_rel));
         }
 
-        if head.is_kind(self, Kind::End) {
-            if tail == NodeId::TS {
+        if head.is_kind(self, Kind::End)
+            && tail == NodeId::TS {
                 return Some(head);
             }
-        }
-        if head == NodeId::TS {
-            if tail == NodeId::END {
+        if head == NodeId::TS
+            && tail == NodeId::END {
                 return Some(head);
             }
-        }
 
-        if head == NodeId::TS {
-            if self.nullability(tail) == Nullability::ALWAYS {
+        if head == NodeId::TS
+            && self.nullability(tail) == Nullability::ALWAYS {
                 return Some(NodeId::TS);
             }
-        }
 
-        if tail == NodeId::TS {
-            if self.nullability(head) == Nullability::ALWAYS {
+        if tail == NodeId::TS
+            && self.nullability(head) == Nullability::ALWAYS {
                 return Some(NodeId::TS);
             }
-        }
 
-        if self.get_kind(tail) == Kind::Union {
-            if head == NodeId::TS {
+        if self.get_kind(tail) == Kind::Union
+            && head == NodeId::TS {
                 let mut should_distribute_top = false;
                 self.iter_unions(tail, |v| {
                     if v == NodeId::BEGIN || self.starts_with_ts(v) {
@@ -2091,10 +2075,9 @@ impl RegexBuilder {
                     return Some(new_union);
                 }
             }
-        }
 
-        if self.get_kind(head) == Kind::Union {
-            if head == NodeId::TS {
+        if self.get_kind(head) == Kind::Union
+            && head == NodeId::TS {
                 let mut should_distribute_top = false;
                 self.iter_unions(head, |v| {
                     if v == NodeId::END || self.starts_with_ts(v) {
@@ -2114,10 +2097,9 @@ impl RegexBuilder {
                     return Some(new_union);
                 }
             }
-        }
 
-        if self.get_kind(head) == Kind::Inter {
-            if tail == NodeId::TS {
+        if self.get_kind(head) == Kind::Inter
+            && tail == NodeId::TS {
                 let mut alltopstar = true;
                 iter_inter!(self, head, |v| {
                     alltopstar = self.ends_with_ts(v);
@@ -2126,7 +2108,6 @@ impl RegexBuilder {
                     return Some(head);
                 }
             }
-        }
 
         if head.is_star(self) && head == tail {
             return Some(head);
@@ -2149,27 +2130,24 @@ impl RegexBuilder {
             return Some(right);
         }
 
-        if self.get_kind(left) == Kind::Pred {
-            if self.get_kind(right) == Kind::Pred {
-                let l = left.pred_tset(&self);
-                let r = right.pred_tset(&self);
+        if self.get_kind(left) == Kind::Pred
+            && self.get_kind(right) == Kind::Pred {
+                let l = left.pred_tset(self);
+                let r = right.pred_tset(self);
                 let solver = self.solver();
                 let psi = solver.or_id(l, r);
                 let rewrite = self.mk_pred(psi);
                 return Some(rewrite);
             }
-        }
 
-        if left == NodeId::EPS {
-            if self.get_extra(left) == 0 {
-                if self.nullability(right) == Nullability::ALWAYS {
+        if left == NodeId::EPS
+            && self.get_extra(left) == 0
+                && self.nullability(right) == Nullability::ALWAYS {
                     return Some(right);
                 }
-            }
-        }
 
-        if self.get_kind(left) == Kind::Lookahead {
-            if self.get_kind(right) == Kind::Lookahead {
+        if self.get_kind(left) == Kind::Lookahead
+            && self.get_kind(right) == Kind::Lookahead {
                 let lb = left.left(self);
                 let lt = left.right(self);
                 let lrel = left.extra(self);
@@ -2178,27 +2156,22 @@ impl RegexBuilder {
                 let rt = right.right(self);
                 let rrel = right.extra(self);
 
-                if lrel == rrel {
-                    if lb == rb {}
-                    if lt.is_missing() {
-                        if rt.is_missing() {
+                if lrel == rrel
+                    
+                    && lt.is_missing()
+                        && rt.is_missing() {
                             let unioned = self.mk_union(lb, rb);
                             let node = self.mk_lookahead_internal(unioned, NodeId::MISSING, lrel);
                             return Some(node);
                         }
-                    }
-                }
             }
-        }
 
         if right.is_kind(self, Concat) {
-            if left == NodeId::END {
-                if right.left(self) == NodeId::END {
-                    if self.nullability(right).has(Nullability::END) {
+            if left == NodeId::END
+                && right.left(self) == NodeId::END
+                    && self.nullability(right).has(Nullability::END) {
                         return Some(right);
                     }
-                }
-            }
             // .*|.*a.* => .*(a.*|)
             if left == right.left(self) {
                 let rhs = self.mk_union(NodeId::EPS, right.right(self));
@@ -2242,21 +2215,19 @@ impl RegexBuilder {
                     }
                 }
             }
-            if self.get_kind(left) == Kind::Pred {
-                if left == right.left(self) {
+            if self.get_kind(left) == Kind::Pred
+                && left == right.left(self) {
                     let un = self.mk_opt(right.right(self));
                     let conc = self.mk_concat(left, un);
                     return Some(conc);
                 }
-            }
         }
 
-        if left == NodeId::EPS {
-            if right.is_plus(self) {
+        if left == NodeId::EPS
+            && right.is_plus(self) {
                 let result = self.mk_star(right.left(self));
                 return Some(result);
             }
-        }
 
         // e.g. (.*&X{19}_*&C) | (.*&X{20}_*&C) => (.*&X{19}_*&C)
         if self.flags == BuilderFlags::SUBSUME {
@@ -2405,26 +2376,24 @@ impl RegexBuilder {
             return Some(NodeId::BOT);
         }
 
-        if left.kind(&self) == Kind::Compl {
-            if right.kind(&self) == Kind::Compl {
+        if left.kind(self) == Kind::Compl
+            && right.kind(self) == Kind::Compl {
                 let bodies = self.mk_union(left.left(self), right.left(self));
                 return Some(self.mk_compl(bodies));
             }
-        }
 
         if left == NodeId::TOPPLUS {
-            if let Some(_) = right.is_pred_star(self) {
+            if right.is_pred_star(self).is_some() {
                 let newloop = self.mk_plus(right.left(self));
                 return Some(newloop);
             }
-            if right.is_never_nullable(&self) {
+            if right.is_never_nullable(self) {
                 return Some(right);
             }
-            if right.is_kind(self, Kind::Lookahead) {
-                if self.get_lookahead_tail(right).is_missing() {
+            if right.is_kind(self, Kind::Lookahead)
+                && self.get_lookahead_tail(right).is_missing() {
                     return Some(NodeId::BOT);
                 }
-            }
             if right.is_kind(self, Kind::Concat) {}
         }
 
@@ -2432,8 +2401,8 @@ impl RegexBuilder {
         //   L & (?=X)T  → (?=X)(L & T)                  [bare Lookahead]
         //   L & ((?=X)·body) → (?=X)(L & body)           [Concat with leading Lookahead]
         {
-            let l_is_la = left.is_lookahead(&self);
-            let r_is_la = right.is_lookahead(&self);
+            let l_is_la = left.is_lookahead(self);
+            let r_is_la = right.is_lookahead(self);
             let l_is_cla = !l_is_la
                 && self.get_kind(left) == Kind::Concat
                 && self.get_kind(left.left(self)) == Kind::Lookahead;
@@ -2471,16 +2440,15 @@ impl RegexBuilder {
             if self.get_kind(compl_body) == Kind::Concat {
                 let compl_head = compl_body.left(self);
                 // L & ~(R·_*) = BOT when L ⊂ R·_*
-                if compl_body.right(self) == NodeId::TS {
-                    if compl_head == left {
+                if compl_body.right(self) == NodeId::TS
+                    && compl_head == left {
                         return Some(NodeId::BOT);
                     }
-                }
             }
         }
 
-        if let Some(pleft) = left.is_pred_star(&self) {
-            if let Some(pright) = right.is_pred_star(&self) {
+        if let Some(pleft) = left.is_pred_star(self) {
+            if let Some(pright) = right.is_pred_star(self) {
                 let merged = self.mk_inter(pleft, pright);
                 return Some(self.mk_star(merged));
             }
@@ -2549,7 +2517,7 @@ impl RegexBuilder {
             }
         }
 
-        return None;
+        None
     }
 
     fn attempt_rw_unions(&mut self, left: NodeId, right_union: NodeId) -> Option<NodeId> {
@@ -2586,7 +2554,7 @@ impl RegexBuilder {
             return Some(new_union);
         };
 
-        return None;
+        None
     }
 
     pub fn mk_concat(&mut self, head: NodeId, tail: NodeId) -> NodeId {
@@ -2636,11 +2604,10 @@ impl RegexBuilder {
             return NodeId::TS;
         }
 
-        if self.get_kind(head) == Kind::End {
-            if !self.is_nullable(tail, Nullability::END) {
+        if self.get_kind(head) == Kind::End
+            && !self.is_nullable(tail, Nullability::END) {
                 return NodeId::BOT;
             }
-        }
 
         if self.get_kind(tail) == Kind::Concat {
             if let Some(rw) = self.attempt_rw_concat_2(head, tail.left(self)) {
@@ -2649,14 +2616,11 @@ impl RegexBuilder {
             }
         }
 
-        match self.attempt_rw_concat_2(head, tail) {
-            Some(new) => return self.init_as(key, new),
-            None => {}
-        }
+        if let Some(new) = self.attempt_rw_concat_2(head, tail) { return self.init_as(key, new) }
 
         match (self.get_kind(head), self.get_kind(tail)) {
             // merge stars
-            (Kind::Star, Kind::Concat) if head.is_star(&self) => {
+            (Kind::Star, Kind::Concat) if head.is_star(self) => {
                 let rl = tail.left(self);
                 if head == rl {
                     return self.init_as(key, tail);
@@ -2667,18 +2631,14 @@ impl RegexBuilder {
                 let curr = head;
                 let h2 = self.mk_concat(curr, tail.left(self));
                 let tr = tail.right(self);
-                match self.attempt_rw_concat_2(h2, tr) {
-                    Some(new) => {
-                        return self.init_as(key, new);
-                    }
-                    None => {}
+                if let Some(new) = self.attempt_rw_concat_2(h2, tr) {
+                    return self.init_as(key, new);
                 }
             }
-            _ if head == NodeId::TS => {
-                if self.starts_with_ts(tail) {
+            _ if head == NodeId::TS
+                && self.starts_with_ts(tail) => {
                     return self.init_as(key, tail);
                 }
-            }
             _ => {}
         }
 
@@ -2725,7 +2685,7 @@ impl RegexBuilder {
             extra: u32::MAX,
         };
         match self.key_is_created(&key) {
-            Some(id) => return Ok(*id),
+            Some(id) => Ok(*id),
             None => {
                 if lb_prev == NodeId::TS {
                     return Ok(self.mk_concat(lb_prev, lb_body));
@@ -2786,11 +2746,10 @@ impl RegexBuilder {
             return NodeId::BOT;
         }
 
-        if la_body == NodeId::EPS && la_tail.is_missing() {
-            if rel == 0 {
+        if la_body == NodeId::EPS && la_tail.is_missing()
+            && rel == 0 {
                 return la_body;
             }
-        }
 
         if la_tail == NodeId::TS {
             if rel == 0 || rel == u32::MAX {
@@ -2812,7 +2771,7 @@ impl RegexBuilder {
             if la_tail != NodeId::MISSING {
                 match self.get_kind(la_tail) {
                     _ => {
-                        if la_body.is_compl_plus_end(&self) {
+                        if la_body.is_compl_plus_end(self) {
                             let minlen = self.get_min_length_only(la_tail);
                             if minlen >= 1 {
                                 return NodeId::BOT;
@@ -2851,24 +2810,21 @@ impl RegexBuilder {
         }
 
         if la_tail != NodeId::MISSING {
-            match (self.get_kind(la_body), self.get_kind(la_tail)) {
-                (Kind::Concat, Kind::Pred) => {
-                    let lpred = la_body.left(self);
-                    if self.get_kind(lpred) == Kind::Pred {
-                        let l = lpred.pred_tset(&self);
-                        let r = la_tail.pred_tset(&self);
-                        let psi_and = self.solver().and_id(l, r);
-                        let rewrite = self.mk_pred(psi_and);
-                        let new_rel = if rel == usize::MAX as u32 { 0 } else { rel + 1 };
-                        let new_right = self.mk_lookahead_internal(
-                            la_body.right(self),
-                            NodeId::MISSING,
-                            new_rel,
-                        );
-                        return self.mk_concat(rewrite, new_right);
-                    }
+            if let (Kind::Concat, Kind::Pred) = (self.get_kind(la_body), self.get_kind(la_tail)) {
+                let lpred = la_body.left(self);
+                if self.get_kind(lpred) == Kind::Pred {
+                    let l = lpred.pred_tset(self);
+                    let r = la_tail.pred_tset(self);
+                    let psi_and = self.solver().and_id(l, r);
+                    let rewrite = self.mk_pred(psi_and);
+                    let new_rel = if rel == usize::MAX as u32 { 0 } else { rel + 1 };
+                    let new_right = self.mk_lookahead_internal(
+                        la_body.right(self),
+                        NodeId::MISSING,
+                        new_rel,
+                    );
+                    return self.mk_concat(rewrite, new_right);
                 }
-                _ => {}
             }
         }
 
@@ -2929,7 +2885,7 @@ impl RegexBuilder {
     pub fn mk_neg_lookbehind(&mut self, body: NodeId) -> NodeId {
         match self.get_node(body).kind {
             Kind::Pred => {
-                let psi = body.pred_tset(&self);
+                let psi = body.pred_tset(self);
                 let negated = self.mk_pred_not(psi);
                 let union = self.mk_union(NodeId::BEGIN, negated);
                 // lb_prev is MISSING - cannot trigger UnsupportedPattern
@@ -2995,7 +2951,7 @@ impl RegexBuilder {
                 return self.init_as(key, newnode);
             }
             (_, Kind::Union) => {
-                let rleft = right.left(&self);
+                let rleft = right.left(self);
                 // if left_node id is smaller than rleft, just create a new union
                 if left > rleft {
                     self.iter_unions_b(left, &mut |b, v| {
@@ -3027,7 +2983,7 @@ impl RegexBuilder {
         self.init(key)
     }
 
-    pub(crate) fn mk_inter(&mut self, left_id: NodeId, right_id: NodeId) -> NodeId {
+    pub fn mk_inter(&mut self, left_id: NodeId, right_id: NodeId) -> NodeId {
         debug_assert!(left_id != NodeId::MISSING);
         debug_assert!(right_id != NodeId::MISSING);
         if left_id == right_id {
@@ -3204,16 +3160,16 @@ impl RegexBuilder {
         }
 
         match self.get_kind(node_id) {
-            Kind::End => return write!(s, r"\z"),
-            Kind::Begin => return write!(s, r"\A"),
+            Kind::End => write!(s, r"\z"),
+            Kind::Begin => write!(s, r"\A"),
             Kind::Pred => {
                 let psi = node_id.pred_tset(self);
                 if psi == TSetId::EMPTY {
-                    return write!(s, r"⊥");
+                    write!(s, r"⊥")
                 } else if psi == TSetId::FULL {
-                    return write!(s, r"_");
+                    write!(s, r"_")
                 } else {
-                    return write!(s, "{}", self.solver_ref().pp(psi));
+                    write!(s, "{}", self.solver_ref().pp(psi))
                 }
             }
             Kind::Inter => {
@@ -3266,7 +3222,7 @@ impl RegexBuilder {
                     let mut num = 1;
                     let mut right = right;
                     while right.is_concat(self) && right.left(self) == left {
-                        num = num + 1;
+                        num += 1;
                         right = right.right(self);
                     }
                     // (|X){n} followed by X{m} -> X{m,m+n}
@@ -3290,7 +3246,7 @@ impl RegexBuilder {
                     }
                     self.ppw(s, left)?;
                     if right == left {
-                        num = num + 1;
+                        num += 1;
                         return write!(s, "{{{}}}", num);
                     }
                     if num <= 3 && left.is_pred(self) {
@@ -3391,7 +3347,7 @@ impl RegexBuilder {
     }
 
     pub fn mk_u8(&mut self, char: u8) -> NodeId {
-        let set_id = self.solver().u8_to_set_id(char as u8);
+        let set_id = self.solver().u8_to_set_id(char);
         self.mk_pred(set_id)
     }
 
@@ -3448,7 +3404,7 @@ impl RegexBuilder {
     #[allow(dead_code)]
     pub(crate) fn mk_bytestring(&mut self, raw_str: &[u8]) -> NodeId {
         let mut result = NodeId::EPS;
-        for byte in raw_str.into_iter().rev() {
+        for byte in raw_str.iter().rev() {
             let node = self.mk_u8(*byte);
             result = self.mk_concat(node, result);
         }
@@ -3590,7 +3546,7 @@ impl RegexBuilder {
             return Some(node_id);
         }
         match self.get_kind(node_id) {
-            Kind::Pred | Kind::Begin | Kind::End => return Some(node_id),
+            Kind::Pred | Kind::Begin | Kind::End => Some(node_id),
             Kind::Concat => {
                 let left = node_id.left(self);
                 let right = node_id.right(self);
@@ -3717,8 +3673,7 @@ impl RegexBuilder {
         let node = if !self.contains_look(node) {
             node
         } else {
-            let elim = self.try_elim_lookarounds(node)?;
-            elim
+            self.try_elim_lookarounds(node)?
         };
         let isempty_flag = self.is_empty_lang_internal(node);
 
@@ -3776,17 +3731,17 @@ impl RegexBuilder {
                     stack.push(derivative);
 
                     let found_null = self.iter_find_stack(&mut stack, |node| {
-                        if visited.contains_key(&node) {
-                            false
-                        } else {
+                        if let std::collections::hash_map::Entry::Vacant(e) = visited.entry(node) {
                             found_node = node;
                             if !self.get_meta_flags(node).contains_inter() {
-                                return true;
+                                true
                             } else {
-                                visited.insert(node, outer);
+                                e.insert(outer);
                                 todo.push_front(node);
                                 self.any_nonbegin_nullable(node)
                             }
+                        } else {
+                            false
                         }
                     });
                     if found_null {

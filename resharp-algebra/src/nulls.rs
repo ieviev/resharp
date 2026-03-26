@@ -43,10 +43,10 @@ pub struct NullState {
 }
 impl NullState {
     pub fn new(mask: Nullability, rel: u32) -> NullState {
-        return NullState { mask, rel };
+        NullState { mask, rel }
     }
     pub fn new0(mask: Nullability) -> NullState {
-        return NullState { mask, rel: 0 };
+        NullState { mask, rel: 0 }
     }
 
     pub fn is_center_nullable(&self) -> bool {
@@ -66,15 +66,7 @@ impl Ord for NullState {
 }
 impl PartialOrd for NullState {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        match other.rel.partial_cmp(&self.rel) {
-            Some(core::cmp::Ordering::Equal) => {}
-            ord => return ord,
-        }
-        match self.mask.partial_cmp(&other.mask) {
-            Some(core::cmp::Ordering::Equal) => {}
-            ord => return ord,
-        }
-        Some(core::cmp::Ordering::Equal)
+        Some(self.cmp(other))
     }
 }
 
@@ -116,6 +108,12 @@ pub struct NullsBuilder {
     cache: FxHashMap<Nulls, NullsId>,
     created: FxHashMap<Key, NullsId>,
     pub array: Vec<Nulls>,
+}
+
+impl Default for NullsBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl NullsBuilder {
@@ -200,8 +198,7 @@ impl NullsBuilder {
         }
 
         let result = result
-            .into_iter()
-            .map(|v| v.clone())
+            .into_iter().cloned()
             .collect::<BTreeSet<_>>();
 
         let new_id = self.get_id(result);

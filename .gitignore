@@ -1,3 +1,4 @@
 target/
 data/corpus/
 data/fuzz/
+bench-cmp.sh
