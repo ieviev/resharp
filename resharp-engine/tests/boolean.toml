@@ -3,7 +3,6 @@ complement, intersection, and boolean combination tests.
 matches = [[start, end]] in utf8 bytes (half-open intervals).
 '''
 
-# -- complement --
 
 [[test]]
 name = "complement_no_double_digits"
@@ -53,7 +52,6 @@ pattern = 'asd~(_*nl_*)'
 input = "cvbcbcvasdasd nl adasd asdasd"
 matches = [[7, 15], [19, 29]]
 
-# -- intersection --
 
 [[test]]
 name = "intersection_four_chars"
@@ -109,7 +107,6 @@ pattern = ".*which.*&.*could.*&.*that.*&~(.*the.*)"
 input = "could only partly conceal the ravages which that long siege of storms had"
 matches = []
 
-# -- complement + intersection --
 
 [[test]]
 name = "intersection_subsumption"
@@ -129,7 +126,6 @@ pattern = '(a_*&(~(a.*)|.*b>))'
 input = "a_____a____________________b\n"
 matches = [[0, 29]]
 
-# -- multiline --
 
 [[test]]
 name = "multiline_paragraph_split"
@@ -143,7 +139,6 @@ pattern = "Pu"
 input = "[assembly: InternalsVisibleTo(\"Microsoft.Automata.Z3, PublicKey=\" +\n\n[assembly: InternalsVisibleTo(\"Experimentation, PublicKey=\" +"
 matches = [[54, 56], [117, 119]]
 
-# -- boolean with newlines --
 
 [[test]]
 name = "boolean_f_not_finn"
@@ -157,7 +152,6 @@ pattern = ".*Huck.*&~(.*F.*)"
 input = "The Adventures of Huckleberry Finn', published in 1885."
 matches = [[0, 30]]
 
-# -- lookbehind + intersection --
 
 [[test]]
 name = "lookbehind_intersection"

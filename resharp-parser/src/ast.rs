@@ -359,7 +359,6 @@ pub enum Ast {
     Alternation(Box<Alternation>),
     /// A concatenation of regular expressions.
     Concat(Box<Concat>),
-    // --------
     Intersection(Box<Intersection>),
     Complement(Box<Complement>),
     Lookaround(Box<Lookaround>),

@@ -4,7 +4,6 @@ body = _*&~(_*\n\n_*)&~(\n_*|_*\n) - no \n\n, no leading/trailing \n.
 matches = [[start, end]] in utf8 bytes (half-open intervals).
 '''
 
-# -- basic lookbehind/lookahead building blocks --
 
 [[test]]
 name = "lookbehind_A_star_lookahead_nn_single_line"
@@ -30,7 +29,6 @@ pattern = "(?<=\n\n)_*(?=\\z)"
 input = "ab\n\ncd"
 matches = [[4, 6]]
 
-# -- whole paragraph boundary --
 
 [[test]]
 name = "whole_para_single_line_paras"
@@ -62,7 +60,6 @@ pattern = "(?<=\\A|\n\n)(_*&~(_*\n\n_*)&~(\n_*|_*\n))(?=\n\n|\n\\z|\\z)"
 input = "ab\ncd\n\nef"
 matches = [[0, 5], [7, 9]]
 
-# -- intersection with content + paragraph boundary --
 
 [[test]]
 name = "para_contains_word"
@@ -82,7 +79,6 @@ pattern = "((_*cats_*)&(_*dogs_*))&((?<=\\A|\n\n)(_*&~(_*\n\n_*)&~(\n_*|_*\n))(?
 input = "cats only\n\ndogs only\n"
 matches = []
 
-# -- complement with paragraph boundary (the --not use case) --
 
 [[test]]
 name = "para_with_not"

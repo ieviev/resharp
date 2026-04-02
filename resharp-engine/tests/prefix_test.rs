@@ -1,28 +1,50 @@
 use resharp::{calc_potential_start, calc_prefix_sets, RegexBuilder};
+use std::path::Path;
 
-/// helper: parse pattern, reverse it, compute linear prefix sets, return pp'd sets.
-fn prefix_pp(pattern: &str) -> Vec<String> {
+fn prefix_rev(pattern: &str) -> String {
     let mut b = RegexBuilder::new();
     let node = resharp_parser::parse_ast(&mut b, pattern).unwrap();
     let rev = b.reverse(node).unwrap();
+
     let sets = calc_prefix_sets(&mut b, rev).unwrap();
-    sets.iter().map(|&set| b.solver_ref().pp(set)).collect()
-}
-
-/// helper: parse pattern, reverse it, BFS to first nullable, return pp'd sets joined by ";".
-fn potential_start_pp(pattern: &str) -> String {
-    let mut b = RegexBuilder::new();
-    let node = resharp_parser::parse_ast(&mut b, pattern).unwrap();
-    let rev = b.reverse(node).unwrap();
-    let sets = calc_potential_start(&mut b, rev, 16, 64).unwrap();
     sets.iter()
         .map(|&set| b.solver_ref().pp(set))
         .collect::<Vec<_>>()
         .join(";")
 }
 
-/// helper: forward BFS to first nullable, return pp'd sets joined by ";".
-fn fwd_potential_start_pp(pattern: &str) -> String {
+fn potential_rev(pattern: &str) -> String {
+    let mut b = RegexBuilder::new();
+    let node = resharp_parser::parse_ast(&mut b, pattern).unwrap();
+    let node = b.reverse(node).unwrap();
+    // println!("PRE {:?}", b.pp(node));
+    let node = b.prune_begin(node);
+    let node = b.strip_prefix_safe(node);
+    // println!("POST {:?}", b.pp(node));
+
+    let sets = calc_potential_start(&mut b, node, 16, 64).unwrap();
+    sets.iter()
+        .map(|&set| b.solver_ref().pp(set))
+        .collect::<Vec<_>>()
+        .join(";")
+}
+
+fn fwd_prefix_pp(pattern: &str) -> String {
+    let mut b = RegexBuilder::new();
+    let node = resharp_parser::parse_ast(&mut b, pattern).unwrap();
+    // println!("PRE {:?}", b.pp(node));
+    let node = b.prune_begin(node);
+    let node = b.strip_prefix_safe(node);
+    // println!("POST {:?}", b.pp(node));
+    let sets = calc_prefix_sets(&mut b, node).unwrap();
+
+    sets.iter()
+        .map(|&set| b.solver_ref().pp(set))
+        .collect::<Vec<_>>()
+        .join(";")
+}
+
+fn potential_fwd(pattern: &str) -> String {
     let mut b = RegexBuilder::new();
     let node = resharp_parser::parse_ast(&mut b, pattern).unwrap();
     let sets = calc_potential_start(&mut b, node, 16, 64).unwrap();
@@ -32,93 +54,74 @@ fn fwd_potential_start_pp(pattern: &str) -> String {
         .join(";")
 }
 
-#[test]
-fn prefix_twain() {
-    let p = prefix_pp("Twain");
-    assert_eq!(p, vec!["n", "i", "a", "w", "T"]);
+const KINDS: &[&str] = &["prefix_rev", "prefix_fwd", "potential_rev", "potential_fwd"];
+
+struct PrefixTestCase {
+    name: String,
+    pattern: String,
+    ignore: bool,
+    checks: Vec<(&'static str, String)>,
+}
+
+fn load_prefix_tests() -> Vec<PrefixTestCase> {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("prefix.toml");
+    let content = std::fs::read_to_string(&path).unwrap();
+    let table: toml::Value = content.parse().unwrap();
+    let tests = table["test"].as_array().unwrap();
+    tests
+        .iter()
+        .map(|t| PrefixTestCase {
+            name: t["name"].as_str().unwrap().to_string(),
+            pattern: t["pattern"].as_str().unwrap().to_string(),
+            ignore: t.get("ignore").and_then(|v| v.as_bool()).unwrap_or(false),
+            checks: KINDS
+                .iter()
+                .filter_map(|&kind| {
+                    t.get(kind)
+                        .and_then(|v| v.as_str())
+                        .map(|expected| (kind, expected.to_string()))
+                })
+                .collect(),
+        })
+        .collect()
 }
 
 #[test]
-fn prefix_intersection() {
-    let p = prefix_pp("_*A_*&_*B");
-    assert_eq!(p, vec!["B"]);
+fn test_prefix_toml() {
+    for tc in load_prefix_tests() {
+        if tc.ignore {
+            continue;
+        }
+        for (kind, expected) in &tc.checks {
+            let result = match *kind {
+                "prefix_rev" => prefix_rev(&tc.pattern),
+                "prefix_fwd" => fwd_prefix_pp(&tc.pattern),
+                "potential_rev" => potential_rev(&tc.pattern),
+                "potential_fwd" => potential_fwd(&tc.pattern),
+                k => panic!("unknown prefix test kind: {}", k),
+            };
+            assert_eq!(
+                result, *expected,
+                "prefix test failed: name={}, kind={}",
+                tc.name, kind
+            );
+        }
+    }
 }
 
-#[test]
-fn prefix_huck() {
-    let p = prefix_pp("_*Huck_*");
-    assert_eq!(p, vec!["k", "c", "u", "H"]);
-}
-
-// -- prefix for a simple literal
-#[test]
-fn prefix_hello() {
-    let p = prefix_pp("hello");
-    assert_eq!(p, vec!["o", "l", "l", "e", "h"]);
-}
-
-#[test]
-fn potential_start_alternation() {
-    assert_eq!(
-        potential_start_pp("Tom|Sawyer|Huckleberry|Finn"),
-        "[mnry];[enor];[Tiry]"
-    );
-}
-
-// -- prefix for lookahead: .*(?=aaa)
-#[test]
-fn prefix_lookahead() {
-    let p = prefix_pp(".*(?=aaa)");
-    assert_eq!(p, vec!["a", "a", "a"]);
-}
-
-// -- bounded repeat: ab{2,4}c reversed = cb{2,4}a
 #[test]
 fn prefix_bounded_repeat() {
-    let p = prefix_pp("ab{2,4}c");
-    assert!(
-        p.len() <= 3 || p.iter().any(|s| s.len() > 1),
-        "bounded repeat should not produce a long single-byte prefix: {:?}",
-        p
-    );
+    let p = prefix_rev("ab{2,4}c");
+    assert_eq!(p, "c;b;b");
 }
 
 #[test]
-fn potential_start_union_suffix() {
-    assert_eq!(
-        potential_start_pp("Huck[a-zA-Z]+|Saw[a-zA-Z]+"),
-        "[A-Za-z];[kw];[ac];[Su]"
-    );
-}
-
-#[test]
-fn potential_start_long_union() {
-    assert_eq!(
-        potential_start_pp(
-            "Sherlock Holmes|John Watson|Irene Adler|Inspector Lestrade|Professor Moriarty"
-        ),
-        "[enrsy];[deot];[almrs];[adlrt];[Aaiot];[ HWrs];[ eo];[LMkn];[ ceh];[or];[IJlo]"
-    );
-}
-
-// -- forward BFS for Teddy prefix construction on literal union
-#[test]
-fn fwd_potential_start_literal_union() {
-    assert_eq!(
-        fwd_potential_start_pp("Sherlock|Holmes|Watson|Irene|Adler"),
-        "[AHISW];[adhor];[elt];[emnrs];[elor]"
-    );
-}
-
-#[test]
-fn prefix_intersection_abc() {
-    // .*a.*&.*b.*&.*c.* - must contain a, b, and c
-    // linear prefix is empty (reversed intersection bifurcates immediately)
-    let p = prefix_pp(".*a.*&.*b.*&.*c.*");
-    assert!(p.is_empty());
-    // BFS finds [a-c] at first position, then any char
-    let s = potential_start_pp(".*a.*&.*b.*&.*c.*");
-    assert_eq!(s, "[a-c];.;.");
+fn prefix_dotdot_g() {
+    let p = prefix_rev("..g");
+    assert!(!p.is_empty(), "expected at least 1 prefix position");
+    assert_eq!(p, "g;.;.");
 }
 
 #[test]
@@ -183,7 +186,6 @@ fn collect_rev_intersection_abc() {
         current = next;
     }
 
-    // final node after walking c,b,a has nullability=7 (ALWAYS) and NullsId(1)
     eprintln!(
         "final node: {} nullability={:?} nulls_id={:?}",
         b.pp(current),
@@ -191,67 +193,45 @@ fn collect_rev_intersection_abc() {
         b.get_nulls_id(current)
     );
 
-    // prefix_transition is computed but unused; collect_rev_prefix walks
-    // each byte individually through center_table, so intersections work.
     let re = resharp::Regex::new(pattern).unwrap();
     let nulls = re.collect_rev_nulls_debug(input);
     eprintln!("collect_rev nulls: {:?}", nulls);
     assert!(nulls.contains(&0), "expected 0 in nulls, got {:?}", nulls);
 }
 
-// -- literal with wildcard prefix: ..g
 #[test]
-fn prefix_dotdot_g() {
-    let p = prefix_pp("..g");
-    assert!(!p.is_empty(), "expected at least 1 prefix position");
-    assert_eq!(p[0], "g");
-}
-
-// -- calc_potential_start for rev patterns with lookahead
-#[test]
-fn potential_start_rev_lookahead_word() {
-    // rev of (?<=\s)[A-Z][a-z]+(?=\s): whitespace set first, then letters, then uppercase+letter, then whitespace
-    assert_eq!(
-        potential_start_pp(r"(?<=\s)[A-Z][a-z]+(?=\s)"),
-        r"[\t-\r \x85\xA0];[a-z\xC2];[A-Za-z];[\t-\r A-Za-z\x85\xA0]"
-    );
+fn debug_huck_complement_prefix() {
+    use resharp::{calc_potential_start, RegexBuilder};
+    let mut b = RegexBuilder::new();
+    let node = resharp_parser::parse_ast(&mut b, ".*Huck.*&~(.*F.*)").unwrap();
+    let fwd_sets = calc_potential_start(&mut b, node, 16, 64).unwrap();
+    let fwd_pp: Vec<_> = fwd_sets.iter().map(|&s| b.solver_ref().pp(s)).collect();
+    eprintln!("fwd potential_start: {:?}", fwd_pp);
+    let rev = b.reverse(node).unwrap();
+    let rev_sets = calc_potential_start(&mut b, rev, 16, 64).unwrap();
+    let rev_pp: Vec<_> = rev_sets.iter().map(|&s| b.solver_ref().pp(s)).collect();
+    eprintln!("rev potential_start: {:?}", rev_pp);
 }
 
 #[test]
-fn potential_start_rev_simple_lookahead() {
-    // rev of a(?=b): starts with 'b' lookahead, then 'a'
-    assert_eq!(potential_start_pp(r"a(?=b)"), "b;a");
-}
+fn debug_datetime_potential_rev() {
+    use resharp::{calc_potential_start, RegexBuilder};
+    let pattern = r"\d+(?=[aA]\.?[mM]\.?)";
+    let mut b = RegexBuilder::new();
+    let node = resharp_parser::parse_ast(&mut b, pattern).unwrap();
+    let rev = b.reverse(node).unwrap();
+    let rev_stripped = b.prune_begin(rev);
+    eprintln!("datetime rev stripped: {}", b.pp(rev_stripped));
+    let sets = calc_potential_start(&mut b, rev_stripped, 16, 64).unwrap();
+    let pp: Vec<_> = sets.iter().map(|&s| b.solver_ref().pp(s)).collect();
+    eprintln!("datetime potential_rev: {:?}", pp);
 
-#[test]
-fn potential_start_rev_lookbehind() {
-    // rev of (?<=x)abc = cba(?=x): linear prefix c,b,a,x
-    assert_eq!(potential_start_pp(r"(?<=x)abc"), "c;b;a;x");
-}
-
-#[test]
-fn potential_start_rev_word_boundary() {
-    let s = potential_start_pp(r"\b[A-Z][a-z]+\b");
-    // neg lookahead/lookbehind for unicode \w makes prefix extraction harder
-    assert_eq!(s, "");
-}
-
-#[test]
-fn potential_start_rev_dotstar_suffix() {
-    // rev of _*Huck = kcuH_*: linear prefix k,c,u,H
-    assert_eq!(potential_start_pp(r"_*Huck"), "k;c;u;H");
-}
-
-#[test]
-fn potential_start_rev_alternation_with_lookahead() {
-    assert_eq!(
-        potential_start_pp(r"(?<=\s)(Tom|Sawyer|Finn)(?=\s)"),
-        r"[\t-\r \x85\xA0];[mnr\xC2];[em-or];[Teinoy];[\t-\r FTiwy\x85\xA0]"
-    );
-}
-
-#[test]
-fn potential_start_rev_char_class_plus() {
-    // [0-9]+ reversed is [0-9]+, nullable after one digit step
-    assert_eq!(potential_start_pp(r"[0-9]+"), "[0-9]");
+    let email_pat = r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}";
+    let mut b2 = RegexBuilder::new();
+    let enode = resharp_parser::parse_ast(&mut b2, email_pat).unwrap();
+    let enode_stripped = b2.prune_begin(enode);
+    eprintln!("email fwd stripped: {}", b2.pp(enode_stripped));
+    let esets = calc_potential_start(&mut b2, enode_stripped, 16, 64).unwrap();
+    let epp: Vec<_> = esets.iter().map(|&s| b2.solver_ref().pp(s)).collect();
+    eprintln!("email potential_fwd: {:?}", epp);
 }

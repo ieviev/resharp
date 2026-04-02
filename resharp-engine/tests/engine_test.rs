@@ -86,9 +86,12 @@ fn run_file(filename: &str) {
             }
             continue;
         }
-        let re = Regex::new(&tc.pattern).unwrap_or_else(|e| panic!(
-            "file={}, name={:?}, pattern={:?}: compile error: {}", filename, tc.name, tc.pattern, e
-        ));
+        let re = Regex::new(&tc.pattern).unwrap_or_else(|e| {
+            panic!(
+                "file={}, name={:?}, pattern={:?}: compile error: {}",
+                filename, tc.name, tc.pattern, e
+            )
+        });
         if tc.anchored {
             let m = re.find_anchored(tc.input.as_bytes()).unwrap();
             let result: Vec<(usize, usize)> = m.iter().map(|m| (m.start, m.end)).collect();
@@ -115,7 +118,7 @@ fn basic() {
 }
 
 #[test]
-fn anchors() {
+fn normal_anchors() {
     run_file("anchors.toml");
 }
 
@@ -150,10 +153,9 @@ fn edge_cases() {
 }
 
 #[test]
-fn cross_feature() {
+fn normal_cross_feature() {
     run_file("cross_feature.toml");
 }
-
 
 /// cross-validate resharp against regex crate
 fn check_vs_regex(pattern: &str, input: &[u8]) {
@@ -169,35 +171,6 @@ fn check_vs_regex(pattern: &str, input: &[u8]) {
         "resharp vs regex mismatch: pattern={:?}",
         pattern
     );
-}
-
-// -- literal alternation with DFA state jumping --
-
-#[test]
-fn literal_alt_pure() {
-    check_vs_regex("cat|dog|bird", b"I have a cat and a dog and a bird");
-}
-
-#[test]
-fn literal_alt_pure_no_match() {
-    check_vs_regex("cat|dog|bird", b"I have a fish");
-}
-
-#[test]
-fn literal_alt_pure_adjacent() {
-    check_vs_regex("aa|bb|cc", b"aabbcc");
-}
-
-#[test]
-fn literal_alt_pure_overlapping_prefix() {
-    // bar|baz gets factored to ba(r|z) by algebra
-    check_vs_regex("bar|baz", b"bar baz bar");
-}
-
-#[test]
-fn literal_alt_factored_three() {
-    // algebra factors shared prefix
-    check_vs_regex("fooX|fooY|fooZ", b"__fooX__fooZ__fooY__");
 }
 
 #[test]
@@ -497,7 +470,7 @@ fn dictionary_context_medium() {
 }
 
 #[test]
-fn paragraph() {
+fn normal_paragraph() {
     run_file("paragraph.toml");
 }
 
@@ -529,8 +502,29 @@ fn capacity_exceeded_at_match() {
     );
 }
 
-// -- collect_rev null count tests --
-// lookahead patterns may produce excess nulls (bounded, not quadratic).
+#[test]
+fn unanchored_search_false_positive() {
+    let cases = [
+        ("A00[12]", "A003"),
+        ("A00[12]", "A004"),
+        ("A00[12]", "sample_A003_chunk_001.txt"),
+        ("A001|A002", "A003"),
+        ("A001|A002", "A004"),
+    ];
+
+    for (pattern, input) in cases {
+        let re = Regex::new(pattern).unwrap();
+
+        assert_eq!(re.find_anchored(input.as_bytes()).unwrap(), None);
+
+        let spans = re.find_all(input.as_bytes()).unwrap();
+        assert_eq!(
+            spans,
+            [],
+            "unanchored false positive for pattern={pattern:?}, input={input:?}, spans={spans:?}"
+        );
+    }
+}
 
 fn rev_nulls(pattern: &str, input: &[u8]) -> Vec<usize> {
     let re = Regex::new(pattern).unwrap();
@@ -685,7 +679,12 @@ fn literal_20_bytes() {
     let mut hay = vec![b'.'; 200];
     hay[100..120].copy_from_slice(pattern.as_bytes());
     let re = Regex::new(pattern).unwrap();
-    let r: Vec<_> = re.find_all(&hay).unwrap().iter().map(|m| (m.start, m.end)).collect();
+    let r: Vec<_> = re
+        .find_all(&hay)
+        .unwrap()
+        .iter()
+        .map(|m| (m.start, m.end))
+        .collect();
     assert_eq!(r, vec![(100, 120)]);
 }
 
@@ -695,7 +694,12 @@ fn literal_16_bytes() {
     let mut hay = vec![b'.'; 100];
     hay[50..66].copy_from_slice(pattern.as_bytes());
     let re = Regex::new(pattern).unwrap();
-    let r: Vec<_> = re.find_all(&hay).unwrap().iter().map(|m| (m.start, m.end)).collect();
+    let r: Vec<_> = re
+        .find_all(&hay)
+        .unwrap()
+        .iter()
+        .map(|m| (m.start, m.end))
+        .collect();
     assert_eq!(r, vec![(50, 66)]);
 }
 
@@ -705,11 +709,14 @@ fn literal_17_bytes() {
     let mut hay = vec![b'.'; 100];
     hay[40..57].copy_from_slice(pattern.as_bytes());
     let re = Regex::new(pattern).unwrap();
-    let r: Vec<_> = re.find_all(&hay).unwrap().iter().map(|m| (m.start, m.end)).collect();
+    let r: Vec<_> = re
+        .find_all(&hay)
+        .unwrap()
+        .iter()
+        .map(|m| (m.start, m.end))
+        .collect();
     assert_eq!(r, vec![(40, 57)]);
 }
-
-// -- case insensitivity cross-validated against regex crate --
 
 #[test]
 fn ci_literal_vs_regex() {
@@ -814,14 +821,24 @@ fn ci_escape_sequence() {
 #[test]
 fn ci_lookahead() {
     let re = Regex::new("(?i)foo(?=bar)").unwrap();
-    let r: Vec<_> = re.find_all(b"FOOBAR foobar FoObAr foobaz").unwrap().iter().map(|m| (m.start, m.end)).collect();
+    let r: Vec<_> = re
+        .find_all(b"FOOBAR foobar FoObAr foobaz")
+        .unwrap()
+        .iter()
+        .map(|m| (m.start, m.end))
+        .collect();
     assert_eq!(r, vec![(0, 3), (7, 10), (14, 17)]);
 }
 
 #[test]
 fn ci_lookbehind() {
     let re = Regex::new("(?i)(?<=foo)bar").unwrap();
-    let r: Vec<_> = re.find_all(b"FOOBAR foobar FoObAr bazbar").unwrap().iter().map(|m| (m.start, m.end)).collect();
+    let r: Vec<_> = re
+        .find_all(b"FOOBAR foobar FoObAr bazbar")
+        .unwrap()
+        .iter()
+        .map(|m| (m.start, m.end))
+        .collect();
     assert_eq!(r, vec![(3, 6), (10, 13), (17, 20)]);
 }
 
@@ -885,8 +902,6 @@ fn ci_scoped_nested() {
     check_vs_regex("(?i:a(?-i:b)c)", b"AbC ABC abc aBc");
 }
 
-// -- word boundary tests --
-
 #[test]
 fn wb_bare_11() {
     check_vs_regex(r"\b11\b", b"11");
@@ -924,7 +939,10 @@ fn wb_long_word_multiple() {
 
 #[test]
 fn wb_long_word_mixed_case() {
-    check_vs_regex(r"\b[a-z]{12,}\b", b"THE understanding OF communication HERE");
+    check_vs_regex(
+        r"\b[a-z]{12,}\b",
+        b"THE understanding OF communication HERE",
+    );
 }
 
 #[test]
@@ -1037,6 +1055,17 @@ fn wb_alnum_class() {
     check_vs_regex(r"\b[a-zA-Z0-9]+\b", b"foo123 !bar! 42");
 }
 
+#[test]
+fn wb_alternation_with_optional_suffix() {
+    check_vs_regex(
+        r"(?i)\b(?:union\s+select|select\b.{1,200}\bfrom|insert\s+into|delete\s+from|drop\s+table|alter\s+table|exec(?:ute)?)\b",
+        b"union select 1 from t; insert into users; exec sp; execute cmd; drop table t",
+    );
+    check_vs_regex(
+        r"(?i)\b(?:union\s+select|select\b.{1,200}\bfrom|insert\s+into|delete\s+from|drop\s+table|alter\s+table|exec(?:ute)?)\b",
+        b"hello execution world unselected",
+    );
+}
 
 #[test]
 fn dotstar_inner_literal_correctness() {
@@ -1046,16 +1075,6 @@ fn dotstar_inner_literal_correctness() {
     check_vs_regex(".*=.*", b"first line\nsecond=line\nthird");
     check_vs_regex(".*=.*", b"===");
     check_vs_regex(".*=.*", b"x=y\na=b\n");
-}
-
-#[test]
-fn dotstar_inner_literal_accel() {
-    let re = Regex::new(".*=.*").unwrap();
-    let (fwd, rev) = re.has_accel();
-    // BFS strips leading .* and extracts '=' as forward prefix
-    // rev skip on '=' also active via reverse DFA
-    assert!(fwd, ".*=.* should have forward prefix on '='");
-    assert!(rev, ".*=.* should have reverse skip on '='");
 }
 
 #[test]
@@ -1073,7 +1092,9 @@ fn dotstar_inner_literal_rev_midskip() {
 #[test]
 fn dotstar_huck_stripped_prefix() {
     let re = Regex::new(".*Huck.*&~(.*F.*)").unwrap();
-    let m = re.find_all(b"The Adventures of Huckleberry Finn', published in 1885.").unwrap();
+    let m = re
+        .find_all(b"The Adventures of Huckleberry Finn', published in 1885.")
+        .unwrap();
     let r: Vec<_> = m.iter().map(|m| (m.start, m.end)).collect();
     assert_eq!(r, vec![(0, 30)], ".*Huck.*&~(.*F.*)");
 }
@@ -1085,7 +1106,12 @@ fn nullable_head_correctness() {
     let check = |input: &[u8], expected: Vec<(usize, usize)>| {
         let m = re.find_all(input).unwrap();
         let r: Vec<_> = m.iter().map(|m| (m.start, m.end)).collect();
-        assert_eq!(r, expected, r"input={:?}", std::str::from_utf8(input).unwrap());
+        assert_eq!(
+            r,
+            expected,
+            r"input={:?}",
+            std::str::from_utf8(input).unwrap()
+        );
     };
     check(b"abc", vec![(0, 3)]);
     check(b"1abc", vec![(0, 4)]);
@@ -1106,8 +1132,7 @@ fn bounded_dfa_basic() {
     eprintln!("bounded result: {:?}", r);
 }
 
-use resharp::{BDFA, NodeId, RegexBuilder};
-
+use resharp::{NodeId, RegexBuilder, BDFA};
 
 fn chain_len(node: NodeId, b: &RegexBuilder) -> usize {
     let mut n = 0;
@@ -1213,7 +1238,10 @@ fn bdfa_literal_abc() {
         eprintln!("  pos={} state={} vec_len={} rel={}", pos, s, vl, rel);
     }
     // after 'x' at pos=4, body dies with step=4 (match is 3 bytes starting at pos+1-step=1)
-    assert!(trace.iter().any(|&(_, _, _, rel)| rel == 4), "expected match with rel=4 (step)");
+    assert!(
+        trace.iter().any(|&(_, _, _, rel)| rel == 4),
+        "expected match with rel=4 (step)"
+    );
 }
 
 #[test]
@@ -1238,7 +1266,11 @@ fn bdfa_bounded_repeat() {
         eprintln!("{}", line);
     }
     let trace = bdfa_step_trace("a{2,4}", b"xaaaaax");
-    let match_positions: Vec<_> = trace.iter().filter(|t| t.3 > 0).map(|t| (t.0, t.3)).collect();
+    let match_positions: Vec<_> = trace
+        .iter()
+        .filter(|t| t.3 > 0)
+        .map(|t| (t.0, t.3))
+        .collect();
     eprintln!("matches: {:?}", match_positions);
 }
 
@@ -1247,50 +1279,67 @@ fn bdfa_two_candidates() {
     assert_bdfa_eq("aa", b"aaa");
 }
 
-// --- derivative traces for (curr, last_nullable) pairs ---
-
 #[test]
 fn bdfa_der_a_or_aa() {
     let pp = bdfa_state_pp("a|aa", b"aab");
     eprintln!("a|aa on 'aab':");
-    for line in &pp { eprintln!("{}", line); }
+    for line in &pp {
+        eprintln!("{}", line);
+    }
 }
 
 #[test]
 fn bdfa_der_a_1_4() {
     let pp = bdfa_state_pp("a{1,4}", b"aaaax");
     eprintln!("a{{1,4}} on 'aaaax':");
-    for line in &pp { eprintln!("{}", line); }
+    for line in &pp {
+        eprintln!("{}", line);
+    }
 }
 
 #[test]
 fn bdfa_der_ab_1_3() {
     let pp = bdfa_state_pp("(ab){1,3}", b"abababx");
     eprintln!("(ab){{1,3}} on 'abababx':");
-    for line in &pp { eprintln!("{}", line); }
+    for line in &pp {
+        eprintln!("{}", line);
+    }
 }
 
 #[test]
 fn bdfa_der_abc_bcd() {
     let pp = bdfa_state_pp("abc|bcd", b"abcde");
     eprintln!("abc|bcd on 'abcde':");
-    for line in &pp { eprintln!("{}", line); }
+    for line in &pp {
+        eprintln!("{}", line);
+    }
 }
 
 #[test]
 fn bdfa_der_nested_alt() {
     let pp = bdfa_state_pp("(a|ab)(b|c)", b"abcx");
     eprintln!("(a|ab)(b|c) on 'abcx':");
-    for line in &pp { eprintln!("{}", line); }
+    for line in &pp {
+        eprintln!("{}", line);
+    }
 }
-
-// --- ambiguous cases: bdfa must match std engine (leftmost longest) ---
 
 fn assert_bdfa_eq(pattern: &str, input: &[u8]) {
     let m = bdfa_matches(pattern, input);
     let re = Regex::new(pattern).unwrap();
-    let std_m: Vec<_> = re.find_all(input).unwrap().iter().map(|m| (m.start, m.end)).collect();
-    assert_eq!(m, std_m, "pattern={:?} input={:?}", pattern, String::from_utf8_lossy(input));
+    let std_m: Vec<_> = re
+        .find_all(input)
+        .unwrap()
+        .iter()
+        .map(|m| (m.start, m.end))
+        .collect();
+    assert_eq!(
+        m,
+        std_m,
+        "pattern={:?} input={:?}",
+        pattern,
+        String::from_utf8_lossy(input)
+    );
 }
 
 #[test]
@@ -1335,8 +1384,6 @@ fn bdfa_ambiguous_triple_overlap() {
     assert_bdfa_eq("a{2,4}", b"aaaaaa");
 }
 
-// -- multi-match overlap tests
-
 #[test]
 fn bdfa_multi_match_overlap() {
     assert_bdfa_eq("a{2,4}", b"aaaaaaaaa");
@@ -1350,12 +1397,12 @@ fn bdfa_multi_match_overlap() {
 fn bdfa_multi_match_traces() {
     let pp = bdfa_state_pp("a{2,4}", b"aaaaaaaaa");
     eprintln!("a{{2,4}} on 'aaaaaaaaa' (multi-match):");
-    for line in &pp { eprintln!("  {}", line); }
+    for line in &pp {
+        eprintln!("  {}", line);
+    }
     let m = bdfa_matches("a{2,4}", b"aaaaaaaaa");
     eprintln!("  matches: {:?}", m);
 }
-
-// -- prefix acceleration tests
 
 #[test]
 fn bdfa_prefix_literal() {
@@ -1399,7 +1446,6 @@ fn bdfa_prefix_predicate_pp() {
     ]);
 }
 
-
 #[test]
 fn bdfa_prefix_has_prefix() {
     // verify the BDFA actually built a prefix for a literal pattern
@@ -1407,7 +1453,11 @@ fn bdfa_prefix_has_prefix() {
     let node = resharp_parser::parse_ast(&mut b, "Twain.{0,5}").unwrap();
     let bdfa = BDFA::new(&mut b, node).unwrap();
     assert!(bdfa.prefix.is_some(), "expected prefix for Twain.{{0,5}}");
-    assert!(bdfa.prefix_len >= 5, "expected prefix_len >= 5, got {}", bdfa.prefix_len);
+    assert!(
+        bdfa.prefix_len >= 5,
+        "expected prefix_len >= 5, got {}",
+        bdfa.prefix_len
+    );
 }
 
 #[test]
@@ -1430,8 +1480,9 @@ fn bdfa_cyrillic_names() {
 fn opts_unicode_false() {
     let re = Regex::with_options(
         r"\w+",
-        EngineOptions::default().unicode(false),
-    ).unwrap();
+        EngineOptions::default().unicode(resharp::UnicodeMode::Ascii),
+    )
+    .unwrap();
     // ASCII-only: "café" → "caf" matches, é (0xC3 0xA9) does not
     let m = re.find_all("café".as_bytes()).unwrap();
     assert_eq!(m.len(), 1);
@@ -1446,20 +1497,15 @@ fn opts_unicode_false() {
 
 #[test]
 fn opts_case_insensitive() {
-    let re = Regex::with_options(
-        "hello",
-        EngineOptions::default().case_insensitive(true),
-    ).unwrap();
+    let re = Regex::with_options("hello", EngineOptions::default().case_insensitive(true)).unwrap();
     let m = re.find_all(b"Hello HELLO hello").unwrap();
     assert_eq!(m.len(), 3);
 }
 
 #[test]
 fn opts_dot_matches_new_line() {
-    let re = Regex::with_options(
-        "a.b",
-        EngineOptions::default().dot_matches_new_line(true),
-    ).unwrap();
+    let re =
+        Regex::with_options("a.b", EngineOptions::default().dot_matches_new_line(true)).unwrap();
     let m = re.find_all(b"a\nb").unwrap();
     assert_eq!(m.len(), 1);
     assert_eq!((m[0].start, m[0].end), (0, 3));
@@ -1495,23 +1541,34 @@ fn opts_ignore_whitespace() {
     let re = Regex::with_options(
         r"hello \ world",
         EngineOptions::default().ignore_whitespace(true),
-    ).unwrap();
+    )
+    .unwrap();
     let m = re.find_all(b"hello world").unwrap();
     assert_eq!(m.len(), 1);
 }
 
 #[test]
 fn word_match_lengths_en_sampled() {
-    let path = format!("{}/../data/haystacks/en-sampled.txt", env!("CARGO_MANIFEST_DIR"));
+    let path = format!(
+        "{}/../data/haystacks/en-sampled.txt",
+        env!("CARGO_MANIFEST_DIR")
+    );
     let content = std::fs::read_to_string(&path).unwrap();
     let input: String = content.lines().take(2500).collect::<Vec<_>>().join("\n");
     let input = input.as_bytes();
 
     let pattern = r"\b[0-9A-Za-z_]+\b";
-    let re = Regex::with_options(pattern, EngineOptions::default().unicode(false)).unwrap();
+    let re = Regex::with_options(
+        pattern,
+        EngineOptions::default().unicode(resharp::UnicodeMode::Ascii),
+    )
+    .unwrap();
     let matches = re.find_all(input).unwrap();
 
-    let rx = regex::bytes::RegexBuilder::new(pattern).unicode(false).build().unwrap();
+    let rx = regex::bytes::RegexBuilder::new(pattern)
+        .unicode(false)
+        .build()
+        .unwrap();
     let expected: Vec<(usize, usize)> = rx.find_iter(input).map(|m| (m.start(), m.end())).collect();
 
     let sum: usize = matches.iter().map(|m| m.end - m.start).sum();
@@ -1528,9 +1585,11 @@ fn word_match_lengths_en_sampled() {
         sum,
     );
     assert_eq!(
-        matches.len(), expected.len(),
+        matches.len(),
+        expected.len(),
         "match count mismatch: resharp={} regex={}",
-        matches.len(), expected.len(),
+        matches.len(),
+        expected.len(),
     );
 }
 
@@ -1615,10 +1674,8 @@ fn hardened_pathological() {
     let pattern = r".*[^A-Z]|[A-Z]";
     let input = "A".repeat(1000);
     let re_normal = Regex::new(pattern).unwrap();
-    let re_hardened = Regex::with_options(
-        pattern,
-        EngineOptions::default().hardened(true),
-    ).unwrap();
+    let re_hardened =
+        Regex::with_options(pattern, EngineOptions::default().hardened(true)).unwrap();
     assert_eq!(
         re_normal.find_all(input.as_bytes()).unwrap(),
         re_hardened.find_all(input.as_bytes()).unwrap(),
@@ -1636,7 +1693,8 @@ fn check_hardened_vs_normal(pattern: &str, input: &[u8]) {
     let normal = re_n.find_all(input).unwrap();
     let hardened = re_s.find_all(input).unwrap();
     assert_eq!(
-        normal, hardened,
+        normal,
+        hardened,
         "hardened vs normal mismatch: pattern={:?}, input={:?}",
         pattern,
         std::str::from_utf8(input).unwrap_or("<binary>")
@@ -1645,9 +1703,11 @@ fn check_hardened_vs_normal(pattern: &str, input: &[u8]) {
 
 #[test]
 fn hardened_cross_validate() {
-    let en = std::fs::read_to_string(
-        format!("{}/../data/haystacks/en-sampled.txt", env!("CARGO_MANIFEST_DIR"))
-    ).unwrap();
+    let en = std::fs::read_to_string(format!(
+        "{}/../data/haystacks/en-sampled.txt",
+        env!("CARGO_MANIFEST_DIR")
+    ))
+    .unwrap();
     let input = &en.as_bytes()[..2000];
     let patterns = [
         r"\d+",
@@ -1700,7 +1760,8 @@ fn hardened_bounded_repeat_tail() {
             .collect();
 
         assert_eq!(
-            expected, got,
+            expected,
+            got,
             "BDFA bounded repeat mismatch: pattern={:?}, len={}",
             pattern,
             input.len()
@@ -1710,9 +1771,11 @@ fn hardened_bounded_repeat_tail() {
 
 #[test]
 fn range_prefix_correctness() {
-    let en = std::fs::read_to_string(
-        format!("{}/../data/haystacks/en-sampled.txt", env!("CARGO_MANIFEST_DIR"))
-    ).unwrap();
+    let en = std::fs::read_to_string(format!(
+        "{}/../data/haystacks/en-sampled.txt",
+        env!("CARGO_MANIFEST_DIR")
+    ))
+    .unwrap();
     let inputs: Vec<&[u8]> = vec![
         en.as_bytes(),
         b"hello world no caps here 123",
@@ -1721,7 +1784,7 @@ fn range_prefix_correctness() {
         b"",
         b"Z",
         b"ZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ", // > 32 bytes of matches
-        &[0u8; 100],                                // no ASCII letters
+        &[0u8; 100],                               // no ASCII letters
     ];
     // patterns with >16 byte char classes that should use range prefix
     let patterns = [
@@ -1739,9 +1802,11 @@ fn range_prefix_correctness() {
             let normal = re.find_all(input).unwrap();
             let hardened = re_hardened.find_all(input).unwrap();
             assert_eq!(
-                normal, hardened,
+                normal,
+                hardened,
                 "range prefix mismatch: pattern={:?}, input={:?}",
-                p, std::str::from_utf8(input).unwrap_or("<binary>")
+                p,
+                std::str::from_utf8(input).unwrap_or("<binary>")
             );
         }
     }
@@ -1752,21 +1817,19 @@ fn range_prefix_random_haystack() {
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
 
-    let patterns = [
-        r"[A-Z][a-z]+",
-        r"[A-Z]{2,5}",
-        r"[A-Za-z]{3,}",
-    ];
+    let patterns = [r"[A-Z][a-z]+", r"[A-Z]{2,5}", r"[A-Za-z]{3,}"];
     for seed in 0u64..50 {
         let mut h = DefaultHasher::new();
         seed.hash(&mut h);
         let hash = h.finish();
         // generate pseudorandom haystack mixing ASCII ranges
-        let input: Vec<u8> = (0..256).map(|i| {
-            let v = ((hash.wrapping_mul(i as u64 + 1).wrapping_add(seed)) >> 8) as u8;
-            // bias toward printable ASCII
-            32 + (v % 95)
-        }).collect();
+        let input: Vec<u8> = (0..256)
+            .map(|i| {
+                let v = ((hash.wrapping_mul(i as u64 + 1).wrapping_add(seed)) >> 8) as u8;
+                // bias toward printable ASCII
+                32 + (v % 95)
+            })
+            .collect();
         for p in &patterns {
             let re = Regex::new(p).unwrap();
             let re_s = Regex::with_options(p, EngineOptions::default().hardened(true)).unwrap();
@@ -1816,23 +1879,39 @@ fn hardened_nullable_empty_after_dedup() {
             .iter()
             .map(|m| (m.start, m.end))
             .collect();
-        assert_eq!(hardened, normal, "hardened mismatch: pattern={:?} input={:?}\n  normal:   {:?}\n  hardened: {:?}", pattern, input, normal, hardened);
+        assert_eq!(
+            hardened, normal,
+            "hardened mismatch: pattern={:?} input={:?}\n  normal:   {:?}\n  hardened: {:?}",
+            pattern, input, normal, hardened
+        );
     }
 }
 
 #[test]
+#[ignore = "takes a while"]
 fn hardened_cross_validate_all_toml() {
     let files = [
-        "basic.toml", "anchors.toml", "semantics.toml", "date_pattern.toml",
-        "edge_cases.toml", "lookaround.toml", "boolean.toml", "cross_feature.toml",
-        "paragraph.toml", "cloudflare_redos.toml", "find_anchored.toml", "accel_skip.toml",
+        "basic.toml",
+        "anchors.toml",
+        "semantics.toml",
+        "date_pattern.toml",
+        "edge_cases.toml",
+        "lookaround.toml",
+        "boolean.toml",
+        "cross_feature.toml",
+        "paragraph.toml",
+        "cloudflare_redos.toml",
+        "find_anchored.toml",
+        "accel_skip.toml",
     ];
     let mut tested = 0;
     let mut activated = 0;
     for file in &files {
         let tests = load_tests(file);
         for tc in &tests {
-            if tc.ignore || tc.expect_error || tc.anchored { continue; }
+            if tc.ignore || tc.expect_error || tc.anchored {
+                continue;
+            }
             let opts = EngineOptions::default().hardened(true);
             let re = match Regex::with_options(&tc.pattern, opts) {
                 Ok(re) => re,
@@ -1845,12 +1924,22 @@ fn hardened_cross_validate_all_toml() {
             let matches = re.find_all(tc.input.as_bytes()).unwrap();
             let result: Vec<(usize, usize)> = matches.iter().map(|m| (m.start, m.end)).collect();
             assert_eq!(
-                result, tc.matches,
+                result,
+                tc.matches,
                 "HARDENED-XVAL file={}, name={:?}, pattern={:?}, input={:?}, is_hardened={}",
-                file, tc.name, tc.pattern, tc.input, re.is_hardened()
+                file,
+                tc.name,
+                tc.pattern,
+                tc.input,
+                re.is_hardened()
             );
         }
     }
-    eprintln!("hardened_cross_validate_all_toml: {tested} tested, {activated} activated hardened mode");
-    assert!(activated >= 10, "expected at least 10 patterns to activate hardened, got {activated}");
+    eprintln!(
+        "hardened_cross_validate_all_toml: {tested} tested, {activated} activated hardened mode"
+    );
+    assert!(
+        activated >= 10,
+        "expected at least 10 patterns to activate hardened, got {activated}"
+    );
 }

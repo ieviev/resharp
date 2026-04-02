@@ -2,7 +2,6 @@ description = '''
 edge cases: (?i), unicode byte offsets, dot-newline, nested booleans, quantified groups.
 '''
 
-# -- (?i) case-insensitive (completely untested) --
 
 [[test]]
 name = "ci_literal"
@@ -52,7 +51,6 @@ pattern = "(?i)a.*z"
 input = "AbcZ"
 matches = [[0, 4]]
 
-# -- (?i) + boolean operations --
 
 [[test]]
 name = "ci_complement"
@@ -72,7 +70,6 @@ pattern = "(?i)(.*cat.*&.*dog.*)"
 input = "my CAT and DOG"
 matches = [[0, 14]]
 
-# -- dot vs newline --
 
 [[test]]
 name = "dot_stops_at_newline"
@@ -92,7 +89,6 @@ pattern = 'a[\s\S]*b'
 input = "a\nb"
 matches = [[0, 3]]
 
-# -- unicode byte offsets --
 
 [[test]]
 name = "unicode_literal"
@@ -118,7 +114,6 @@ pattern = '(?<=é)x'
 input = "éx"
 matches = [[2, 3]]
 
-# -- intersection + anchors --
 
 [[test]]
 name = "inter_anchor_both"
@@ -156,7 +151,6 @@ pattern = '~(.*\d\d.*)&^[a-zA-Z\d]{8,}$'
 input = "Ab12cdef"
 matches = []
 
-# -- nested booleans --
 
 [[test]]
 name = "double_complement"
@@ -170,7 +164,6 @@ pattern = '~(.*x.*)y'
 input = "aaaay"
 matches = [[0, 5]]
 
-# -- quantified alternation groups --
 
 [[test]]
 name = "quantified_alt"
@@ -202,7 +195,6 @@ pattern = "a(bc)?d"
 input = "abcd"
 matches = [[0, 4]]
 
-# -- bounded repeat edge cases --
 
 [[test]]
 name = "exact_repeat_boundary"
@@ -222,7 +214,6 @@ pattern = "a{3,5}"
 input = "aa"
 matches = []
 
-# -- alternation prefix overlap --
 
 [[test]]
 name = "alt_longest_first"
@@ -236,7 +227,6 @@ pattern = "abcd|abc"
 input = "abcx"
 matches = [[0, 3]]
 
-# -- consecutive quantifiers --
 
 [[test]]
 name = "consecutive_plus"
@@ -250,7 +240,6 @@ pattern = "(abc|abd)"
 input = "abd"
 matches = [[0, 3]]
 
-# -- no trailing newline --
 
 [[test]]
 name = "no_trailing_newline_union"

@@ -5,7 +5,56 @@ covers literals, classes, anchors, booleans, quantifiers, lookarounds,
 and long inputs where memchr-based skip is the hot path.
 '''
 
-# -- literals: high skip potential (few non-self bytes in reverse DFA) --
+[[test]]
+pattern = '^hello'
+input = 'hello world'
+matches = [[0, 5]]
+
+[[test]]
+pattern = 'world$'
+input = 'hello world'
+matches = [[6, 11]]
+
+[[test]]
+pattern = '^[0-9]+$'
+input = '12345'
+matches = [[0, 5]]
+
+[[test]]
+pattern = '\d+(?=[aA]\.?[mM]\.?)'
+input = '10am'
+matches = [[0, 2]]
+
+[[test]]
+pattern = '.*Huck.*&~(.*F.*)'
+input = "The Adventures of Huckleberry Finn', published in 1885."
+matches = [[0, 30]]
+
+[[test]]
+pattern = '.*=.*'
+input = 'key=value'
+matches = [[0, 9]]
+
+[[test]]
+pattern = '.*=.*'
+input = 'no equals here'
+matches = []
+
+[[test]]
+pattern = '.*=.*'
+input = "first\nsecond=line\nthird"
+matches = [[6, 17]]
+
+[[test]]
+pattern = '.*=.*'
+input = 'a=b c=d'
+matches = [[0, 7]]
+
+[[test]]
+pattern = '.*=.*'
+input = '==='
+matches = [[0, 3]]
+
 
 [[test]]
 pattern = 'abc'
@@ -62,7 +111,6 @@ pattern = 'hello'
 input = '    hello    hello    '
 matches = [[4, 9], [13, 18]]
 
-# -- single char in long input --
 
 [[test]]
 pattern = 'q'
@@ -74,7 +122,6 @@ pattern = 'q'
 input = '000000000000000000000000000000000000000000000000'
 matches = []
 
-# -- character classes --
 
 [[test]]
 pattern = '[0-9]+'
@@ -101,27 +148,10 @@ pattern = '[A-Z][a-z]+'
 input = 'Hello World Foo'
 matches = [[0, 5], [6, 11], [12, 15]]
 
-# -- anchors --
-
-[[test]]
-pattern = '^\d+$'
-input = '12345'
-matches = [[0, 5]]
-
 [[test]]
 pattern = '^\d+$'
 input = '123a5'
 matches = []
-
-[[test]]
-pattern = '^hello'
-input = 'hello world'
-matches = [[0, 5]]
-
-[[test]]
-pattern = 'world$'
-input = 'hello world'
-matches = [[6, 11]]
 
 [[test]]
 pattern = '^exact$'
@@ -133,7 +163,6 @@ pattern = '^exact$'
 input = 'not exact'
 matches = []
 
-# -- quantifiers --
 
 [[test]]
 pattern = 'a+'
@@ -160,7 +189,6 @@ pattern = 'a{3}'
 input = 'aaaaaa'
 matches = [[0, 3], [3, 6]]
 
-# -- dot patterns --
 
 [[test]]
 pattern = '..g'
@@ -177,7 +205,6 @@ pattern = 'a.b'
 input = 'axb ayb azb'
 matches = [[0, 3], [4, 7], [8, 11]]
 
-# -- alternation --
 
 [[test]]
 pattern = 'cat|dog'
@@ -194,7 +221,6 @@ pattern = 'foo|bar|baz'
 input = '___foo___bar___baz___'
 matches = [[3, 6], [9, 12], [15, 18]]
 
-# -- complement --
 
 [[test]]
 pattern = '~(_*\d\d_*)'
@@ -216,7 +242,6 @@ pattern = 'a~(_*e_*)'
 input = 'abcdefghijklmnop'
 matches = [[0, 4]]
 
-# -- intersection --
 
 [[test]]
 pattern = 'c...&...s'
@@ -233,7 +258,6 @@ pattern = '.*a.*&.*b.*&.*c.*'
 input = 'abc'
 matches = [[0, 3]]
 
-# -- complement + intersection --
 
 [[test]]
 pattern = '~(.*\d\d.*)&[a-zA-Z\d]{8,}'
@@ -250,7 +274,6 @@ pattern = '.*[a-z].*&.*[A-Z].*&.*\d.*&[a-zA-Z\d]{8,}&~(.*\d\d.*)'
 input = 'y tej55zhA25wXu8bvQxFxt o'
 matches = [[11, 23]]
 
-# -- lookahead --
 
 [[test]]
 pattern = 'a(?=b)'
@@ -263,16 +286,10 @@ input = '__bbaa__'
 matches = [[2, 4]]
 
 [[test]]
-pattern = '\d+(?=[aA]\.?[mM]\.?)'
-input = '10am'
-matches = [[0, 2]]
-
-[[test]]
 pattern = '(ab)+(?=_)'
 input = '_ab_ab_'
 matches = [[1, 3], [4, 6]]
 
-# -- lookbehind --
 
 [[test]]
 pattern = '(?<=b)a'
@@ -294,7 +311,6 @@ pattern = '(?<=author).*'
 input = 'author: abc and def'
 matches = [[6, 19]]
 
-# -- negative lookbehind --
 
 [[test]]
 pattern = '(?<!\d)a'
@@ -306,7 +322,6 @@ pattern = '(?<!b)c'
 input = ' c'
 matches = [[1, 2]]
 
-# -- real-world patterns with long inputs --
 
 [[test]]
 pattern = '\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}'
@@ -328,7 +343,6 @@ pattern = '((\d{2})|(\d))\/((\d{2})|(\d))\/((\d{4})|(\d{2}))'
 input = '4/05/89'
 matches = [[0, 7]]
 
-# -- patterns at boundaries --
 
 [[test]]
 pattern = 'abc'
@@ -345,14 +359,12 @@ pattern = 'xyz'
 input = 'xyzxyz_____________xyzxyz'
 matches = [[0, 3], [3, 6], [19, 22], [22, 25]]
 
-# -- multiline --
 
 [[test]]
 pattern = "(?:.+\n)+\n"
 input = "\naaa\n\nbbb\n\nccc\n\n"
 matches = [[1, 6], [6, 11], [11, 16]]
 
-# -- greedy across long input --
 
 [[test]]
 pattern = 'q.*q'
@@ -364,7 +376,6 @@ pattern = '.*a{3}'
 input = 'aa aaa'
 matches = [[0, 6]]
 
-# -- word boundary alternatives --
 
 [[test]]
 pattern = '(?<=\W|\A)11'
@@ -386,7 +397,6 @@ pattern = '11(?=\W|\z)'
 input = '11 '
 matches = [[0, 2]]
 
-# -- repeated pattern in long haystack (skip acceleration hot path) --
 
 [[test]]
 pattern = 'MARKER'
@@ -403,7 +413,6 @@ pattern = 'lethargy.*air'
 input = "\nlethargy, and and the air tainted with\nc\n"
 matches = [[1, 26]]
 
-# -- bracket/punctuation patterns --
 
 [[test]]
 pattern = '\(.*\)'
@@ -415,14 +424,12 @@ pattern = '"[^"]*"'
 input = 'say "hello" and "bye"'
 matches = [[4, 11], [16, 21]]
 
-# -- mixed unicode boundary --
 
 [[test]]
 pattern = '(?<!鿛)(apres)\b'
 input = '鿛apres'
 matches = []
 
-# -- html tag --
 
 [[test]]
 pattern = '<h[1-6]>.*</h[1-6]>'
@@ -434,7 +441,6 @@ pattern = '<h.{1,60}>.*<\/h(5|3|2|1|4)>'
 input = '<li><a href="/wiki/Lattes_Editori" title="Lattes Editori">Lattes Editori</a></li>'
 matches = []
 
-# -- bounded repeat edge --
 
 [[test]]
 pattern = 'ab{0,5}c'
@@ -446,47 +452,20 @@ pattern = 'ab{0,5}c'
 input = 'bbabbbcbbac'
 matches = [[2, 7], [9, 11]]
 
-# -- complex boolean in long text --
-
 [[test]]
 pattern = 'F.*&~(.*Finn)'
 input = "Finn', published in 1885."
 matches = [[0, 25]]
 
-[[test]]
-pattern = '.*Huck.*&~(.*F.*)'
-input = "The Adventures of Huckleberry Finn', published in 1885."
-matches = [[0, 30]]
-
-# -- dotstar with inner literal (rev skip on '=') --
-
-[[test]]
-pattern = '.*=.*'
-input = 'key=value'
-matches = [[0, 9]]
-
-[[test]]
-pattern = '.*=.*'
-input = 'no equals here'
-matches = []
-
-[[test]]
-pattern = '.*=.*'
-input = "first\nsecond=line\nthird"
-matches = [[6, 17]]
-
-[[test]]
-pattern = '.*=.*'
-input = 'a=b c=d'
-matches = [[0, 7]]
-
-[[test]]
-pattern = '.*=.*'
-input = '==='
-matches = [[0, 3]]
 
 [[test]]
 name = 'dotstar inner literal long skip'
 pattern = '.*=.*'
 input = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaakey=value'
 matches = [[0, 73]]
+
+[[test]]
+name = 'currency_amount_basic'
+pattern = '(?:USD|EUR|GBP|JPY|CNY|INR|CAD|AUD|CHF|SEK|NOK|DKK|HKD|SGD|NZD|MXN|BRL|ZAR|RUB|KRW|TRY|PLN|THB|IDR|HUF|CZK|ILS|CLP|PHP|AED|COP|SAR|RON)\s*\d+(?:,\d{3})*(?:\.\d{2})?'
+input = 'hello USD100 world EUR42.50 foo GBP1,000.00 bar'
+matches = [[6, 12], [19, 27], [32, 43]]

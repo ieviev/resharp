@@ -30,7 +30,6 @@ fn has_anchors(pattern: &str) -> bool {
     b.contains_anchors(node)
 }
 
-// -- fixed length
 
 #[test]
 fn fixed_literal() {
@@ -68,7 +67,6 @@ fn fixed_date() {
     assert_eq!(fixed_length(r"\d{4}-\d{2}-\d{2}"), None);
 }
 
-// -- min/max length
 
 #[test]
 fn minmax_literal() {
@@ -121,7 +119,6 @@ fn minmax_alt_suffix() {
     assert_eq!(min_max("(Sherlock|Holmes)[a-z]{0,5}"), (6, 13));
 }
 
-// -- is_infinite
 
 #[test]
 fn inf_star() {
@@ -153,7 +150,6 @@ fn inf_optional() {
     assert!(!is_infinite("a?"));
 }
 
-// -- has_look
 
 #[test]
 fn look_lookahead() {
@@ -176,7 +172,6 @@ fn look_none() {
     assert!(!has_look("abc"));
 }
 
-// -- BDFA eligibility: max_length.is_some() && fixed_length.is_none() && !has_look && !has_anchors
 
 fn bdfa_eligible(pattern: &str) -> bool {
     let fl = fixed_length(pattern);
@@ -234,7 +229,6 @@ fn bdfa_phone_bounded() {
     assert!(!bdfa_eligible(r"[0-9_ \-()]{7,}"));
 }
 
-// -- dispatch path tests
 
 fn dispatch_info(pattern: &str) -> (bool, bool, bool) {
     let re = resharp::Regex::new(pattern).unwrap();
@@ -251,14 +245,16 @@ fn dispatch_bounded_repeat() {
 
 #[test]
 fn dispatch_alt_suffix() {
-    let (bdfa, _fwd, _rev) = dispatch_info("(Sherlock|Holmes)[a-z]{0,5}");
-    assert!(bdfa);
+    let (bdfa, fwd, _rev) = dispatch_info("(Sherlock|Holmes)[a-z]{0,5}");
+    assert!(!bdfa);
+    assert!(fwd);
 }
 
 #[test]
 fn dispatch_date() {
-    let (bdfa, _fwd, _rev) = dispatch_info(r"\d{4}-\d{2}-\d{2}");
-    assert!(bdfa);
+    let (bdfa, fwd, _rev) = dispatch_info(r"\d{4}-\d{2}-\d{2}");
+    assert!(!bdfa);
+    assert!(fwd);
 }
 
 #[test]

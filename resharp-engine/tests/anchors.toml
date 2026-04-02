@@ -4,10 +4,10 @@ matches = [[start, end]] in utf8 bytes (half-open intervals).
 '''
 
 [[test]]
-name = "string_anchor_A_z_plus_no_match"
-pattern = '\A[a-zA-Z]+\z'
-input = "(asdf)asdf"
-matches = []
+name = "anchor_digit_exact"
+pattern = '^\d$'
+input = "1"
+matches = [[0, 1]]
 
 [[test]]
 name = "string_anchor_A_z_star_no_match"
@@ -15,25 +15,24 @@ pattern = '\A[a-zA-Z]*\z'
 input = "(asdf)asdf"
 matches = []
 
-[[test]]
-name = "string_anchor_A_z_star_match"
-pattern = '\A[a-zA-Z]*\z'
-input = "asdfasdf"
-matches = [[0, 8]]
 
+[[test]]
+name = "string_anchor_A_z_plus_no_match"
+pattern = '\A[a-zA-Z]+\z'
+input = "(asdf)asdf"
+matches = []
 [[test]]
 name = "string_anchor_A_z_plus_match"
 pattern = '\A[a-zA-Z]+\z'
 input = "asdfasdf"
 matches = [[0, 8]]
 
-# -- anchors --
-
 [[test]]
-name = "anchor_digit_exact"
-pattern = '^\d$'
-input = "1"
-matches = [[0, 1]]
+name = "string_anchor_A_z_star_match"
+pattern = '\A[a-zA-Z]*\z'
+input = "asdfasdf"
+matches = [[0, 8]]
+
 
 [[test]]
 name = "anchor_digit_exact_no_match_multidigit"
@@ -107,7 +106,6 @@ pattern = '^\d*\.?\d*$'
 input = "3.14159"
 matches = [[0, 7]]
 
-# -- word boundaries --
 
 [[test]]
 name = "word_boundary_11_bare"
@@ -187,7 +185,6 @@ pattern = '1\b-2'
 input = "1-2"
 matches = [[0, 3]]
 
-# -- character classes --
 
 [[test]]
 name = "charclass_negated_bounded_4"
@@ -219,7 +216,6 @@ pattern = '''["'][^"']{0,30}[?!\.]["']'''
 input = ' hello!" '
 matches = []
 
-# -- quantifiers --
 
 [[test]]
 name = "quantifier_bounded_repeat_1"
@@ -287,7 +283,6 @@ pattern = ".*a{3}"
 input = "aa aaa"
 matches = [[0, 6]]
 
-# -- groups and alternation --
 
 [[test]]
 name = "alt_or_any"
@@ -307,7 +302,6 @@ pattern = "..g"
 input = "dfdff dfggg gfgdfg gddfdf"
 matches = [[6, 9], [10, 13], [15, 18]]
 
-# -- complex real-world --
 
 [[test]]
 name = "real_ip_address"
@@ -363,7 +357,6 @@ pattern = '<!--[\s\S]*--[ \t]*>'
 input = "<!-- anything -- >"
 matches = [[0, 18]]
 
-# -- RE# wildcard underscore --
 
 [[test]]
 name = "wildcard_contains_a"
@@ -383,7 +376,6 @@ pattern = 'class="_*'
 input = 'class="dasdasdsdasd"'
 matches = [[0, 20]]
 
-# -- word boundary alternatives --
 
 [[test]]
 name = "wb_alt_begin_string_bare"
@@ -409,7 +401,6 @@ pattern = '11(?=\W|\z)'
 input = "11 "
 matches = [[0, 2]]
 
-# -- word boundary alternation --
 
 [[test]]
 name = "wb_alternation_pm"
@@ -435,7 +426,6 @@ pattern = '(aa|ab|a\b)'
 input = "a c"
 matches = [[0, 1]]
 
-# -- word boundary with classes (bug investigation) --
 
 [[test]]
 name = "wb_long_word_12plus"
@@ -509,7 +499,6 @@ pattern = '\b11\b'
 input = "a11b"
 matches = []
 
-# -- date validation --
 
 [[test]]
 name = "anchor_A_bare"

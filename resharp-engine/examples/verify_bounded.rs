@@ -14,7 +14,7 @@ fn main() {
         r"[A-Za-z]{8,}",
         r"[A-Za-z]{8,13}",
     ] {
-        let opts = EngineOptions::default().unicode(false);
+        let opts = EngineOptions::default().unicode(resharp::UnicodeMode::Ascii);
         let re = Regex::with_options(pat, opts).unwrap();
         let m = re.find_all(input).unwrap();
         let re3 = regex::bytes::Regex::new(pat).unwrap();

@@ -33,26 +33,3 @@ let re = resharp::Regex::with_options(
 | `\d+` | 1.3ms | 5.2ms | 3.9x slower |
 | `[A-Z]{2,}` | 0.7ms | 4.7ms | 6.7x slower |
 
-## Serialization / precompilation
-
-`to_bytes` fully compiles both DFAs and serializes them. `from_bytes` loads a ready-to-use `Regex` with no compilation cost. The speedup applies only to the first load - once compiled, a `Regex` is reused across matches without recompilation.
-
-```rust
-let re = resharp::Regex::new(r"\d{3}-\d{4}").unwrap();
-let bytes = re.to_bytes().unwrap();
-std::fs::write("pattern.bin", &bytes).unwrap();
-
-let bytes = std::fs::read("pattern.bin").unwrap();
-let re = resharp::Regex::from_bytes(&bytes).unwrap();
-```
-
-Returns `Error::CapacityExceeded` if the DFA exceeds `max_dfa_capacity`. The format is architecture-specific (x86_64 and aarch64 are not interchangeable). Deserialized regexes retain SIMD acceleration.
-
-### First-load time (AMD Ryzen 7 5800X)
-
-| Pattern | `Regex::new` (first load) | `from_bytes` (first load) | Speedup |
-|---|---|---|---|
-| dictionary 500 words | 6.2 ms | 125 µs | 50x |
-| dictionary 2663 words | 50 ms | 1.06 ms | 47x |
-| date pattern | 5.5 ms | 423 µs | 13x |
-| `\b\w+@\w+\.\w+\b` | 1.1 ms | 21 µs | 53x |

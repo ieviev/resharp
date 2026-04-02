@@ -32,7 +32,17 @@ fn build_class_from_ranges(b: &mut RegexBuilder, ranges: &[(char, char)], max_se
                     let conc1 = b.mk_concat(n1, conc2);
                     s3 = b.mk_union(s3, conc1);
                 }
-                _ => unreachable!(),
+                4 if max_seq_len >= 4 => {
+                    let n1 = b.mk_range_u8(bytes[0].0, bytes[0].1);
+                    let n2 = b.mk_range_u8(bytes[1].0, bytes[1].1);
+                    let n3 = b.mk_range_u8(bytes[2].0, bytes[2].1);
+                    let n4 = b.mk_range_u8(bytes[3].0, bytes[3].1);
+                    let conc3 = b.mk_concat(n3, n4);
+                    let conc2 = b.mk_concat(n2, conc3);
+                    let conc1 = b.mk_concat(n1, conc2);
+                    s3 = b.mk_union(s3, conc1);
+                }
+                _ => {}
             }
         }
     }
@@ -127,6 +137,19 @@ fn main() {
         eprintln!("{pos_label}={:?} nodes={}", pos_node, b.num_nodes());
 
         emit_class(&b, pos_node, pos_fn, pos_label);
+        println!();
+    }
+
+    // full Unicode classes (all UTF-8 sequence lengths)
+    for (pat, fn_name, label) in &[
+        (r"\w", "build_word_class_full", "\\w(full)"),
+        (r"\d", "build_digit_class_full", "\\d(full)"),
+    ] {
+        let mut b = RegexBuilder::new();
+        let pos_ranges = class_ranges(pat);
+        let pos_node = build_class_from_ranges(&mut b, &pos_ranges, 4);
+        eprintln!("{label}={:?} nodes={}", pos_node, b.num_nodes());
+        emit_class(&b, pos_node, fn_name, label);
         println!();
     }
 }

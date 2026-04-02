@@ -1,4 +1,10 @@
 [[test]]
+name = "end_anchor_digit"
+pattern = '[0-9]$'
+input = "324"
+matches = [[2, 3]]
+
+[[test]]
 name = "overlap_bracadabra"
 pattern = "bracadabra"
 input = "abracadabracadabracadabra"
@@ -22,14 +28,6 @@ name = "bounded_group_aaa_1_2_exact"
 pattern = "(aaa){1,2}"
 input = "aaaaaa"
 matches = [[0, 6]]
-
-
-[[test]]
-name = "end_anchor_digit"
-pattern = '[0-9]$'
-input = "324"
-matches = [[2, 3]]
-
 
 [[test]]
 name = "html_tag_content"

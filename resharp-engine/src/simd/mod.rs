@@ -1,164 +1,7 @@
 pub use resharp_algebra::solver::TSet;
 
-// higher value = more common in typical text = worse search target.
-// covers all 256 byte values assuming UTF-8 encoded input.
-pub static BYTE_FREQ: [u8; 256] = {
-    let mut t = [0u8; 256];
-
-    // ASCII whitespace
-    t[0x09] = 70;  // TAB
-    t[0x0A] = 205; // LF
-    t[0x0D] = 195; // CR
-    t[0x20] = 210; // space
-
-    // ASCII lowercase (English letter frequency)
-    t[b'e' as usize] = 200;
-    t[b't' as usize] = 190;
-    t[b'a' as usize] = 180;
-    t[b'o' as usize] = 175;
-    t[b'i' as usize] = 170;
-    t[b'n' as usize] = 165;
-    t[b's' as usize] = 160;
-    t[b'h' as usize] = 155;
-    t[b'r' as usize] = 150;
-    t[b'd' as usize] = 140;
-    t[b'l' as usize] = 135;
-    t[b'c' as usize] = 130;
-    t[b'u' as usize] = 125;
-    t[b'm' as usize] = 120;
-    t[b'w' as usize] = 115;
-    t[b'f' as usize] = 110;
-    t[b'g' as usize] = 105;
-    t[b'y' as usize] = 100;
-    t[b'p' as usize] = 95;
-    t[b'b' as usize] = 90;
-    t[b'v' as usize] = 85;
-    t[b'k' as usize] = 80;
-    t[b'j' as usize] = 50;
-    t[b'x' as usize] = 45;
-    t[b'q' as usize] = 40;
-    t[b'z' as usize] = 35;
-
-    // ASCII uppercase
-    t[b'E' as usize] = 30;
-    t[b'T' as usize] = 29;
-    t[b'A' as usize] = 28;
-    t[b'O' as usize] = 27;
-    t[b'I' as usize] = 26;
-    t[b'N' as usize] = 25;
-    t[b'S' as usize] = 24;
-    t[b'H' as usize] = 23;
-    t[b'R' as usize] = 22;
-    t[b'D' as usize] = 21;
-    t[b'L' as usize] = 20;
-    t[b'C' as usize] = 19;
-    t[b'U' as usize] = 18;
-    t[b'M' as usize] = 17;
-    t[b'W' as usize] = 16;
-    t[b'F' as usize] = 15;
-    t[b'G' as usize] = 14;
-    t[b'Y' as usize] = 13;
-    t[b'P' as usize] = 12;
-    t[b'B' as usize] = 11;
-    t[b'V' as usize] = 10;
-    t[b'K' as usize] = 9;
-    t[b'J' as usize] = 8;
-    t[b'X' as usize] = 7;
-    t[b'Q' as usize] = 6;
-    t[b'Z' as usize] = 5;
-
-    // ASCII digits
-    t[b'0' as usize] = 60; t[b'1' as usize] = 58; t[b'2' as usize] = 56;
-    t[b'3' as usize] = 54; t[b'4' as usize] = 52; t[b'5' as usize] = 50;
-    t[b'6' as usize] = 48; t[b'7' as usize] = 46; t[b'8' as usize] = 44;
-    t[b'9' as usize] = 42;
-
-    // ASCII punctuation
-    t[b'.' as usize] = 70; t[b',' as usize] = 65; t[b'\'' as usize] = 55;
-    t[b'"' as usize] = 50; t[b'-' as usize] = 48; t[b':' as usize] = 45;
-    t[b'/' as usize] = 40; t[b'(' as usize] = 35; t[b')' as usize] = 35;
-    t[b';' as usize] = 35; t[b'_' as usize] = 35; t[b'!' as usize] = 30;
-    t[b'=' as usize] = 30; t[b'#' as usize] = 25; t[b'*' as usize] = 25;
-    t[b'<' as usize] = 25; t[b'>' as usize] = 25; t[b'+' as usize] = 20;
-    t[b'%' as usize] = 20; t[b'&' as usize] = 20; t[b'?' as usize] = 20;
-    t[b'[' as usize] = 20; t[b']' as usize] = 20; t[b'{' as usize] = 20;
-    t[b'}' as usize] = 20; t[b'@' as usize] = 15; t[b'$' as usize] = 15;
-    t[b'\\' as usize] = 15; t[b'|' as usize] = 15; t[b'`' as usize] = 15;
-    t[b'^' as usize] = 10; t[b'~' as usize] = 10;
-
-    // UTF-8 continuation bytes 0x80-0x8F
-    // after D1: Cyrillic lowercase р с т у ф х ц ч ш щ ъ ы ь э ю я
-    // values reflect Cyrillic letter frequency + CJK/Latin baseline
-    t[0x80] = 140; t[0x81] = 135; t[0x82] = 135; t[0x83] = 105;
-    t[0x84] = 30;  t[0x85] = 55;  t[0x86] = 35;  t[0x87] = 70;
-    t[0x88] = 50;  t[0x89] = 30;  t[0x8A] = 15;  t[0x8B] = 85;
-    t[0x8C] = 85;  t[0x8D] = 30;  t[0x8E] = 40;  t[0x8F] = 90;
-
-    // UTF-8 continuation bytes 0x90-0x9F
-    // after D0: Cyrillic uppercase А Б В Г Д Е Ж З И Й К Л М Н О П
-    // also E2 80 9x smart punctuation (-, "", '')
-    t[0x90] = 25;  t[0x91] = 20;  t[0x92] = 20;  t[0x93] = 15;
-    t[0x94] = 20;  t[0x95] = 20;  t[0x96] = 15;  t[0x97] = 15;
-    t[0x98] = 20;  t[0x99] = 15;  t[0x9A] = 15;  t[0x9B] = 15;
-    t[0x9C] = 20;  t[0x9D] = 20;  t[0x9E] = 25;  t[0x9F] = 15;
-
-    // UTF-8 continuation bytes 0xA0-0xAF
-    // after D0: Cyrillic uppercase Р С Т У Ф Х Ц Ч Ш Щ Ъ Ы Ь Э Ю Я
-    // after C2/C3: NBSP ¡ ¢ £ ¤ ¥ ... / à á â ã ä å æ ç è é ê ë ì í î ï
-    t[0xA0] = 45;  t[0xA1] = 25;  t[0xA2] = 20;  t[0xA3] = 20;
-    t[0xA4] = 30;  t[0xA5] = 15;  t[0xA6] = 15;  t[0xA7] = 20;
-    t[0xA8] = 20;  t[0xA9] = 30;  t[0xAA] = 15;  t[0xAB] = 20;
-    t[0xAC] = 15;  t[0xAD] = 15;  t[0xAE] = 15;  t[0xAF] = 15;
-
-    // UTF-8 continuation bytes 0xB0-0xBF
-    // after D0: Cyrillic lowercase а б в г д е ж з и й к л м н о п
-    // after C3: Latin accented ð ñ ò ó ô õ ö ÷ ø ù ú û ü ý þ ÿ
-    t[0xB0] = 160; t[0xB1] = 80;  t[0xB2] = 130; t[0xB3] = 80;
-    t[0xB4] = 115; t[0xB5] = 170; t[0xB6] = 55;  t[0xB7] = 75;
-    t[0xB8] = 155; t[0xB9] = 65;  t[0xBA] = 120; t[0xBB] = 125;
-    t[0xBC] = 115; t[0xBD] = 150; t[0xBE] = 175; t[0xBF] = 105;
-
-    // UTF-8 2-byte lead bytes (0xC2-0xDF)
-    //   0xC0-C1 invalid (overlong), left at 0
-    t[0xC2] = 130; // Latin-1 supplement: NBSP © ® currency
-    t[0xC3] = 170; // Latin-1 accented: à á â ã ä å æ ç è é ê ë ...
-    t[0xC4] = 50;  // Latin Extended-A
-    t[0xC5] = 45;  // Latin Extended-A
-    t[0xC6] = 20;  // Latin Extended-B
-    t[0xC7] = 15;  t[0xC8] = 15;  t[0xC9] = 15;  // Latin Extended-B, IPA
-    t[0xCA] = 15;  t[0xCB] = 10;  // spacing modifiers
-    t[0xCC] = 50;  // combining diacritical marks (Vietnamese etc.)
-    t[0xCD] = 35;  // combining / Greek
-    t[0xCE] = 100; // Greek
-    t[0xCF] = 90;  // Greek continued
-    t[0xD0] = 230; // Cyrillic А-п (most common lead byte in Cyrillic text)
-    t[0xD1] = 220; // Cyrillic р-я
-    t[0xD2] = 25;  t[0xD3] = 20;  // extended Cyrillic
-    t[0xD4] = 15;  t[0xD5] = 15;  t[0xD6] = 10;  // Armenian, Georgian
-    t[0xD7] = 50;  // Hebrew
-    t[0xD8] = 70;  t[0xD9] = 65;  // Arabic
-    t[0xDA] = 35;  t[0xDB] = 30;  // Arabic supplemental
-    t[0xDC] = 10;  t[0xDD] = 5; t[0xDE] = 5; t[0xDF] = 5; // Syriac, Thaana, NKo
-
-    // UTF-8 3-byte lead bytes (0xE0-0xEF)
-    t[0xE0] = 70;  // Devanagari, Bengali, Tamil
-    t[0xE1] = 55;  // Tibetan, Myanmar, Georgian, Ethiopic
-    t[0xE2] = 120; // general punctuation & symbols (- "" • →)
-    t[0xE3] = 110; // CJK symbols, Hiragana, Katakana
-    t[0xE4] = 170; t[0xE5] = 170; t[0xE6] = 170; // CJK Unified Ideographs
-    t[0xE7] = 165; t[0xE8] = 165; t[0xE9] = 160; // CJK Unified Ideographs
-    t[0xEA] = 120; t[0xEB] = 110; t[0xEC] = 100; // Hangul Syllables
-    t[0xED] = 70;  // Hangul tail / surrogate half
-    t[0xEE] = 10;  // Private Use Area
-    t[0xEF] = 60;  // specials, halfwidth, BOM
-
-    // UTF-8 4-byte lead bytes (0xF0-0xF4)
-    t[0xF0] = 40;  // supplementary planes (emoji)
-    t[0xF1] = 10;  t[0xF2] = 5; t[0xF3] = 5; t[0xF4] = 3;
-    // 0xF5-0xFF invalid, left at 0
-
-    t
-};
+mod byte_freq;
+pub use byte_freq::BYTE_FREQ;
 
 #[inline]
 pub fn has_simd() -> bool {
@@ -175,7 +18,6 @@ pub fn has_simd() -> bool {
         false
     }
 }
-
 
 #[cfg(target_arch = "x86_64")]
 use std::arch::x86_64::*;
@@ -314,6 +156,7 @@ impl RevSearchBytes {
 }
 
 #[cfg(target_arch = "x86_64")]
+#[cfg_attr(debug_assertions, derive(Debug))]
 pub struct FwdLiteralSearch {
     pub(crate) needle: Vec<u8>,
     chunks: Vec<u64>,
@@ -549,6 +392,8 @@ impl RevPrefixSearch {
         }
     }
 
+    // TBD: cleanup
+    #[allow(dead_code)]
     pub fn len(&self) -> usize {
         self.len
     }
@@ -816,6 +661,7 @@ impl RevPrefixSearch {
 }
 
 #[cfg(target_arch = "x86_64")]
+#[cfg_attr(debug_assertions, derive(Debug))]
 pub struct FwdPrefixSearch {
     len: usize,
     num_simd: usize,
@@ -826,6 +672,7 @@ pub struct FwdPrefixSearch {
 
 #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
 #[repr(align(32))]
+#[cfg_attr(debug_assertions, derive(Debug))]
 pub(crate) struct TeddyMasks {
     lo: [[u8; 32]; 3],
     hi: [[u8; 32]; 3],
@@ -945,7 +792,9 @@ impl FwdPrefixSearch {
             );
             let mask = _mm256_movemask_epi8(r0) as u32;
             if mask != 0 {
-                if let Some(m) = Self::verify_inline(ptr, pos, mask, sets_ptr, len, self.verify_order.as_ptr()) {
+                if let Some(m) =
+                    Self::verify_inline(ptr, pos, mask, sets_ptr, len, self.verify_order.as_ptr())
+                {
                     return Some(m);
                 }
             }
@@ -982,7 +831,9 @@ impl FwdPrefixSearch {
             let combined = _mm256_and_si256(r0, r1);
             let mask = _mm256_movemask_epi8(combined) as u32;
             if mask != 0 {
-                if let Some(m) = Self::verify_inline(ptr, pos, mask, sets_ptr, len, self.verify_order.as_ptr()) {
+                if let Some(m) =
+                    Self::verify_inline(ptr, pos, mask, sets_ptr, len, self.verify_order.as_ptr())
+                {
                     return Some(m);
                 }
             }
@@ -1052,12 +903,26 @@ impl FwdPrefixSearch {
             let mask_b = _mm256_movemask_epi8(rb) as u32;
             if (mask_a | mask_b) != 0 {
                 if mask_a != 0 {
-                    if let Some(m) = Self::verify_inline(ptr, pos, mask_a, sets_ptr, len, self.verify_order.as_ptr()) {
+                    if let Some(m) = Self::verify_inline(
+                        ptr,
+                        pos,
+                        mask_a,
+                        sets_ptr,
+                        len,
+                        self.verify_order.as_ptr(),
+                    ) {
                         return Some(m);
                     }
                 }
                 if mask_b != 0 {
-                    if let Some(m) = Self::verify_inline(ptr, pos + 32, mask_b, sets_ptr, len, self.verify_order.as_ptr()) {
+                    if let Some(m) = Self::verify_inline(
+                        ptr,
+                        pos + 32,
+                        mask_b,
+                        sets_ptr,
+                        len,
+                        self.verify_order.as_ptr(),
+                    ) {
                         return Some(m);
                     }
                 }
@@ -1087,7 +952,9 @@ impl FwdPrefixSearch {
             );
             let mask = _mm256_movemask_epi8(combined) as u32;
             if mask != 0 {
-                if let Some(m) = Self::verify_inline(ptr, pos, mask, sets_ptr, len, self.verify_order.as_ptr()) {
+                if let Some(m) =
+                    Self::verify_inline(ptr, pos, mask, sets_ptr, len, self.verify_order.as_ptr())
+                {
                     return Some(m);
                 }
             }
@@ -1129,6 +996,7 @@ impl FwdPrefixSearch {
 }
 
 #[cfg(target_arch = "x86_64")]
+#[cfg_attr(debug_assertions, derive(Debug))]
 pub struct FwdRangeSearch {
     len: usize,
     pub(crate) anchor_pos: usize,
@@ -1141,7 +1009,12 @@ impl FwdRangeSearch {
     pub fn new(len: usize, anchor_pos: usize, ranges: Vec<(u8, u8)>, sets: Vec<TSet>) -> Self {
         debug_assert!(!ranges.is_empty() && ranges.len() <= 3);
         debug_assert!(anchor_pos < len);
-        Self { len, anchor_pos, ranges, sets }
+        Self {
+            len,
+            anchor_pos,
+            ranges,
+            sets,
+        }
     }
 
     pub fn len(&self) -> usize {
@@ -1234,7 +1107,12 @@ impl FwdRangeSearch {
     pub fn new(len: usize, anchor_pos: usize, ranges: Vec<(u8, u8)>, sets: Vec<TSet>) -> Self {
         debug_assert!(!ranges.is_empty() && ranges.len() <= 3);
         debug_assert!(anchor_pos < len);
-        Self { len, anchor_pos, ranges, sets }
+        Self {
+            len,
+            anchor_pos,
+            ranges,
+            sets,
+        }
     }
 
     pub fn len(&self) -> usize {
@@ -1264,8 +1142,8 @@ impl FwdRangeSearch {
     }
 
     unsafe fn find_fwd_neon(&self, haystack: &[u8], start: usize) -> Option<usize> {
-        use std::arch::aarch64::*;
         use neon::neon_movemask;
+        use std::arch::aarch64::*;
 
         let ptr = haystack.as_ptr();
         let n = self.ranges.len();
@@ -1316,7 +1194,6 @@ impl FwdRangeSearch {
         self.verify_tail_fwd(haystack, pos)
     }
 }
-
 
 #[cfg(target_arch = "x86_64")]
 pub struct RevSearchRanges {
@@ -1478,7 +1355,6 @@ impl RevSearchRanges {
         None
     }
 }
-
 
 #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
 pub struct RevSearchBytes {

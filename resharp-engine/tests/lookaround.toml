@@ -3,7 +3,6 @@ lookahead, lookbehind, combined lookaround, and negative lookaround tests.
 matches = [[start, end]] in utf8 bytes (half-open intervals).
 '''
 
-# -- lookahead --
 
 [[test]]
 name = "lookahead_greedy"
@@ -156,7 +155,6 @@ pattern = 'a_*(?=_*\z)'
 input = "aaa"
 matches = [[0, 3]]
 
-# -- lookbehind --
 
 [[test]]
 name = "lookbehind_zero_width_b"
@@ -276,7 +274,6 @@ pattern = '(?<=a.*)\bb'
 input = "a  b"
 matches = [[3, 4]]
 
-# -- lookbehind + lookahead combined --
 
 [[test]]
 name = "lookbehind_lookahead_dot_c"
@@ -338,7 +335,6 @@ pattern = "(ab){1,3}(?=.*c)"
 input = "__ababab_c"
 matches = [[2, 8]]
 
-# -- complex lookaround --
 
 [[test]]
 name = "lookahead_complex_multi"
@@ -352,7 +348,6 @@ pattern = "(?<=f)(?<=e.*)(?<=c.*).+"
 input = "abcdefghij"
 matches = [[6, 10]]
 
-# -- negative lookaround --
 
 [[test]]
 name = "neg_lookahead"
@@ -405,7 +400,6 @@ pattern = '(?<!\d)a'
 input = " a"
 matches = [[1, 2]]
 
-# -- conditional matching --
 
 [[test]]
 name = "lookahead_conditional_digit"
@@ -420,7 +414,6 @@ input = "aaa"
 expect_error = true
 reason = "unsupported: lookbehind as match filter"
 
-# -- lookahead with word boundary --
 
 [[test]]
 name = "lookahead_wb_dash"
@@ -440,7 +433,6 @@ pattern = 'x\b(?=.*c)'
 input = "a x c"
 matches = [[2, 3]]
 
-# -- union of lookaheads --
 
 [[test]]
 name = "union_lookahead_ab_cd_ef_gh"
@@ -460,7 +452,6 @@ pattern = 'ab(?=cd)|ef(?=gh)'
 input = "abcd efgh"
 matches = [[0, 2], [5, 7]]
 
-# -- readme lookahead derivative tests --
 # derivatives of (?<=\s)[A-Z][a-z]+(?=\s) and related patterns
 
 [[test]]
@@ -583,10 +574,40 @@ pattern = '(cat|dog)(?=s)'
 input = "cat dog"
 matches = []
 
-# -- phone with lookaround context --
 
 [[test]]
 name = "lookaround_phone_uk"
 pattern = '(\s*\(?0\d{4}\)?\s*\d{6}\s*)|(\s*\(?0\d{3}\)?\s*\d{3}\s*\d{4}\s*)'
 input = "01603 123123"
 matches = [[0, 12]]
+
+
+[[test]]
+name = "wb_digit_alt_basic"
+pattern = '\b(?:4\d{3}|5\d{3}|6\d{3})\b'
+input = "pay 4123 or 9999"
+matches = [[4, 8]]
+
+[[test]]
+name = "wb_digit_alt_no_match"
+pattern = '\b(?:4\d{3}|5\d{3}|6\d{3})\b'
+input = "pay 9999 or 8888"
+matches = []
+
+[[test]]
+name = "wb_digit_alt_multiple"
+pattern = '\b(?:4\d|5\d|6\d)\b'
+input = "41 52 63 71"
+matches = [[0, 2], [3, 5], [6, 8]]
+
+[[test]]
+name = "wb_digit_no_boundary_no_match"
+pattern = '\b4\d+\b'
+input = "x4123x"
+matches = []
+
+[[test]]
+name = "wb_digit_at_start"
+pattern = '\b4\d+\b'
+input = "4123 rest"
+matches = [[0, 4]]

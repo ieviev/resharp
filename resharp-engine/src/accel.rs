@@ -42,6 +42,7 @@ impl MintermSearchValue {
 }
 
 #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+#[cfg_attr(debug_assertions, derive(Debug))]
 pub enum FwdPrefixSearch {
     Literal(crate::simd::FwdLiteralSearch),
     Prefix(crate::simd::FwdPrefixSearch),

@@ -39,6 +39,10 @@ regex-automata = "0.4.14"
 aho-corasick = "1"
 serde_json = "1"
 
+[[bin]]
+name = "build_byte_freq"
+path = "src/bin/build_byte_freq.rs"
+
 [[bench]]
 name = "comparison"
 harness = false
@@ -55,6 +59,4 @@ harness = false
 name = "experiments"
 harness = false
 
-[[bench]]
-name = "serialization"
-harness = false
+

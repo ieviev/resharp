@@ -1,0 +1,147 @@
+description = "prefix set and potential_start computation tests"
+
+[[test]]
+name = "num"
+pattern = '^\d+$'
+prefix_fwd = "\\n"
+
+
+[[test]]
+name = "simple_lb2"
+pattern = '(?<=a|\A)b*'
+prefix_fwd = "a"
+
+
+[[test]]
+name = "datetime"
+pattern = '\d+(?=[aA]\.?[mM]\.?)'
+potential_rev = "[Mm];[\\.Aa];[0-9Aa\\x80-\\x89\\xA0-\\xA9\\xB0-\\xB9]"
+prefix_rev = "[Mm]"
+
+
+
+[[test]]
+name = "simple_lb"
+pattern = '(?<=a)b*'
+prefix_fwd = "a"
+
+
+[[test]]
+name = "potential_start_rev_word_boundary"
+pattern = '\b[A-Z][a-z]+\b'
+
+[[test]]
+name = "credit_card3"
+pattern = '''\b(4a|5b|6c)'''
+potential_fwd = "[\\x00-/:-@\\[-\\^`\\{-\\x7F\\xC0-\\xC3\\xCB\\xCD-\\xCF\\xD2\\xD4-\\xD9\\xDB-\\xF7];[4-6\\x80-\\xBF];[4-6a-c\\x80-\\xBF]"
+prefix_fwd = ""
+prefix_rev = ""
+potential_rev = "[a-c];[4-6]"
+
+
+[[test]]
+name = "prefix_world_dollar"
+pattern = 'world$'
+ignore = true
+prefix_rev = "TODO"
+potential_rev = "TODO"
+
+[[test]]
+name = "prefix_twain"
+pattern = "Twain"
+prefix_rev = "n;i;a;w;T"
+
+[[test]]
+name = "prefix_la1"
+pattern = 'a(?=b)'
+prefix_rev = "b"
+
+[[test]]
+name = "prefix_la"
+pattern = 'bb(?=aa)'
+prefix_fwd = "b;b;a;a"
+
+[[test]]
+name = "prefix_intersection"
+pattern = "_*A_*&_*B"
+prefix_rev = "B"
+
+[[test]]
+name = "prefix_huck"
+pattern = "_*Huck_*"
+prefix_rev = "k;c;u;H"
+prefix_fwd = "H;u;c;k"
+
+[[test]]
+name = "prefix_hello"
+pattern = "hello"
+prefix_rev = "o;l;l;e;h"
+
+[[test]]
+name = "potential_start_alternation"
+pattern = "Tom|Sawyer|Huckleberry|Finn"
+potential_rev = "[mnry];[enor];[Tiry]"
+
+[[test]]
+name = "prefix_lookahead"
+pattern = '.*(?=aaa)'
+prefix_rev = "a;a;a"
+
+[[test]]
+name = "potential_start_union_suffix"
+pattern = 'Huck[a-zA-Z]+|Saw[a-zA-Z]+'
+potential_rev = "[A-Za-z];[kw];[ac];[Su]"
+
+[[test]]
+name = "potential_start_long_union"
+pattern = "Sherlock Holmes|John Watson|Irene Adler|Inspector Lestrade|Professor Moriarty"
+potential_rev = "[enrsy];[deot];[almrs];[adlrt];[Aaiot];[ HWrs];[ eo];[LMkn];[ ceh];[or];[IJlo]"
+
+[[test]]
+name = "fwd_potential_start_literal_union"
+pattern = "Sherlock|Holmes|Watson|Irene|Adler"
+potential_fwd = "[AHISW];[adhor];[elt];[emnrs];[elor]"
+
+[[test]]
+name = "prefix_intersection_abc"
+pattern = ".*a.*&.*b.*&.*c.*"
+potential_rev = "[a-c];.;."
+
+[[test]]
+name = "potential_start_rev_lookbehind"
+pattern = '(?<=x)abc'
+potential_rev = "c;b;a;x"
+
+[[test]]
+name = "potential_start_rev_dotstar_suffix"
+pattern = "_*Huck"
+potential_rev = "k;c;u;H"
+
+[[test]]
+name = "potential_start_rev_lookahead_word"
+pattern = '(?<=\s)[A-Z][a-z]+(?=\s)'
+potential_rev = '[\t-\r \x85\xA0];[a-z\xC2];[A-Za-z];[\t-\r A-Za-z\x85\xA0]'
+
+[[test]]
+name = "potential_start_rev_alternation_with_lookahead"
+pattern = '(?<=\s)(Tom|Sawyer|Finn)(?=\s)'
+potential_rev = '[\t-\r \x85\xA0];[mnr\xC2];[em-or];[Teinoy];[\t-\r FTiwy\x85\xA0]'
+
+[[test]]
+name = "potential_start_rev_char_class_plus"
+pattern = '[0-9]+'
+potential_rev = "[0-9]"
+
+# Bug: normalize_lb inlines \A·~(_*\w) from the Unicode \b lookbehind into
+# Concat(\A, Concat(~(_*\w), body)). BFS hits d[\A] at CENTER = BOT → returns "".
+# After fixing nonbegins to strip \A paths, potential_fwd should see the non-word
+# boundary byte followed by the literal chars.
+[[test]]
+name = "wb_fwd_prefix_alternation"
+pattern = '\b(4a|5b|6c)'
+potential_fwd = "[\\x00-/:-@\\[-\\^`\\{-\\x7F\\xC0-\\xC3\\xCB\\xCD-\\xCF\\xD2\\xD4-\\xD9\\xDB-\\xF7];[4-6\\x80-\\xBF];[4-6a-c\\x80-\\xBF]"
+
+[[test]]
+name = "wb_fwd_prefix_simple"
+pattern = '\b4a'
+potential_fwd = "[\\x00-/:-@\\[-\\^`\\{-\\x7F\\xC0-\\xC3\\xCB\\xCD-\\xCF\\xD2\\xD4-\\xD9\\xDB-\\xF7];[4\\x80-\\xBF];[4a\\x80-\\xBF]"

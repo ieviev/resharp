@@ -4,7 +4,6 @@ matches = [[start, end]] in utf8 bytes (half-open intervals).
 all tests use anchored = true.
 '''
 
-# -- with explicit \A --
 
 [[test]]
 name = "match"
@@ -69,7 +68,6 @@ input = "xyz"
 matches = [[0, 0]]
 anchored = true
 
-# -- without leading \A (implicit anchoring) --
 
 [[test]]
 name = "no_anchor_alpha"

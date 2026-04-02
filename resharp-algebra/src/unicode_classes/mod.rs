@@ -2,9 +2,12 @@ mod classes;
 
 use crate::{NodeId, RegexBuilder};
 
-pub use classes::*;
+pub use classes::{
+    build_digit_class, build_digit_class_full, build_space_class, build_word_class,
+    build_word_class_full,
+};
 
-fn utf8_char(b: &mut RegexBuilder) -> NodeId {
+pub(crate) fn utf8_char(b: &mut RegexBuilder) -> NodeId {
     let ascii = b.mk_range_u8(0, 127);
     let cont = b.mk_range_u8(0x80, 0xBF);
     let c2 = b.mk_range_u8(0xC0, 0xDF);
@@ -53,9 +56,23 @@ impl UnicodeClassCache {
         }
     }
 
+    pub fn ensure_word_full(&mut self, b: &mut RegexBuilder) {
+        if self.word == NodeId::MISSING {
+            self.word = build_word_class_full(b);
+            self.non_word = neg_class(b, self.word);
+        }
+    }
+
     pub fn ensure_digit(&mut self, b: &mut RegexBuilder) {
         if self.digit == NodeId::MISSING {
             self.digit = build_digit_class(b);
+            self.non_digit = neg_class(b, self.digit);
+        }
+    }
+
+    pub fn ensure_digit_full(&mut self, b: &mut RegexBuilder) {
+        if self.digit == NodeId::MISSING {
+            self.digit = build_digit_class_full(b);
             self.non_digit = neg_class(b, self.digit);
         }
     }

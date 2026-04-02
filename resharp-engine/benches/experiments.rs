@@ -9,6 +9,49 @@ fn load_haystack(name: &str) -> String {
     std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("failed to load {}: {}", path, e))
 }
 
+const CREDIT_CARD_PAT: &str = r"\b(?:4\d{3}[\s\-]?\d{4}[\s\-]?\d{4}[\s\-]?\d{4}|5[1-5]\d{2}[\s\-]?\d{4}[\s\-]?\d{4}[\s\-]?\d{4}|3[47]\d{2}[\s\-]?\d{6}[\s\-]?\d{5}|6011[\s\-]?\d{4}[\s\-]?\d{4}[\s\-]?\d{4})\b";
+
+fn bench_credit_card(c: &mut Criterion) {
+    // no-match haystack: prose text, no credit card numbers
+    let base = load_haystack("en-sampled.txt");
+    // repeat to ~5MB so throughput numbers are stable
+    let mut haystack = String::with_capacity(6 * 1024 * 1024);
+    while haystack.len() < 5 * 1024 * 1024 {
+        haystack.push_str(&base);
+    }
+
+    // seeded variant: inject a valid Visa number every ~500 chars
+    let mut seeded = String::with_capacity(haystack.len() + 100_000);
+    let chunk = 500;
+    let chars: Vec<char> = haystack.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        let end = (i + chunk).min(chars.len());
+        seeded.extend(chars[i..end].iter().copied());
+        seeded.push_str(" 4111 1111 1111 1111 ");
+        i = end;
+    }
+
+    for (label, text) in [("no-match", haystack.as_str()), ("seeded", seeded.as_str())] {
+        let input = text.as_bytes();
+        let mut group = c.benchmark_group(format!("credit-card/{label}"));
+        group.throughput(Throughput::Bytes(input.len() as u64));
+
+        let re_resharp = resharp::Regex::new(CREDIT_CARD_PAT).unwrap();
+        re_resharp.find_all(input).ok(); // warm up DFA cache
+        group.bench_function("resharp", |b| {
+            b.iter(|| black_box(re_resharp.find_all(black_box(input)).unwrap().len()));
+        });
+
+        let re_regex = regex::bytes::Regex::new(CREDIT_CARD_PAT).unwrap();
+        group.bench_function("regex", |b| {
+            b.iter(|| black_box(re_regex.find_iter(black_box(input)).count()));
+        });
+
+        group.finish();
+    }
+}
+
 fn load_dictionary_words(n: usize) -> Vec<String> {
     let path = format!("{}/regexes/length-15.txt", data_dir());
     let contents = std::fs::read_to_string(&path).unwrap();

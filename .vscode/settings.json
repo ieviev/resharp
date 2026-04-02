@@ -1,0 +1,7 @@
+{
+    "files.exclude": {
+        "**/.git": true,
+        "data/haystacks/*": true,
+        "data/regexes/*": true,
+    }
+}
