@@ -412,7 +412,7 @@ checksum = "dc897dd8d9e8bd1ed8cdad82b5966c3e0ecae09fb1907d58efaa013543185d0a"
 
 [[package]]
 name = "resharp"
-version = "0.3.8"
+version = "0.3.9"
 dependencies = [
  "aho-corasick",
  "bincode",
@@ -431,21 +431,21 @@ dependencies = [
 
 [[package]]
 name = "resharp-algebra"
-version = "0.3.8"
+version = "0.3.9"
 dependencies = [
  "rustc-hash",
 ]
 
 [[package]]
 name = "resharp-ffi"
-version = "0.3.8"
+version = "0.3.9"
 dependencies = [
  "resharp",
 ]
 
 [[package]]
 name = "resharp-parser"
-version = "0.3.8"
+version = "0.3.9"
 dependencies = [
  "regex-syntax",
  "resharp-algebra",
