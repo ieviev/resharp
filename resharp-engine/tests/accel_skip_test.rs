@@ -34,6 +34,7 @@ fn accel_skip_lazy() {
         .join("accel_skip.toml");
     let tests = load_tests(path.to_str().unwrap());
     for (pattern, input, expected) in &tests {
+        // println!("pattern: {}",pattern);
         let re = Regex::with_options(
             pattern,
             EngineOptions {

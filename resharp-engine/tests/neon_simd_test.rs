@@ -30,7 +30,8 @@ fn assert_simd_eq(pattern: &str, input: &[u8]) {
     let lazy = find_lazy(pattern, input);
     let default = find_default(pattern, input);
     assert_eq!(
-        lazy, default,
+        lazy,
+        default,
         "SIMD mismatch: pattern={:?}, input_len={}, lazy={:?}, default={:?}",
         pattern,
         input.len(),
@@ -42,13 +43,13 @@ fn assert_simd_eq(pattern: &str, input: &[u8]) {
 fn assert_simd(pattern: &str, input: &[u8], expected: &[(usize, usize)]) {
     let lazy = find_lazy(pattern, input);
     assert_eq!(
-        lazy, expected,
+        lazy,
+        expected,
         "SIMD wrong: pattern={:?}, input_len={}",
         pattern,
         input.len()
     );
 }
-
 
 #[test]
 fn rev_skip_single_byte_every_position() {
@@ -84,7 +85,6 @@ fn rev_skip_all_match() {
     let expected: Vec<(usize, usize)> = (0..100).map(|i| (i, i + 1)).collect();
     assert_simd("Z", &hay, &expected);
 }
-
 
 #[test]
 fn fwd_literal_at_every_offset() {
@@ -149,7 +149,6 @@ fn fwd_literal_bulk_find_all() {
     assert_eq!(r, vec![(0, 3), (31, 34), (48, 51)]);
 }
 
-
 #[test]
 fn teddy_digit_class_sweep() {
     for size in [10, 15, 16, 17, 31, 32, 33, 48, 64, 100] {
@@ -172,10 +171,7 @@ fn teddy_upper_lower_class() {
 
 #[test]
 fn teddy_alternation_three_way() {
-    assert_simd_eq(
-        "cat|dog|fox",
-        b"the cat sat on the dog and the fox ran",
-    );
+    assert_simd_eq("cat|dog|fox", b"the cat sat on the dog and the fox ran");
 }
 
 #[test]
@@ -200,7 +196,6 @@ fn teddy_dense_matches() {
     let hay: Vec<u8> = (0..100).map(|i| b'0' + (i % 10)).collect();
     assert_simd_eq("[0-9]+", &hay);
 }
-
 
 #[test]
 fn bounded_rep_size_sweep() {
@@ -236,7 +231,6 @@ fn bounded_rep_multiple_at_boundaries() {
     assert_simd_eq(pattern, &hay);
 }
 
-
 #[test]
 fn all_accel_skip_patterns_simd_vs_default() {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -268,7 +262,6 @@ fn all_accel_skip_patterns_simd_vs_default() {
         );
     }
 }
-
 
 fn run_toml_lazy(filename: &str) {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -355,7 +348,6 @@ fn lazy_paragraph_toml() {
     run_toml_lazy("paragraph.toml");
 }
 
-
 #[test]
 fn literal_in_1kb_haystack() {
     let mut hay = vec![b'.'; 1024];
@@ -388,7 +380,6 @@ fn dot_pattern_long_haystack() {
     assert_simd_eq("..x", &hay);
 }
 
-
 #[test]
 fn teddy1_vowel_class() {
     assert_simd_eq("[aeiou]", b"bcdfghjklmnpqrstvwxyz");
@@ -414,7 +405,6 @@ fn teddy3_three_char_classes() {
     assert_simd_eq("[a-z][0-9][A-Z]", &hay);
 }
 
-
 #[test]
 fn empty_input() {
     assert_simd("abc", b"", &[]);
@@ -434,7 +424,6 @@ fn one_byte_input() {
     assert_simd("[0-9]", b"5", &[(0, 1)]);
 }
 
-
 #[test]
 fn greedy_dot_star() {
     assert_simd_eq("a.*b", b"a---b---b");
@@ -448,7 +437,6 @@ fn greedy_dot_star() {
 fn non_overlapping_adjacent() {
     assert_simd("ab", b"ababab", &[(0, 2), (2, 4), (4, 6)]);
 }
-
 
 #[test]
 fn ip_address_long_input() {
@@ -485,7 +473,6 @@ fn quoted_string() {
     assert_simd_eq(pattern, &hay);
 }
 
-
 #[test]
 fn anchored_start() {
     assert_simd_eq("^hello", b"hello world");
@@ -502,7 +489,6 @@ fn anchored_both() {
     assert_simd_eq("^exact$", b"exact");
     assert_simd_eq("^exact$", b"not exact");
 }
-
 
 #[test]
 fn lookahead_with_simd() {
@@ -521,7 +507,6 @@ fn neg_lookbehind_with_simd() {
     assert_simd_eq(r"(?<!\d)a", b"1a__a__a");
 }
 
-
 #[test]
 fn complement_simd() {
     assert_simd_eq(r"~(_*\d\d_*)", b"Aa11aBaAA");
@@ -534,18 +519,13 @@ fn intersection_simd() {
 
 #[test]
 fn complement_intersection_simd() {
-    assert_simd_eq(
-        r"~(.*\d\d.*)&[a-zA-Z\d]{8,}",
-        b"tej55zhA25wXu8bvQxFxt",
-    );
+    assert_simd_eq(r"~(.*\d\d.*)&[a-zA-Z\d]{8,}", b"tej55zhA25wXu8bvQxFxt");
 }
-
 
 #[test]
 fn multiline_simd() {
     assert_simd_eq(r"(?:.+\n)+\n", b"\naaa\n\nbbb\n\nccc\n\n");
 }
-
 
 #[test]
 fn deep_alternation() {
@@ -564,7 +544,6 @@ fn alternation_factored_prefix() {
 fn alternation_with_suffix() {
     assert_simd_eq(r"(cat|dog)\d+", b"cat123 dog45 cat bird99");
 }
-
 
 #[test]
 fn size_sweep_literal() {
@@ -604,7 +583,6 @@ fn size_sweep_bounded_rep() {
     }
 }
 
-
 #[test]
 fn match_spans_chunk_boundary() {
     let mut hay = vec![b'.'; 64];
@@ -618,7 +596,6 @@ fn match_spans_chunk_boundary() {
     assert_simd("abcd", &hay, &[(30, 34)]);
 }
 
-
 #[test]
 fn many_single_char_matches() {
     let hay = vec![b'a'; 500];
@@ -629,13 +606,9 @@ fn many_single_char_matches() {
 #[test]
 fn many_two_char_matches() {
     let hay = b"ababababababababababababababababababababababababababababababababab";
-    let expected: Vec<(usize, usize)> = (0..hay.len())
-        .step_by(2)
-        .map(|i| (i, i + 2))
-        .collect();
+    let expected: Vec<(usize, usize)> = (0..hay.len()).step_by(2).map(|i| (i, i + 2)).collect();
     assert_simd("ab", hay, &expected);
 }
-
 
 #[test]
 fn is_match_lazy_long_input() {
@@ -655,7 +628,6 @@ fn is_match_class_lazy() {
     hay2[500] = b'5';
     assert!(re.is_match(&hay2).unwrap());
 }
-
 
 #[test]
 fn rev_range_skip_digit_sweep() {
@@ -680,7 +652,11 @@ fn rev_range_skip_two_ranges() {
     // hex digits: [0-9A-F]
     for pos in 0..64 {
         let mut hay = vec![b'.'; 64];
-        hay[pos] = if pos % 2 == 0 { b'0' + (pos as u8 % 10) } else { b'A' + (pos as u8 % 6) };
+        hay[pos] = if pos % 2 == 0 {
+            b'0' + (pos as u8 % 10)
+        } else {
+            b'A' + (pos as u8 % 6)
+        };
         assert_simd_eq("[0-9A-F]+", &hay);
     }
 }

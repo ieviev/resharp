@@ -52,7 +52,8 @@ macro_rules! bench_default_vs_hardened {
         let re_hardened = resharp::Regex::with_options(
             $pattern,
             resharp::EngineOptions::default().hardened(true),
-        ).unwrap();
+        )
+        .unwrap();
         re_hardened.find_all($input).ok();
         $group.bench_function("hardened", |b| {
             b.iter(|| black_box(re_hardened.find_all(black_box($input)).unwrap().len()));
@@ -157,38 +158,38 @@ fn bench_hardened_regression(c: &mut Criterion) {
         bench_default_vs_hardened!(g, &pattern, input);
         g.finish();
     }
-    {
-        let haystack = load_haystack("en-sampled.txt");
-        let input = haystack.as_bytes();
-        let mut g = c.benchmark_group("hardened/lookaround");
-        g.throughput(Throughput::Bytes(input.len() as u64));
-        bench_default_vs_hardened!(g, r"(?<=\s)[A-Z][a-z]+(?=\s)", input);
-        g.finish();
-    }
-    {
-        let haystack = load_haystack_lines("en-sampled.txt", 10_000);
-        let pattern = load_regex("date.txt");
-        let input = haystack.as_bytes();
-        let mut g = c.benchmark_group("hardened/date-monster");
-        g.throughput(Throughput::Bytes(input.len() as u64));
-        bench_default_vs_hardened!(g, &pattern, input);
-        g.finish();
-    }
-    {
-        let haystack = load_haystack("en-sampled.txt");
-        let words = load_dictionary_pattern(2663);
-        let pattern = format!("(?i)({})", words);
-        let input = haystack.as_bytes();
-        let mut g = c.benchmark_group("hardened/dictionary-nocase");
-        g.throughput(Throughput::Bytes(input.len() as u64));
-        bench_default_vs_hardened!(g, &pattern, input);
-        g.finish();
-    }
+    // {
+    //     let haystack = load_haystack("en-sampled.txt");
+    //     let input = haystack.as_bytes();
+    //     let mut g = c.benchmark_group("hardened/lookaround");
+    //     g.throughput(Throughput::Bytes(input.len() as u64));
+    //     bench_default_vs_hardened!(g, r"(?<=\s)[A-Z][a-z]+(?=\s)", input);
+    //     g.finish();
+    // }
+    // {
+    //     let haystack = load_haystack_lines("en-sampled.txt", 10_000);
+    //     let pattern = load_regex("date.txt");
+    //     let input = haystack.as_bytes();
+    //     let mut g = c.benchmark_group("hardened/date-monster");
+    //     g.throughput(Throughput::Bytes(input.len() as u64));
+    //     bench_default_vs_hardened!(g, &pattern, input);
+    //     g.finish();
+    // }
+    // {
+    //     let haystack = load_haystack("en-sampled.txt");
+    //     let words = load_dictionary_pattern(2663);
+    //     let pattern = format!("(?i)({})", words);
+    //     let input = haystack.as_bytes();
+    //     let mut g = c.benchmark_group("hardened/dictionary-nocase");
+    //     g.throughput(Throughput::Bytes(input.len() as u64));
+    //     bench_default_vs_hardened!(g, &pattern, input);
+    //     g.finish();
+    // }
 }
 
 criterion_group! {
     name = regression;
     config = Criterion::default().without_plots();
-    targets = bench_resharp_regression, bench_hardened_regression
+    targets = bench_resharp_regression
 }
 criterion_main!(regression);

@@ -1,10 +1,9 @@
 use std::arch::aarch64::*;
 
-use super::{TeddyMasks, TSet, BYTE_FREQ};
+use super::{TSet, TeddyMasks, BYTE_FREQ};
 
 #[inline(always)]
 pub(crate) unsafe fn neon_movemask(v: uint8x16_t) -> u16 {
-    // arithmetic right shift spreads bit 7 to all bits: 0x80 → 0xFF, 0x00 → 0x00
     let signs = vreinterpretq_u8_s8(vshrq_n_s8(vreinterpretq_s8_u8(v), 7));
     const MASK_BITS: [u8; 8] = [1, 2, 4, 8, 16, 32, 64, 128];
     let mask = vld1_u8(MASK_BITS.as_ptr());
@@ -95,8 +94,16 @@ impl RevSearchBytes {
         let n = self.bytes.len();
 
         if len >= 16 {
-            let v1 = if n >= 2 { vdupq_n_u8(self.bytes[1]) } else { v0 };
-            let v2 = if n >= 3 { vdupq_n_u8(self.bytes[2]) } else { v0 };
+            let v1 = if n >= 2 {
+                vdupq_n_u8(self.bytes[1])
+            } else {
+                v0
+            };
+            let v2 = if n >= 3 {
+                vdupq_n_u8(self.bytes[2])
+            } else {
+                v0
+            };
             let mut pos = len - 16;
             loop {
                 let chunk = vld1q_u8(ptr.add(pos));
@@ -234,10 +241,26 @@ impl RevSearchRanges {
         let hi0 = vdupq_n_u8(self.ranges[0].1);
 
         if len >= 16 {
-            let lo1 = if n >= 2 { vdupq_n_u8(self.ranges[1].0) } else { lo0 };
-            let hi1 = if n >= 2 { vdupq_n_u8(self.ranges[1].1) } else { hi0 };
-            let lo2 = if n >= 3 { vdupq_n_u8(self.ranges[2].0) } else { lo0 };
-            let hi2 = if n >= 3 { vdupq_n_u8(self.ranges[2].1) } else { hi0 };
+            let lo1 = if n >= 2 {
+                vdupq_n_u8(self.ranges[1].0)
+            } else {
+                lo0
+            };
+            let hi1 = if n >= 2 {
+                vdupq_n_u8(self.ranges[1].1)
+            } else {
+                hi0
+            };
+            let lo2 = if n >= 3 {
+                vdupq_n_u8(self.ranges[2].0)
+            } else {
+                lo0
+            };
+            let hi2 = if n >= 3 {
+                vdupq_n_u8(self.ranges[2].1)
+            } else {
+                hi0
+            };
             let mut pos = len - 16;
             loop {
                 let chunk = vld1q_u8(ptr.add(pos));
@@ -410,8 +433,14 @@ impl FwdLiteralSearch {
         while pos + 32 <= end + 1 {
             let r0 = vceqq_u8(vld1q_u8(ptr.add(pos)), vrare);
             let r1 = vceqq_u8(vld1q_u8(ptr.add(pos + 16)), vrare);
-            let c0 = vceqq_u8(vld1q_u8(ptr.offset(pos as isize + confirm_offset)), vconfirm);
-            let c1 = vceqq_u8(vld1q_u8(ptr.offset(pos as isize + 16 + confirm_offset)), vconfirm);
+            let c0 = vceqq_u8(
+                vld1q_u8(ptr.offset(pos as isize + confirm_offset)),
+                vconfirm,
+            );
+            let c1 = vceqq_u8(
+                vld1q_u8(ptr.offset(pos as isize + 16 + confirm_offset)),
+                vconfirm,
+            );
             let and0 = vandq_u8(r0, c0);
             let and1 = vandq_u8(r1, c1);
             if vmaxvq_u8(vorrq_u8(and0, and1)) == 0 {
@@ -444,7 +473,10 @@ impl FwdLiteralSearch {
         }
         while pos + 16 <= end + 1 {
             let r = vceqq_u8(vld1q_u8(ptr.add(pos)), vrare);
-            let c = vceqq_u8(vld1q_u8(ptr.offset(pos as isize + confirm_offset)), vconfirm);
+            let c = vceqq_u8(
+                vld1q_u8(ptr.offset(pos as isize + confirm_offset)),
+                vconfirm,
+            );
             let and = vandq_u8(r, c);
             if vmaxvq_u8(and) == 0 {
                 pos += 16;
@@ -496,8 +528,14 @@ impl FwdLiteralSearch {
         while pos + 32 <= end + 1 {
             let r0 = vceqq_u8(vld1q_u8(ptr.add(pos)), vrare);
             let r1 = vceqq_u8(vld1q_u8(ptr.add(pos + 16)), vrare);
-            let c0 = vceqq_u8(vld1q_u8(ptr.offset(pos as isize + confirm_offset)), vconfirm);
-            let c1 = vceqq_u8(vld1q_u8(ptr.offset(pos as isize + 16 + confirm_offset)), vconfirm);
+            let c0 = vceqq_u8(
+                vld1q_u8(ptr.offset(pos as isize + confirm_offset)),
+                vconfirm,
+            );
+            let c1 = vceqq_u8(
+                vld1q_u8(ptr.offset(pos as isize + 16 + confirm_offset)),
+                vconfirm,
+            );
             let and0 = vandq_u8(r0, c0);
             let and1 = vandq_u8(r1, c1);
             if vmaxvq_u8(vorrq_u8(and0, and1)) == 0 {
@@ -526,7 +564,10 @@ impl FwdLiteralSearch {
         }
         while pos + 16 <= end + 1 {
             let r = vceqq_u8(vld1q_u8(ptr.add(pos)), vrare);
-            let c = vceqq_u8(vld1q_u8(ptr.offset(pos as isize + confirm_offset)), vconfirm);
+            let c = vceqq_u8(
+                vld1q_u8(ptr.offset(pos as isize + confirm_offset)),
+                vconfirm,
+            );
             let and = vandq_u8(r, c);
             if vmaxvq_u8(and) == 0 {
                 pos += 16;
@@ -752,8 +793,7 @@ impl RevPrefixSearch {
             if vmaxvq_u8(vorrq_u8(ra, rb)) != 0 {
                 if vmaxvq_u8(ra) != 0 {
                     let mask_a = neon_movemask(ra);
-                    if let Some(m) =
-                        Self::verify_rev_inline(ptr, chunk_pos, mask_a, sets_ptr, len)
+                    if let Some(m) = Self::verify_rev_inline(ptr, chunk_pos, mask_a, sets_ptr, len)
                     {
                         return Some(m);
                     }
@@ -975,7 +1015,9 @@ impl FwdPrefixSearch {
             );
             if vmaxvq_u8(r0) != 0 {
                 let mask = neon_movemask(r0);
-                if let Some(m) = Self::verify_inline(ptr, pos, mask, sets_ptr, len, self.verify_order.as_ptr()) {
+                if let Some(m) =
+                    Self::verify_inline(ptr, pos, mask, sets_ptr, len, self.verify_order.as_ptr())
+                {
                     return Some(m);
                 }
             }
@@ -1013,7 +1055,9 @@ impl FwdPrefixSearch {
             let combined = vandq_u8(r0, r1);
             if vmaxvq_u8(combined) != 0 {
                 let mask = neon_movemask(combined);
-                if let Some(m) = Self::verify_inline(ptr, pos, mask, sets_ptr, len, self.verify_order.as_ptr()) {
+                if let Some(m) =
+                    Self::verify_inline(ptr, pos, mask, sets_ptr, len, self.verify_order.as_ptr())
+                {
                     return Some(m);
                 }
             }
@@ -1084,13 +1128,27 @@ impl FwdPrefixSearch {
             if vmaxvq_u8(vorrq_u8(ra, rb)) != 0 {
                 if vmaxvq_u8(ra) != 0 {
                     let mask_a = neon_movemask(ra);
-                    if let Some(m) = Self::verify_inline(ptr, pos, mask_a, sets_ptr, len, self.verify_order.as_ptr()) {
+                    if let Some(m) = Self::verify_inline(
+                        ptr,
+                        pos,
+                        mask_a,
+                        sets_ptr,
+                        len,
+                        self.verify_order.as_ptr(),
+                    ) {
                         return Some(m);
                     }
                 }
                 if vmaxvq_u8(rb) != 0 {
                     let mask_b = neon_movemask(rb);
-                    if let Some(m) = Self::verify_inline(ptr, pos + 16, mask_b, sets_ptr, len, self.verify_order.as_ptr()) {
+                    if let Some(m) = Self::verify_inline(
+                        ptr,
+                        pos + 16,
+                        mask_b,
+                        sets_ptr,
+                        len,
+                        self.verify_order.as_ptr(),
+                    ) {
                         return Some(m);
                     }
                 }
@@ -1120,7 +1178,9 @@ impl FwdPrefixSearch {
             );
             if vmaxvq_u8(combined) != 0 {
                 let mask = neon_movemask(combined);
-                if let Some(m) = Self::verify_inline(ptr, pos, mask, sets_ptr, len, self.verify_order.as_ptr()) {
+                if let Some(m) =
+                    Self::verify_inline(ptr, pos, mask, sets_ptr, len, self.verify_order.as_ptr())
+                {
                     return Some(m);
                 }
             }
@@ -1541,12 +1601,7 @@ mod tests {
             let mut hay = vec![b'.'; size];
             hay[size - 2] = b'X';
             hay[size - 1] = b'Y';
-            assert_eq!(
-                s.find_fwd(&hay),
-                Some(size - 2),
-                "failed for size {}",
-                size
-            );
+            assert_eq!(s.find_fwd(&hay), Some(size - 2), "failed for size {}", size);
         }
     }
 
@@ -1555,9 +1610,12 @@ mod tests {
         let s = FwdLiteralSearch::new(b"ab");
         // place "ab" at positions 14, 30, 46 (across chunk boundaries)
         let mut hay = vec![b'.'; 60];
-        hay[14] = b'a'; hay[15] = b'b';
-        hay[30] = b'a'; hay[31] = b'b';
-        hay[46] = b'a'; hay[47] = b'b';
+        hay[14] = b'a';
+        hay[15] = b'b';
+        hay[30] = b'a';
+        hay[31] = b'b';
+        hay[46] = b'a';
+        hay[47] = b'b';
         let mut m = Vec::new();
         s.find_all_fixed(&hay, &mut m);
         assert_eq!(m, vec![(14, 16), (30, 32), (46, 48)]);
@@ -1673,7 +1731,9 @@ mod tests {
     fn movemask_mixed_values() {
         unsafe {
             // various values with bit 7 set
-            let arr: [u8; 16] = [0x80, 0, 0xFF, 0, 0x80, 0, 0, 0xFE, 0, 0, 0x80, 0, 0, 0, 0xC0, 0];
+            let arr: [u8; 16] = [
+                0x80, 0, 0xFF, 0, 0x80, 0, 0, 0xFE, 0, 0, 0x80, 0, 0, 0, 0xC0, 0,
+            ];
             let v = vld1q_u8(arr.as_ptr());
             let m = neon_movemask(v);
             // bits 0, 2, 4, 7, 10, 14 should be set

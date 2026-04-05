@@ -9,6 +9,7 @@ struct TestCase {
     ignore: bool,
     expect_error: bool,
     anchored: bool,
+    vs_regex: bool,
 }
 
 fn load_tests(filename: &str) -> Vec<TestCase> {
@@ -53,6 +54,7 @@ fn load_tests(filename: &str) -> Vec<TestCase> {
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false),
             anchored: t.get("anchored").and_then(|v| v.as_bool()).unwrap_or(false),
+            vs_regex: t.get("vs_regex").and_then(|v| v.as_bool()).unwrap_or(false),
         })
         .collect()
 }
@@ -61,6 +63,10 @@ fn run_file(filename: &str) {
     let tests = load_tests(filename);
     for tc in &tests {
         if tc.ignore {
+            continue;
+        }
+        if tc.vs_regex {
+            check_vs_regex(&tc.pattern, tc.input.as_bytes());
             continue;
         }
         if tc.expect_error {
@@ -171,63 +177,6 @@ fn check_vs_regex(pattern: &str, input: &[u8]) {
         "resharp vs regex mismatch: pattern={:?}",
         pattern
     );
-}
-
-#[test]
-fn literal_alt_with_suffix_digits() {
-    check_vs_regex("(cat|dog)\\d+", b"cat123 dog45 cat bird99");
-}
-
-#[test]
-fn literal_alt_with_suffix_no_match() {
-    // suffix doesn't match
-    check_vs_regex("(cat|dog)\\d+", b"cat! dog? catdog");
-}
-
-#[test]
-fn literal_alt_with_suffix_at_end() {
-    check_vs_regex("(foo|bar)\\d{1,3}", b"foo99");
-}
-
-#[test]
-fn literal_alt_with_suffix_zero_width() {
-    // [a-z]{0,3} can match zero chars
-    check_vs_regex("(cat|dog)[a-z]{0,3}", b"cat dog123 catfish dogs");
-}
-
-#[test]
-fn literal_alt_factored_with_suffix() {
-    // bar|baz → ba(r|z), then suffix
-    check_vs_regex("(bar|baz)\\d+", b"bar99 baz1 ba! bar");
-}
-
-#[test]
-fn literal_alt_single() {
-    check_vs_regex("hello|world", b"hello world");
-}
-
-#[test]
-fn literal_alt_at_boundaries() {
-    check_vs_regex("cat|dog", b"catdog");
-}
-
-#[test]
-fn literal_alt_repeated_input() {
-    check_vs_regex(
-        "Sherlock|Holmes|Watson",
-        b"Sherlock Holmes and Watson met Sherlock",
-    );
-}
-
-#[test]
-fn literal_prefix_with_suffix_dfa() {
-    // tests prefix_fwd_state path: literal prefix + non-fixed-length suffix
-    check_vs_regex("hello\\w+", b"helloworld hello123 hello");
-}
-
-#[test]
-fn literal_prefix_suffix_at_end() {
-    check_vs_regex("http\\w*", b"http https httpd");
 }
 
 #[test]
@@ -480,8 +429,18 @@ fn find_anchored() {
 }
 
 #[test]
-fn cloudflare_redos() {
-    run_file("cloudflare_redos.toml");
+fn ci() {
+    run_file("ci.toml");
+}
+
+#[test]
+fn word_boundary() {
+    run_file("word_boundary.toml");
+}
+
+#[test]
+fn literal_alt() {
+    run_file("literal_alt.toml");
 }
 
 #[test]
@@ -583,7 +542,6 @@ fn collect_rev_lookahead_simple() {
 
 #[test]
 fn collect_rev_dotstar_lookahead() {
-    // .* can legitimately match at every position before "aaa"
     let re = Regex::new(r".*(?=aaa)").unwrap();
     let n = re.collect_rev_nulls_debug(b"baaa");
     eprintln!(".*(?=aaa) on \"baaa\": {} nulls {:?}", n.len(), n);
@@ -644,36 +602,6 @@ fn collect_rev_lookahead_time_pattern() {
 }
 
 #[test]
-fn collect_rev_lookahead_scaling_stress() {
-    let re = Regex::new(r"[a-z]+(?=[A-Z])").unwrap();
-
-    let mk_input = |n: usize| -> Vec<u8> {
-        let mut v = Vec::new();
-        for _ in 0..n {
-            v.extend_from_slice(b"abcD");
-        }
-        v
-    };
-
-    let n10 = re.collect_rev_nulls_debug(&mk_input(10)).len();
-    let n100 = re.collect_rev_nulls_debug(&mk_input(100)).len();
-    let n1000 = re.collect_rev_nulls_debug(&mk_input(1000)).len();
-
-    eprintln!(
-        "[a-z]+(?=[A-Z]) nulls: 10-rep={}, 100-rep={}, 1000-rep={}",
-        n10, n100, n1000,
-    );
-
-    // this pattern scales linearly (good)
-    assert!(
-        n1000 <= n100 * 12,
-        "1000-rep nulls ({}) grew more than 12x vs 100-rep ({})",
-        n1000,
-        n100,
-    );
-}
-
-#[test]
 fn literal_20_bytes() {
     let pattern = "ABCDEFGHIJKLMNOPQRST";
     let mut hay = vec![b'.'; 200];
@@ -717,366 +645,6 @@ fn literal_17_bytes() {
         .collect();
     assert_eq!(r, vec![(40, 57)]);
 }
-
-#[test]
-fn ci_literal_vs_regex() {
-    check_vs_regex("(?i)abc", b"xAbCx");
-}
-
-#[test]
-fn ci_literal_no_match() {
-    check_vs_regex("(?i)abc", b"xyz");
-}
-
-#[test]
-fn ci_alternation_vs_regex() {
-    check_vs_regex("(?i)(foo|bar)", b"FOO and Bar and bAr");
-}
-
-#[test]
-fn ci_class_range_vs_regex() {
-    check_vs_regex("(?i)[a-f]+", b"xABCDEFx");
-}
-
-#[test]
-fn ci_quantifier_vs_regex() {
-    check_vs_regex("(?i)a+", b"aAaA");
-}
-
-#[test]
-fn ci_bounded_repeat_vs_regex() {
-    check_vs_regex("(?i)ab{2,4}", b"aBBBx");
-}
-
-#[test]
-fn ci_dotstar_vs_regex() {
-    check_vs_regex("(?i)a.*z", b"AbcZ");
-}
-
-#[test]
-fn ci_mixed_case_literal() {
-    check_vs_regex("(?i)HeLLo", b"hello HELLO HeLLo hElLo");
-}
-
-#[test]
-fn ci_word_boundary() {
-    check_vs_regex(r"(?i)\bhello\b", b"Hello HELLO hello");
-}
-
-#[test]
-fn ci_digits_unaffected() {
-    check_vs_regex("(?i)test123", b"TEST123 test123 TeSt123");
-}
-
-#[test]
-fn ci_char_class_explicit() {
-    check_vs_regex("(?i)[xyz]+", b"XyZxYz");
-}
-
-#[test]
-fn ci_negated_class() {
-    check_vs_regex("(?i)[^a-c]+", b"xABCxDEFx");
-}
-
-#[test]
-fn ci_anchored_start() {
-    check_vs_regex("(?i)^hello", b"Hello world");
-}
-
-#[test]
-fn ci_anchored_end() {
-    check_vs_regex("(?i)world$", b"hello WORLD");
-}
-
-#[test]
-fn ci_anchored_full() {
-    check_vs_regex("(?i)^hello world$", b"HELLO WORLD");
-}
-
-#[test]
-fn ci_anchored_no_match() {
-    check_vs_regex("(?i)^hello$", b"xhellox");
-}
-
-#[test]
-fn ci_optional() {
-    check_vs_regex("(?i)colou?r", b"Color COLOUR color colour");
-}
-
-#[test]
-fn ci_plus_quantifier() {
-    check_vs_regex("(?i)z+", b"zZzZZz");
-}
-
-#[test]
-fn ci_star_quantifier() {
-    check_vs_regex("(?i)ab*c", b"AC ABC ABBC ac abc");
-}
-
-#[test]
-fn ci_escape_sequence() {
-    check_vs_regex(r"(?i)\d+[a-f]+", b"123ABC 456def 789aF");
-}
-
-#[test]
-fn ci_lookahead() {
-    let re = Regex::new("(?i)foo(?=bar)").unwrap();
-    let r: Vec<_> = re
-        .find_all(b"FOOBAR foobar FoObAr foobaz")
-        .unwrap()
-        .iter()
-        .map(|m| (m.start, m.end))
-        .collect();
-    assert_eq!(r, vec![(0, 3), (7, 10), (14, 17)]);
-}
-
-#[test]
-fn ci_lookbehind() {
-    let re = Regex::new("(?i)(?<=foo)bar").unwrap();
-    let r: Vec<_> = re
-        .find_all(b"FOOBAR foobar FoObAr bazbar")
-        .unwrap()
-        .iter()
-        .map(|m| (m.start, m.end))
-        .collect();
-    assert_eq!(r, vec![(3, 6), (10, 13), (17, 20)]);
-}
-
-#[test]
-fn ci_empty_input() {
-    check_vs_regex("(?i)abc", b"");
-}
-
-#[test]
-fn ci_single_char() {
-    check_vs_regex("(?i)a", b"AaAa");
-}
-
-#[test]
-fn ci_unicode_ascii() {
-    check_vs_regex("(?i)caf", b"CAF caf Caf");
-}
-
-#[test]
-fn ci_pipe_in_group() {
-    check_vs_regex("(?i)(cat|dog|bird)", b"CAT Dog BIRD cat");
-}
-
-#[test]
-fn ci_nested_groups() {
-    check_vs_regex("(?i)(a(bc)d)", b"ABCD abcd AbCd");
-}
-
-#[test]
-fn ci_exact_repeat() {
-    check_vs_regex("(?i)a{3}", b"aAa AAA aaa");
-}
-
-#[test]
-fn ci_range_repeat() {
-    check_vs_regex("(?i)x{2,4}", b"xX XXx xXxX");
-}
-
-#[test]
-fn ci_scoped_vs_regex() {
-    check_vs_regex("(?i:abc)def", b"ABCdef abcDEF ABCDef abcdef");
-}
-
-#[test]
-fn ci_scoped_no_leak() {
-    check_vs_regex("(?i:abc)def", b"ABCDEF");
-}
-
-#[test]
-fn ci_scoped_alternation() {
-    check_vs_regex("(?i:foo|bar)baz", b"FOObaz BARbaz foobaz FOOBAZ");
-}
-
-#[test]
-fn ci_scoped_class() {
-    check_vs_regex("(?i:[a-f])+g", b"ABCDEFg abcdefg ABCDEfG");
-}
-
-#[test]
-fn ci_scoped_nested() {
-    check_vs_regex("(?i:a(?-i:b)c)", b"AbC ABC abc aBc");
-}
-
-#[test]
-fn wb_bare_11() {
-    check_vs_regex(r"\b11\b", b"11");
-}
-
-#[test]
-fn wb_leading_space() {
-    check_vs_regex(r"\b11\b", b" 11");
-}
-
-#[test]
-fn wb_trailing_space() {
-    check_vs_regex(r"\b11\b", b"11 ");
-}
-
-#[test]
-fn wb_both_spaces() {
-    check_vs_regex(r"\b11\b", b" 11 ");
-}
-
-#[test]
-fn wb_long_word_12plus() {
-    check_vs_regex(r"\b[a-z]{12,}\b", b"hello extraordinary world");
-}
-
-#[test]
-fn wb_long_word_no_match() {
-    check_vs_regex(r"\b[a-z]{12,}\b", b"hello world foo");
-}
-
-#[test]
-fn wb_long_word_multiple() {
-    check_vs_regex(r"\b[a-z]{12,}\b", b"understanding communication");
-}
-
-#[test]
-fn wb_long_word_mixed_case() {
-    check_vs_regex(
-        r"\b[a-z]{12,}\b",
-        b"THE understanding OF communication HERE",
-    );
-}
-
-#[test]
-fn wb_long_word_at_start() {
-    check_vs_regex(r"\b[a-z]{12,}\b", b"extraordinary!");
-}
-
-#[test]
-fn wb_long_word_at_end() {
-    check_vs_regex(r"\b[a-z]{12,}\b", b"!extraordinary");
-}
-
-#[test]
-fn wb_exact_13() {
-    check_vs_regex(r"\b[a-z]{13}\b", b"hello world extraordinary");
-}
-
-#[test]
-fn wb_exact_12_no_match() {
-    check_vs_regex(r"\b[a-z]{12}\b", b"hello world extraordinary");
-}
-
-#[test]
-fn wb_word_plus() {
-    check_vs_regex(r"\b\w+\b", b"hello world");
-}
-
-#[test]
-fn wb_digits() {
-    check_vs_regex(r"\b\d+\b", b"foo 123 bar");
-}
-
-#[test]
-fn wb_lowercase_words() {
-    check_vs_regex(r"\b[a-z]+\b", b"hello WORLD foo");
-}
-
-#[test]
-fn wb_partial_leading() {
-    check_vs_regex(r"\b11", b" 11");
-}
-
-#[test]
-fn wb_partial_trailing() {
-    check_vs_regex(r"11\b", b"11 ");
-}
-
-#[test]
-fn wb_partial_trailing_bare() {
-    check_vs_regex(r"11\b", b"11");
-}
-
-#[test]
-fn wb_contains_a() {
-    check_vs_regex(r"\b\w*a\w*\b", b"ffaff");
-}
-
-#[test]
-fn wb_trailing_a() {
-    check_vs_regex(r"a\b", b"a ");
-}
-
-#[test]
-fn wb_dash_boundary() {
-    check_vs_regex(r"\b-", b"1-2");
-}
-
-#[test]
-fn wb_before_dash() {
-    check_vs_regex(r"1\b-", b"1-2");
-}
-
-#[test]
-fn wb_across_dash() {
-    check_vs_regex(r"1\b-2", b"1-2");
-}
-
-#[test]
-fn wb_no_match_embedded() {
-    check_vs_regex(r"\b11\b", b"a11b");
-}
-
-#[test]
-fn wb_adjacent_words() {
-    check_vs_regex(r"\b[a-z]+\b", b"cat dog bird");
-}
-
-#[test]
-fn wb_bounded_rep_at_boundary() {
-    check_vs_regex(r"\b[a-z]{3,5}\b", b"cat extraordinary dog bird");
-}
-
-#[test]
-fn wb_whitespace_neighbor() {
-    check_vs_regex(r"\s\b[a-z]+\b\s", b" cat ");
-}
-
-#[test]
-fn wb_after_whitespace_class() {
-    check_vs_regex(r"[ \t]\b\w+", b" hello\tworld");
-}
-
-#[test]
-fn wb_alpha_class_union() {
-    check_vs_regex(r"\b[a-zA-Z]+\b", b"Hello WORLD foo 123");
-}
-
-#[test]
-fn wb_alnum_class() {
-    check_vs_regex(r"\b[a-zA-Z0-9]+\b", b"foo123 !bar! 42");
-}
-
-#[test]
-fn wb_alternation_with_optional_suffix() {
-    check_vs_regex(
-        r"(?i)\b(?:union\s+select|select\b.{1,200}\bfrom|insert\s+into|delete\s+from|drop\s+table|alter\s+table|exec(?:ute)?)\b",
-        b"union select 1 from t; insert into users; exec sp; execute cmd; drop table t",
-    );
-    check_vs_regex(
-        r"(?i)\b(?:union\s+select|select\b.{1,200}\bfrom|insert\s+into|delete\s+from|drop\s+table|alter\s+table|exec(?:ute)?)\b",
-        b"hello execution world unselected",
-    );
-}
-
-#[test]
-fn dotstar_inner_literal_correctness() {
-    check_vs_regex(".*=.*", b"key=value");
-    check_vs_regex(".*=.*", b"no equals here");
-    check_vs_regex(".*=.*", b"a=b c=d e=f");
-    check_vs_regex(".*=.*", b"first line\nsecond=line\nthird");
-    check_vs_regex(".*=.*", b"===");
-    check_vs_regex(".*=.*", b"x=y\na=b\n");
-}
-
 #[test]
 fn dotstar_inner_literal_rev_midskip() {
     let re = Regex::new(".*=.*").unwrap();
@@ -1126,10 +694,9 @@ fn bounded_dfa_basic() {
     // intersection with complement: variable length, no prefix, bounded
     // _*c_*&[a-z]{2,4} = 2-4 lowercase letters containing 'c'
     let re = Regex::new("_*c_*&[a-z]{2,4}").unwrap();
-    eprintln!("has_accel: {:?}", re.has_accel());
     let m = re.find_all(b"xycdzz abcde fg").unwrap();
     let r: Vec<_> = m.iter().map(|m| (m.start, m.end)).collect();
-    eprintln!("bounded result: {:?}", r);
+    assert_eq!(r, [(0, 4), (7, 11)]);
 }
 
 use resharp::{NodeId, RegexBuilder, BDFA};
@@ -1154,22 +721,6 @@ fn chain_pp(node: NodeId, b: &RegexBuilder) -> Vec<String> {
     result
 }
 
-fn bdfa_step_trace(pattern: &str, input: &[u8]) -> Vec<(usize, u16, usize, u32)> {
-    let mut b = RegexBuilder::new();
-    let node = resharp_parser::parse_ast(&mut b, pattern).unwrap();
-    let mut bdfa = BDFA::new(&mut b, node).unwrap();
-    let mut state = bdfa.initial;
-    let mut trace = Vec::new();
-    for pos in 0..input.len() {
-        let mt = bdfa.minterms_lookup[input[pos] as usize] as usize;
-        state = (bdfa.transition(&mut b, state, mt).unwrap() & 0xFFFF) as u16;
-        let rel = bdfa.match_rel[state as usize];
-        let clen = chain_len(bdfa.states[state as usize], &b);
-        trace.push((pos, state, clen, rel));
-    }
-    trace
-}
-
 fn bdfa_state_pp(pattern: &str, input: &[u8]) -> Vec<String> {
     let mut b = RegexBuilder::new();
     let node = resharp_parser::parse_ast(&mut b, pattern).unwrap();
@@ -1191,6 +742,22 @@ fn bdfa_state_pp(pattern: &str, input: &[u8]) -> Vec<String> {
         ));
     }
     result
+}
+
+fn bdfa_step_trace(pattern: &str, input: &[u8]) -> Vec<(usize, u16, usize, u32)> {
+    let mut b = RegexBuilder::new();
+    let node = resharp_parser::parse_ast(&mut b, pattern).unwrap();
+    let mut bdfa = BDFA::new(&mut b, node).unwrap();
+    let mut state = bdfa.initial;
+    let mut trace = Vec::new();
+    for pos in 0..input.len() {
+        let mt = bdfa.minterms_lookup[input[pos] as usize] as usize;
+        state = (bdfa.transition(&mut b, state, mt).unwrap() & 0xFFFF) as u16;
+        let rel = bdfa.match_rel[state as usize];
+        let clen = chain_len(bdfa.states[state as usize], &b);
+        trace.push((pos, state, clen, rel));
+    }
+    trace
 }
 
 fn bdfa_matches(pattern: &str, input: &[u8]) -> Vec<(usize, usize)> {
@@ -1245,83 +812,13 @@ fn bdfa_literal_abc() {
 }
 
 #[test]
-fn bdfa_literal_abc_states() {
-    let pp = bdfa_state_pp("abc", b"xabcx");
-    for line in &pp {
-        eprintln!("{}", line);
-    }
-}
-
-#[test]
 fn bdfa_alternation_ab_cd() {
     assert_bdfa_eq("ab|cd", b"xabcdx");
 }
 
 #[test]
-fn bdfa_bounded_repeat() {
-    // a{2,4}: variable length, bounded
-    let pp = bdfa_state_pp("a{2,4}", b"xaaaaax");
-    eprintln!("a{{2,4}} on 'xaaaaax':");
-    for line in &pp {
-        eprintln!("{}", line);
-    }
-    let trace = bdfa_step_trace("a{2,4}", b"xaaaaax");
-    let match_positions: Vec<_> = trace
-        .iter()
-        .filter(|t| t.3 > 0)
-        .map(|t| (t.0, t.3))
-        .collect();
-    eprintln!("matches: {:?}", match_positions);
-}
-
-#[test]
 fn bdfa_two_candidates() {
     assert_bdfa_eq("aa", b"aaa");
-}
-
-#[test]
-fn bdfa_der_a_or_aa() {
-    let pp = bdfa_state_pp("a|aa", b"aab");
-    eprintln!("a|aa on 'aab':");
-    for line in &pp {
-        eprintln!("{}", line);
-    }
-}
-
-#[test]
-fn bdfa_der_a_1_4() {
-    let pp = bdfa_state_pp("a{1,4}", b"aaaax");
-    eprintln!("a{{1,4}} on 'aaaax':");
-    for line in &pp {
-        eprintln!("{}", line);
-    }
-}
-
-#[test]
-fn bdfa_der_ab_1_3() {
-    let pp = bdfa_state_pp("(ab){1,3}", b"abababx");
-    eprintln!("(ab){{1,3}} on 'abababx':");
-    for line in &pp {
-        eprintln!("{}", line);
-    }
-}
-
-#[test]
-fn bdfa_der_abc_bcd() {
-    let pp = bdfa_state_pp("abc|bcd", b"abcde");
-    eprintln!("abc|bcd on 'abcde':");
-    for line in &pp {
-        eprintln!("{}", line);
-    }
-}
-
-#[test]
-fn bdfa_der_nested_alt() {
-    let pp = bdfa_state_pp("(a|ab)(b|c)", b"abcx");
-    eprintln!("(a|ab)(b|c) on 'abcx':");
-    for line in &pp {
-        eprintln!("{}", line);
-    }
 }
 
 fn assert_bdfa_eq(pattern: &str, input: &[u8]) {
@@ -1344,43 +841,36 @@ fn assert_bdfa_eq(pattern: &str, input: &[u8]) {
 
 #[test]
 fn bdfa_ambiguous_a_or_aa() {
-    // std: (0,2); bdfa currently gives (0,1),(1,2)
     assert_bdfa_eq("a|aa", b"aab");
 }
 
 #[test]
 fn bdfa_ambiguous_ab_or_a() {
-    // std: (0,2),(2,4); bdfa currently gives (0,1),(2,3)
     assert_bdfa_eq("ab|a", b"abab");
 }
 
 #[test]
 fn bdfa_ambiguous_repeat_ab_1_3() {
-    // std: (0,6); bdfa currently gives (0,2),(2,4),(4,6)
     assert_bdfa_eq("(ab){1,3}", b"abababx");
 }
 
 #[test]
 fn bdfa_ambiguous_overlap_abc_bcd() {
-    // std: (0,3); bdfa agrees
     assert_bdfa_eq("abc|bcd", b"abcde");
 }
 
 #[test]
 fn bdfa_ambiguous_a_1_4_greedy() {
-    // std: (0,4); bdfa currently gives (0,1),(1,2),(2,3),(3,4)
     assert_bdfa_eq("a{1,4}", b"aaaa");
 }
 
 #[test]
 fn bdfa_ambiguous_nested_alt() {
-    // std: (0,3); bdfa currently gives (0,2)
     assert_bdfa_eq("(a|ab)(b|c)", b"abcx");
 }
 
 #[test]
 fn bdfa_ambiguous_triple_overlap() {
-    // std: (0,4),(4,6); bdfa currently gives (0,2),(2,4),(4,6)
     assert_bdfa_eq("a{2,4}", b"aaaaaa");
 }
 
@@ -1391,17 +881,6 @@ fn bdfa_multi_match_overlap() {
     assert_bdfa_eq("(ab){1,3}", b"ababababababab");
     assert_bdfa_eq("abc|bcd", b"xabcbcdabcdy");
     assert_bdfa_eq("[a-c]{2,3}", b"abcabcabc");
-}
-
-#[test]
-fn bdfa_multi_match_traces() {
-    let pp = bdfa_state_pp("a{2,4}", b"aaaaaaaaa");
-    eprintln!("a{{2,4}} on 'aaaaaaaaa' (multi-match):");
-    for line in &pp {
-        eprintln!("  {}", line);
-    }
-    let m = bdfa_matches("a{2,4}", b"aaaaaaaaa");
-    eprintln!("  matches: {:?}", m);
 }
 
 #[test]
@@ -1483,16 +962,13 @@ fn opts_unicode_false() {
         EngineOptions::default().unicode(resharp::UnicodeMode::Ascii),
     )
     .unwrap();
-    // ASCII-only: "café" → "caf" matches, é (0xC3 0xA9) does not
     let m = re.find_all("café".as_bytes()).unwrap();
     assert_eq!(m.len(), 1);
     assert_eq!((m[0].start, m[0].end), (0, 3));
-
-    // contrast: with unicode=true (default), the whole word matches
     let re_u = Regex::new(r"\w+").unwrap();
     let m_u = re_u.find_all("café".as_bytes()).unwrap();
     assert_eq!(m_u.len(), 1);
-    assert!(m_u[0].end > 3); // includes the é bytes
+    assert!(m_u[0].end > 3);
 }
 
 #[test]
@@ -1510,7 +986,6 @@ fn opts_dot_matches_new_line() {
     assert_eq!(m.len(), 1);
     assert_eq!((m[0].start, m[0].end), (0, 3));
 
-    // without the flag, should not match
     let re2 = Regex::new("a.b").unwrap();
     let m2 = re2.find_all(b"a\nb").unwrap();
     assert_eq!(m2.len(), 0);
@@ -1518,7 +993,6 @@ fn opts_dot_matches_new_line() {
 
 #[test]
 fn opts_dot_all_inline_flag() {
-    // (?s) inline should also work
     let re = Regex::new("(?s)a.b").unwrap();
     let m = re.find_all(b"a\nb").unwrap();
     assert_eq!(m.len(), 1);
@@ -1526,12 +1000,10 @@ fn opts_dot_all_inline_flag() {
 
 #[test]
 fn opts_dot_all_scoped_group() {
-    // (?s:.) scoped: dot inside matches newline, dot outside does not
     let re = Regex::new("(?s:a.b).c").unwrap();
     let m = re.find_all(b"a\nbxc").unwrap();
     assert_eq!(m.len(), 1);
 
-    // dot outside group should NOT match newline
     let m2 = re.find_all(b"a\nb\nc").unwrap();
     assert_eq!(m2.len(), 0);
 }
@@ -1599,6 +1071,10 @@ fn run_file_hardened(filename: &str) {
         if tc.ignore || tc.expect_error || tc.anchored {
             continue;
         }
+        if tc.vs_regex {
+            check_hardened_vs_normal(&tc.pattern, tc.input.as_bytes());
+            continue;
+        }
         let opts = EngineOptions::default().hardened(true);
         let re = match Regex::with_options(&tc.pattern, opts) {
             Ok(re) => re,
@@ -1660,13 +1136,23 @@ fn hardened_paragraph() {
 }
 
 #[test]
-fn hardened_cloudflare_redos() {
-    run_file_hardened("cloudflare_redos.toml");
+fn hardened_find_anchored() {
+    run_file_hardened("find_anchored.toml");
 }
 
 #[test]
-fn hardened_find_anchored() {
-    run_file_hardened("find_anchored.toml");
+fn hardened_ci() {
+    run_file_hardened("ci.toml");
+}
+
+#[test]
+fn hardened_word_boundary() {
+    run_file_hardened("word_boundary.toml");
+}
+
+#[test]
+fn hardened_literal_alt() {
+    run_file_hardened("literal_alt.toml");
 }
 
 #[test]
@@ -1903,6 +1389,9 @@ fn hardened_cross_validate_all_toml() {
         "cloudflare_redos.toml",
         "find_anchored.toml",
         "accel_skip.toml",
+        "ci.toml",
+        "word_boundary.toml",
+        "literal_alt.toml",
     ];
     let mut tested = 0;
     let mut activated = 0;
@@ -1942,4 +1431,55 @@ fn hardened_cross_validate_all_toml() {
         activated >= 10,
         "expected at least 10 patterns to activate hardened, got {activated}"
     );
+}
+
+struct InternalTestCase {
+    name: String,
+    pattern: String,
+    pp: String,
+}
+
+fn load_internal_tests(filename: &str) -> Vec<InternalTestCase> {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join(filename);
+    let content = std::fs::read_to_string(&path).unwrap();
+    let table: toml::Value = content.parse().unwrap();
+    let tests = table["test"].as_array().unwrap();
+    tests
+        .iter()
+        .map(|t| InternalTestCase {
+            name: t
+                .get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string(),
+            pattern: t["pattern"].as_str().unwrap().to_string(),
+            pp: t["pp"].as_str().unwrap().to_string(),
+        })
+        .collect()
+}
+
+fn run_file_internal(filename: &str) {
+    let tests = load_internal_tests(filename);
+    for tc in &tests {
+        let mut b = resharp::RegexBuilder::new();
+        let node = resharp_parser::parse_ast(&mut b, &tc.pattern).unwrap_or_else(|e| {
+            panic!(
+                "file={}, name={:?}, pattern={:?}: compile error: {}",
+                filename, tc.name, tc.pattern, e
+            )
+        });
+        let got = b.pp(node);
+        assert_eq!(
+            got, tc.pp,
+            "file={}, name={:?}, pattern={:?}",
+            filename, tc.name, tc.pattern
+        );
+    }
+}
+
+#[test]
+fn internal() {
+    run_file_internal("internal.toml");
 }

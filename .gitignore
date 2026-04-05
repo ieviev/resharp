@@ -8,3 +8,4 @@ resharp-engine/examples/test*
 resharp-engine/examples/profile*
 resharp-engine/examples/bench*
 data/haystacks/*.input
+perf.data

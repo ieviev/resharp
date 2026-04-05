@@ -5,15 +5,16 @@ covers literals, classes, anchors, booleans, quantifiers, lookarounds,
 and long inputs where memchr-based skip is the hot path.
 '''
 
-[[test]]
-pattern = '^hello'
-input = 'hello world'
-matches = [[0, 5]]
 
 [[test]]
 pattern = 'world$'
 input = 'hello world'
 matches = [[6, 11]]
+
+[[test]]
+pattern = '^hello'
+input = 'hello world'
+matches = [[0, 5]]
 
 [[test]]
 pattern = '^[0-9]+$'

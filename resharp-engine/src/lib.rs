@@ -1,5 +1,4 @@
-//! resharp - regex engine with intersection, complement, and lookarounds,
-//! powered by symbolic derivatives and lazy DFA construction.
+//! regex engine with intersection, complement, and lookarounds
 //!
 //! # quick start
 //!
@@ -48,7 +47,11 @@ pub use engine::BDFA;
 #[cfg(feature = "diag")]
 pub use prefix::calc_potential_start;
 #[cfg(feature = "diag")]
+pub use prefix::calc_potential_start_prune;
+#[cfg(feature = "diag")]
 pub use prefix::calc_prefix_sets;
+#[cfg(feature = "diag")]
+pub use prefix::PrefixSets;
 #[cfg(feature = "diag")]
 pub use resharp_algebra::solver::TSetId;
 use resharp_algebra::Kind;
@@ -225,17 +228,15 @@ pub struct Match {
 pub(crate) struct RegexInner {
     pub(crate) b: RegexBuilder,
     pub(crate) fwd: engine::LDFA,
-    pub(crate) rev: engine::LDFA,
+    pub(crate) rev_ts: engine::LDFA,
     pub(crate) rev_bare: Option<engine::LDFA>,
-    pub(crate) fwd_lb: Option<engine::LDFA>,
     pub(crate) nulls: Vec<usize>,
-    pub(crate) matches_buf: Vec<Match>,
+    pub(crate) matches: Vec<Match>,
     pub(crate) bounded: Option<engine::BDFA>,
 }
 
-/// compiled regex backed by a lazy DFA.
-///
-/// uses a `Mutex` for mutable DFA state.
+/// Lazily compiled regex instance.
+/// Uses Mutex for interior mutability.
 pub struct Regex {
     pub(crate) inner: Mutex<RegexInner>,
     pub(crate) prefix: Option<prefix::PrefixKind>,
@@ -246,9 +247,12 @@ pub struct Regex {
     pub(crate) hardened: bool,
     pub(crate) has_bounded_prefix: bool,
     pub(crate) has_bounded: bool,
-    /// Preceding bytes to feed into `fwd_lb` for the lb check.
-    /// 0 = use UTF-8 backward scan to find the preceding character.
+    /// Number of lb bytes baked into the AnchoredFwdLb SIMD prefix.
+    /// match.start = simd_candidate + lb_check_bytes.
     pub(crate) lb_check_bytes: u8,
+    /// True when the lb contains \A: a match at position 0 is possible
+    /// and must be tried via begin_table before the SIMD scan.
+    pub(crate) fwd_lb_begin_nullable: bool,
 }
 
 #[inline(never)]
@@ -387,28 +391,21 @@ impl Regex {
         let mut rev = engine::LDFA::new(&mut b, ts_rev_start, max_cap)?;
         rev.prefix_skip = rev_skip;
 
-        let (mut fwd_lb, lb_check_bytes): (Option<engine::LDFA>, u8) =
+        let (fwd_lb_begin_nullable, lb_check_bytes) =
             if matches!(selected, Some(prefix::PrefixKind::AnchoredFwdLb(_))) {
                 let lb = node.left(&b);
                 let lb_inner = b.get_lookbehind_inner(lb);
-                let lb_stripped = b.strip_prefix_safe(lb_inner);
-                let lb_bytes: u8 = if lb_stripped != lb_inner {
-                    let (_, lb_max) = b.get_min_max_length(lb_stripped);
-                    lb_max.min(4) as u8
-                } else {
-                    0
-                };
-                let dfa = engine::LDFA::new(&mut b, lb_inner, max_cap)?;
-                (Some(dfa), lb_bytes)
+                let lb_nonbegin = b.nonbegins(lb_inner);
+                let lb_stripped = b.strip_prefix_safe(lb_nonbegin);
+                let (_, lb_max) = b.get_min_max_length(lb_stripped);
+                let begin_nullable = b.nullability(lb_inner).has(Nullability::BEGIN);
+                (begin_nullable, lb_max.min(4) as u8)
             } else {
-                (None, 0)
+                (false, 0)
             };
 
         if opts.dfa_threshold > 0 {
             fwd.precompile(&mut b, opts.dfa_threshold);
-            if let Some(ref mut fl) = fwd_lb {
-                fl.precompile(&mut b, opts.dfa_threshold);
-            }
             if !has_fwd_prefix {
                 rev.precompile(&mut b, opts.dfa_threshold);
             }
@@ -447,7 +444,9 @@ impl Regex {
         };
 
         let has_bounded = bounded.is_some();
-        let has_bounded_prefix = bounded.as_ref().is_some_and(|bd| bd.prefix.is_some());
+        let has_bounded_prefix = bounded
+            .as_ref()
+            .is_some_and(|bd: &crate::engine::BDFA| bd.prefix.is_some());
 
         let hardened = if opts.hardened && !has_bounded && fixed_length.is_none() && max_cap >= 64 {
             fwd.has_nonnullable_cycle(&mut b, 256)
@@ -459,11 +458,10 @@ impl Regex {
             inner: Mutex::new(RegexInner {
                 b,
                 fwd,
-                rev,
+                rev_ts: rev,
                 rev_bare,
-                fwd_lb,
                 nulls: Vec::new(),
-                matches_buf: Vec::new(),
+                matches: Vec::new(),
                 bounded,
             }),
             prefix: selected,
@@ -475,6 +473,7 @@ impl Regex {
             has_bounded_prefix,
             has_bounded,
             lb_check_bytes,
+            fwd_lb_begin_nullable,
         })
     }
 
@@ -488,7 +487,7 @@ impl Regex {
     #[allow(missing_docs)]
     pub fn dfa_stats(&self) -> (usize, usize) {
         let inner = self.inner.lock().unwrap();
-        (inner.fwd.state_nodes.len(), inner.rev.state_nodes.len())
+        (inner.fwd.state_nodes.len(), inner.rev_ts.state_nodes.len())
     }
 
     /// whether hardened linear-scan mode is enabled
@@ -544,12 +543,42 @@ impl Regex {
 
     #[cfg(feature = "diag")]
     #[allow(missing_docs)]
+    pub fn prefix_kind_name(&self) -> Option<&'static str> {
+        match &self.prefix {
+            None => None,
+            Some(prefix::PrefixKind::AnchoredFwd(_)) => Some("AnchoredFwd"),
+            Some(prefix::PrefixKind::UnanchoredFwd(_)) => Some("UnanchoredFwd"),
+            Some(prefix::PrefixKind::AnchoredFwdLb(_)) => Some("AnchoredFwdLb"),
+            Some(prefix::PrefixKind::AnchoredRev) => Some("AnchoredRev"),
+            Some(prefix::PrefixKind::PotentialStart) => Some("PotentialStart"),
+        }
+    }
+
+    #[cfg(feature = "diag")]
+    #[allow(missing_docs)]
+    pub fn max_length(&self) -> Option<u32> {
+        self.max_length
+    }
+
+    #[cfg(feature = "diag")]
+    #[allow(missing_docs)]
+    pub fn fwd_prefix_kind(&self) -> Option<(&'static str, usize)> {
+        match &self.prefix {
+            Some(prefix::PrefixKind::AnchoredFwd(fp))
+            | Some(prefix::PrefixKind::UnanchoredFwd(fp))
+            | Some(prefix::PrefixKind::AnchoredFwdLb(fp)) => Some((fp.variant_name(), fp.len())),
+            _ => None,
+        }
+    }
+
+    #[cfg(feature = "diag")]
+    #[allow(missing_docs)]
     pub fn has_accel(&self) -> (bool, bool) {
         let inner = self.inner.lock().unwrap();
         let fwd = self.prefix.as_ref().is_some_and(|p| p.is_fwd());
         let rev = self.prefix.as_ref().is_some_and(|p| p.is_rev())
-            || inner.rev.prefix_skip.is_some()
-            || inner.rev.can_skip();
+            || inner.rev_ts.prefix_skip.is_some()
+            || inner.rev_ts.can_skip();
         (fwd, rev)
     }
 
@@ -564,8 +593,7 @@ impl Regex {
     pub fn find_all(&self, input: &[u8]) -> Result<Vec<Match>, Error> {
         #[cfg(all(feature = "debug-nulls", debug_assertions))]
         {
-            eprintln!("diag: '{}'", String::from_utf8_lossy(input));
-            eprintln!("prefix: '{:?}'", &self.prefix);
+            // eprintln!("prefix: '{:?}'", &self.prefix);
         }
 
         if input.is_empty() {
@@ -606,7 +634,7 @@ impl Regex {
     #[allow(missing_docs)]
     pub fn effects_debug(&self) -> String {
         let inner = self.inner.lock().unwrap();
-        let rev = &inner.rev;
+        let rev = &inner.rev_ts;
         let mut out = String::new();
         for (i, &eid) in rev.effects_id.iter().enumerate() {
             if eid != 0 {
@@ -626,7 +654,7 @@ impl Regex {
         let inner = &mut *self.inner.lock().unwrap();
         inner.nulls.clear();
         inner
-            .rev
+            .rev_ts
             .collect_rev(&mut inner.b, input.len() - 1, input, &mut inner.nulls)
             .unwrap();
         inner.nulls.clone()
@@ -649,23 +677,15 @@ impl Regex {
                 "rev0: {}",
                 inner
                     .b
-                    .pp(inner.rev.state_nodes[inner.rev.initial as usize])
+                    .pp(inner.rev.state_nodes[engine::DFA_INITIAL as usize])
             );
         }
 
-        let rev_initial_nullable = inner.rev.effects_id[engine::DFA_INITIAL as usize] != 0;
+        let rev_initial_nullable = inner.rev_ts.effects_id[engine::DFA_INITIAL as usize] != 0;
         if rev_initial_nullable {
-            if cfg!(feature = "debug-nulls") {
-                eprintln!("  [find_all_dfa] rev_initial_nullable → nullable_slow");
-            }
-            inner.matches_buf.clear();
-            Self::find_all_nullable_slow(
-                &mut inner.fwd,
-                &mut inner.b,
-                input,
-                &mut inner.matches_buf,
-            )?;
-            return Ok(inner.matches_buf.clone());
+            inner.matches.clear();
+            Self::find_all_nullable_slow(&mut inner.fwd, &mut inner.b, input, &mut inner.matches)?;
+            return Ok(inner.matches.clone());
         }
 
         inner.nulls.clear();
@@ -674,11 +694,14 @@ impl Regex {
             inner.nulls.push(input.len());
         }
         inner
-            .rev
+            .rev_ts
             .collect_rev(&mut inner.b, input.len() - 1, input, &mut inner.nulls)?;
 
-        inner.matches_buf.clear();
-        let matches = &mut inner.matches_buf;
+        // #[cfg(feature = "diag")]
+        // eprintln!("  [diag] dfa nulls={} input={}", inner.nulls.len(), input.len());
+
+        inner.matches.clear();
+        let matches = &mut inner.matches;
         #[cfg(feature = "debug-nulls")]
         {
             eprintln!("nulls_buf={:?}", inner.nulls);
@@ -723,7 +746,7 @@ impl Regex {
             });
         }
 
-        Ok(inner.matches_buf.clone())
+        Ok(inner.matches.clone())
     }
 
     fn find_all_nullable_slow(
@@ -772,7 +795,7 @@ impl Regex {
         let RegexInner {
             b,
             bounded,
-            matches_buf,
+            matches: matches_buf,
             ..
         } = &mut *self.inner.lock().unwrap();
         let bounded = bounded.as_mut().unwrap();
@@ -795,7 +818,7 @@ impl Regex {
         let RegexInner {
             b,
             bounded,
-            matches_buf,
+            matches: matches_buf,
             ..
         } = &mut *self.inner.lock().unwrap();
         let bounded = bounded.as_mut().unwrap();
@@ -1025,7 +1048,7 @@ impl Regex {
     fn find_all_fwd_prefix(&self, input: &[u8]) -> Result<Vec<Match>, Error> {
         let fwd_prefix = self.prefix.as_ref().and_then(|p| p.fwd_search()).unwrap();
         let inner = &mut *self.inner.lock().unwrap();
-        let matches = &mut inner.matches_buf;
+        let matches = &mut inner.matches;
         matches.clear();
         let mut search_start = 0;
 
@@ -1056,6 +1079,13 @@ impl Regex {
                 }
                 search_start = candidate + 1;
             }
+            #[cfg(feature = "debug-nulls")]
+            eprintln!(
+                "  [debug-nulls] fwd_prefix candidates={} confirmed={} false_positives={}",
+                n_candidates,
+                n_confirmed,
+                n_candidates.saturating_sub(n_confirmed)
+            );
         }
 
         Ok(matches.clone())
@@ -1065,9 +1095,8 @@ impl Regex {
         let fwd_prefix = self.prefix.as_ref().and_then(|p| p.fwd_search()).unwrap();
         let inner = &mut *self.inner.lock().unwrap();
         let prefix_len = fwd_prefix.len();
-        // let initial = inner.fwd.initial;
         inner.fwd.create_state(&mut inner.b, engine::DFA_INITIAL)?;
-        inner.matches_buf.clear();
+        inner.matches.clear();
         let mut search_start = 0;
 
         while let Some(candidate) = fwd_prefix.find_fwd(input, search_start) {
@@ -1097,19 +1126,9 @@ impl Regex {
 
             // 2. find match start via bare rev DFA from confirmed end
             let rev_bare = inner.rev_bare.as_mut().unwrap();
-            inner.nulls.clear();
-            let slice = &input[search_start..max_end];
-            rev_bare.collect_rev(&mut inner.b, slice.len() - 1, slice, &mut inner.nulls)?;
-
-            if cfg!(feature = "debug-nulls") {
-                eprintln!(
-                    "  [stripped] candidate={} max_end={} search_start={} nulls={:?}",
-                    candidate, max_end, search_start, inner.nulls
-                );
-            }
-            if let Some(&start_rel) = inner.nulls.last() {
-                let match_start = search_start + start_rel;
-                inner.matches_buf.push(Match {
+            let match_start = rev_bare.scan_rev_from(&mut inner.b, max_end, search_start, input)?;
+            if match_start != engine::NO_MATCH {
+                inner.matches.push(Match {
                     start: match_start,
                     end: max_end,
                 });
@@ -1119,87 +1138,54 @@ impl Regex {
             }
         }
 
-        Ok(inner.matches_buf.clone())
+        Ok(inner.matches.clone())
     }
 
     fn find_all_fwd_lb_prefix(&self, input: &[u8]) -> Result<Vec<Match>, Error> {
         let fwd_prefix = self.prefix.as_ref().and_then(|p| p.fwd_search()).unwrap();
         let inner = &mut *self.inner.lock().unwrap();
-        inner.matches_buf.clear();
-        let prefix_len = fwd_prefix.len();
-        let fwd_lb_initial = engine::DFA_INITIAL;
+        inner.matches.clear();
+        let lb_len = self.lb_check_bytes as usize;
         let mut search_start = 0usize;
 
-        while let Some(candidate) = fwd_prefix.find_fwd(input, search_start) {
-            let lb_ok = if candidate == 0 {
-                let fwd_lb = inner.fwd_lb.as_ref().unwrap();
-                engine::has_any_null(
-                    &fwd_lb.effects_id,
-                    &fwd_lb.effects,
-                    fwd_lb_initial as u32,
-                    Nullability::BEGIN,
-                )
-            } else {
-                // Determine context window start.
-                // lb_check_bytes = 0: no TS prefix (e.g. \b Unicode) → scan back
-                //   over UTF-8 continuation bytes to find the preceding character.
-                //   For ASCII inputs this is a no-op (first byte is not 0x80-0xBF).
-                // lb_check_bytes > 0: TS-prefixed lb (e.g. (?<=bb)) → feed exactly
-                //   lb_check_bytes bytes from before the candidate.
-                let lb_cb = self.lb_check_bytes as usize;
-                let ctx_start = if lb_cb == 0 {
-                    let mut s = candidate - 1;
-                    while s > 0 && input[s] & 0xC0 == 0x80 && candidate - s < 4 {
-                        s -= 1;
-                    }
-                    s
-                } else {
-                    candidate.saturating_sub(lb_cb)
-                };
-                let fwd_lb = inner.fwd_lb.as_mut().unwrap();
-                let mut lb_state = fwd_lb_initial;
-                for &byte in &input[ctx_start..candidate] {
-                    let mt = fwd_lb.mt_lookup[byte as usize] as u32;
-                    lb_state = fwd_lb.lazy_transition(&mut inner.b, lb_state, mt)?;
-                    if lb_state <= engine::DFA_DEAD {
-                        break;
-                    }
-                }
-                lb_state > engine::DFA_DEAD
-                    && fwd_lb
-                        .effects_id
-                        .get(lb_state as usize)
-                        .copied()
-                        .unwrap_or(0)
-                        != 0
-            };
-
-            if !lb_ok {
-                search_start = candidate + 1;
-                continue;
-            }
-
-            let state = inner
-                .fwd
-                .walk_input(&mut inner.b, candidate, prefix_len, input)?;
+        // \A: lb contains \A so a match is possible at position 0 without any preceding lb
+        // byte. Handle this explicitly via begin_table before the SIMD scan.
+        if self.fwd_lb_begin_nullable && !input.is_empty() {
+            let state = inner.fwd.walk_input(&mut inner.b, 0, 1, input)?;
             if state != 0 {
-                let max_end =
-                    inner
-                        .fwd
-                        .scan_fwd_from(&mut inner.b, state, candidate + prefix_len, input)?;
-                if max_end != engine::NO_MATCH && max_end > candidate {
-                    inner.matches_buf.push(Match {
-                        start: candidate,
+                let max_end = inner.fwd.scan_fwd_from(&mut inner.b, state, 1, input)?;
+                if max_end != engine::NO_MATCH {
+                    inner.matches.push(Match {
+                        start: 0,
                         end: max_end,
                     });
                     search_start = max_end;
-                    continue;
                 }
             }
-            search_start = candidate + 1;
         }
 
-        Ok(inner.matches_buf.clone())
+        // SIMD scan for lb bytes. Only valid when in the initial/pruned DFA state,
+        // which is always the case here (scan_fwd_from fully processes each candidate).
+        while let Some(candidate) = fwd_prefix.find_fwd(input, search_start) {
+            let body_start = candidate + lb_len;
+            let max_end = inner.fwd.scan_fwd_from(
+                &mut inner.b,
+                engine::DFA_INITIAL as u32,
+                body_start,
+                input,
+            )?;
+            if max_end != engine::NO_MATCH {
+                inner.matches.push(Match {
+                    start: body_start,
+                    end: max_end,
+                });
+                search_start = max_end;
+            } else {
+                search_start = body_start;
+            }
+        }
+
+        Ok(inner.matches.clone())
     }
 
     /// longest match anchored at position 0.
@@ -1235,6 +1221,7 @@ impl Regex {
         if self.has_bounded {
             return self.is_match_fwd_bounded(input);
         }
+        // TODO: very critical of this, likely unnecessary special case, need to measure if it makes any difference
         if let Some(fwd_prefix) = self.prefix.as_ref().and_then(|p| p.fwd_search()) {
             if let Some(fl) = self.fixed_length {
                 if fl as usize == fwd_prefix.len() {
@@ -1267,12 +1254,12 @@ impl Regex {
             return Ok(false);
         }
         let inner = &mut *self.inner.lock().unwrap();
-        if inner.rev.effects_id[engine::DFA_INITIAL as usize] != 0 {
+        if inner.rev_ts.effects_id[engine::DFA_INITIAL as usize] != 0 {
             return Ok(true);
         }
         inner.nulls.clear();
         inner
-            .rev
+            .rev_ts
             .collect_rev_first(&mut inner.b, input.len() - 1, input, &mut inner.nulls)?;
         Ok(!inner.nulls.is_empty())
     }

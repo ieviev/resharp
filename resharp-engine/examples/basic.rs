@@ -42,7 +42,6 @@ fn main() {
         b"first paragraph\nstill first\n\nsecond paragraph\n\nthird part",
     );
 
-
     // password validation: 8+ alphanumeric, has upper, has lower,
     // has digit, no consecutive digits
     let re = Regex::new(r"[a-zA-Z\d]{8,}&_*[A-Z]_*&_*[a-z]_*&_*\d_*&~(_*\d\d_*)").unwrap();

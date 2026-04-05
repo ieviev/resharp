@@ -1676,7 +1676,6 @@ impl RegexBuilder {
         curr
     }
 
-    /// true if node ends with a trailing Lookahead(_, MISSING)
     fn has_trailing_la(&self, node: NodeId) -> bool {
         let end = match self.get_kind(node) {
             Kind::Concat => self.get_concat_end(node),
@@ -1686,7 +1685,6 @@ impl RegexBuilder {
         self.get_kind(end) == Kind::Lookahead && end.right(self).is_missing()
     }
 
-    /// strip the trailing Lookahead from a node, returning (body, la).
     fn strip_trailing_la(&mut self, node: NodeId) -> (NodeId, NodeId) {
         if self.get_kind(node) == Kind::Lookahead {
             return (NodeId::EPS, node);
@@ -1694,7 +1692,6 @@ impl RegexBuilder {
         debug_assert!(self.get_kind(node) == Kind::Concat);
         let right = node.right(self);
         if self.get_kind(right) != Kind::Concat {
-            // Concat(body, LA) → (body, LA)
             return (node.left(self), right);
         }
         let (stripped, la) = self.strip_trailing_la(right);
@@ -2282,7 +2279,7 @@ impl RegexBuilder {
                 }
 
                 // xa|ya => (x|y)a - suffix factoring via reverse
-                // disabled: introduces reversed intermediate patterns that bloat derivative DFA
+                // looks prettier but not good for builder perf - leaving out for now
                 if false {
                     let end1 = self.get_concat_end(left);
                     let end2 = self.get_concat_end(right);
@@ -2310,7 +2307,8 @@ impl RegexBuilder {
             return Some(result);
         }
 
-        // e.g. (.*&X{19}_*&C) | (.*&X{20}_*&C) => (.*&X{19}_*&C)
+        // (.*&X{19}_*&C) | (.*&X{20}_*&C) => (.*&X{19}_*&C)
+        // TODO: an extra check that both sides are Kind::Inter
         if self.flags == BuilderFlags::SUBSUME {
             if let Some(rw) = self.try_subsume_inter_union(left, right) {
                 return Some(rw);
@@ -2329,8 +2327,6 @@ impl RegexBuilder {
         out.push(curr);
     }
 
-    /// check if node is [_*] Pred(X)^count . Star(Y)
-    /// returns (has_prefix_star, pred_tset, star_node, count)
     fn as_pred_chain_star(&self, node: NodeId) -> Option<(bool, TSetId, NodeId, u32)> {
         let mut curr = node;
         let has_prefix = self.get_kind(curr) == Kind::Concat && self.get_left(curr) == NodeId::TS;
@@ -2387,7 +2383,6 @@ impl RegexBuilder {
         self.collect_inter_components(right, &mut rc);
 
         // component subset check: fewer constraints = larger language
-        // if lc ⊆ rc then L(left) ⊇ L(right), keep left
         if lc.len() <= rc.len() && Self::is_sorted_subset(&lc, &rc) {
             return Some(left);
         }
@@ -2476,9 +2471,6 @@ impl RegexBuilder {
             if right.is_kind(self, Kind::Concat) {}
         }
 
-        // hoist lookahead out of intersection:
-        //   L & (?=X)T  → (?=X)(L & T)                  [bare Lookahead]
-        //   L & ((?=X)·body) → (?=X)(L & body)           [Concat with leading Lookahead]
         {
             let l_is_la = left.is_lookahead(self);
             let r_is_la = right.is_lookahead(self);
@@ -2518,7 +2510,6 @@ impl RegexBuilder {
             }
             if self.get_kind(compl_body) == Kind::Concat {
                 let compl_head = compl_body.left(self);
-                // L & ~(R·_*) = BOT when L ⊂ R·_*
                 if compl_body.right(self) == NodeId::TS && compl_head == left {
                     return Some(NodeId::BOT);
                 }
@@ -2532,9 +2523,6 @@ impl RegexBuilder {
             }
         }
 
-        // factor lookbehinds out of intersections
-        // Concat(LB1, body1) & Concat(LB2, body2) → Concat(LB(inner1&inner2), body1&body2)
-        // Concat(LB, body1) & body2 → Concat(LB, body1&body2)
         {
             let l_is_clb = self.get_kind(left) == Kind::Concat
                 && self.get_kind(left.left(self)) == Kind::Lookbehind;
@@ -2548,7 +2536,6 @@ impl RegexBuilder {
                         self.get_lookbehind_inner(lb1),
                         self.get_lookbehind_inner(lb2),
                     );
-                    // lb_prev is MISSING - cannot trigger UnsupportedPattern
                     let lb = self.mk_lookbehind_internal(inner, NodeId::MISSING).unwrap();
                     let body = self.mk_inter(left.right(self), right.right(self));
                     (lb, body)
@@ -2565,9 +2552,6 @@ impl RegexBuilder {
             }
         }
 
-        // factor trailing lookaheads out of intersections
-        // body1·LA & body2 → (body1&body2)·LA
-        // body1·LA1 & body2·LA2 → (body1&body2)·LA(inner1&inner2)
         {
             let l_has_la = self.has_trailing_la(left);
             let r_has_la = self.has_trailing_la(right);
@@ -2854,7 +2838,6 @@ impl RegexBuilder {
             }
         }
 
-        // flatten consecutive lookaheads: (?=A, tail=(?=B, tail=C)) → (?=A._* & B._*, tail=C)
         if la_tail != NodeId::MISSING && self.get_kind(la_tail) == Kind::Lookahead {
             let la_body2 = self.get_lookahead_inner(la_tail);
             let body1_ts = self.mk_concat(la_body, NodeId::TS);
@@ -2865,7 +2848,6 @@ impl RegexBuilder {
             return self.mk_lookahead_internal(new_la_body, new_la_tail, new_la_rel);
         }
 
-        // _*\z -> too expensive to keep; null it
         if self.get_kind(la_body) == Kind::Concat && la_body.left(self) == NodeId::TS {
             let la_body_right = la_body.right(self);
             if self.is_always_nullable(la_body_right) {
@@ -2926,13 +2908,12 @@ impl RegexBuilder {
         if chain == NodeId::MISSING || body == NodeId::BOT {
             return chain;
         }
-        // nullable body → body·_* = _*, all chain candidates subsumed
         if self.nullability(body) != Nullability::NEVER {
             return NodeId::MISSING;
         }
         let chain_body = chain.left(self);
         if chain_body == NodeId::BOT {
-            return chain; // pending match, keep
+            return chain;
         }
         let not_begins = self.mk_not_begins_with(body);
         let inter = self.mk_inter(chain_body, not_begins);
@@ -3512,10 +3493,6 @@ impl RegexBuilder {
                     non_concat.push(n);
                 }
             }
-            // absorb non-concat nodes whose id matches a by_head key:
-            // x | x·t1 | x·t2 → x·(ε|t1|t2)
-            // without this, factoring reproduces identical groups and
-            // recurses infinitely.
             let mut absorbed: Vec<NodeId> = Vec::new();
             for &n in &non_concat {
                 if by_head.contains_key(&n) {

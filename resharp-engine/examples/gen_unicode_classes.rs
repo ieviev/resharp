@@ -1,8 +1,12 @@
-use resharp_algebra::{Kind, NodeId, RegexBuilder};
 use regex_syntax::utf8::Utf8Sequences;
+use resharp_algebra::{Kind, NodeId, RegexBuilder};
 use std::collections::HashMap;
 
-fn build_class_from_ranges(b: &mut RegexBuilder, ranges: &[(char, char)], max_seq_len: usize) -> NodeId {
+fn build_class_from_ranges(
+    b: &mut RegexBuilder,
+    ranges: &[(char, char)],
+    max_seq_len: usize,
+) -> NodeId {
     let mut s1 = NodeId::BOT;
     let mut s2 = NodeId::BOT;
     let mut s3 = NodeId::BOT;
@@ -73,41 +77,43 @@ fn emit(
     let name = match node {
         NodeId::BOT => "NodeId::BOT".into(),
         NodeId::EPS => "NodeId::EPS".into(),
-        _ => {
-            match b.get_kind(node) {
-                Kind::Pred => {
-                    let ranges = b.solver_ref().byte_ranges(node.pred_tset(b));
-                    let var = format!("n{}", counter);
-                    *counter += 1;
-                    if ranges.len() == 1 {
-                        println!("let {var} = b.mk_range_u8(0x{:02X}, 0x{:02X});", ranges[0].0, ranges[0].1);
-                    } else {
-                        let pairs: Vec<String> = ranges.iter()
-                            .map(|(lo, hi)| format!("(0x{lo:02X}, 0x{hi:02X})"))
-                            .collect();
-                        println!("let {var} = b.mk_ranges_u8(&[{}]);", pairs.join(", "));
-                    }
-                    var
+        _ => match b.get_kind(node) {
+            Kind::Pred => {
+                let ranges = b.solver_ref().byte_ranges(node.pred_tset(b));
+                let var = format!("n{}", counter);
+                *counter += 1;
+                if ranges.len() == 1 {
+                    println!(
+                        "let {var} = b.mk_range_u8(0x{:02X}, 0x{:02X});",
+                        ranges[0].0, ranges[0].1
+                    );
+                } else {
+                    let pairs: Vec<String> = ranges
+                        .iter()
+                        .map(|(lo, hi)| format!("(0x{lo:02X}, 0x{hi:02X})"))
+                        .collect();
+                    println!("let {var} = b.mk_ranges_u8(&[{}]);", pairs.join(", "));
                 }
-                Kind::Concat => {
-                    let l = emit(b, node.left(b), visited, counter);
-                    let r = emit(b, node.right(b), visited, counter);
-                    let var = format!("n{}", counter);
-                    *counter += 1;
-                    println!("let {var} = b.mk_concat({l}, {r});");
-                    var
-                }
-                Kind::Union => {
-                    let l = emit(b, node.left(b), visited, counter);
-                    let r = emit(b, node.right(b), visited, counter);
-                    let var = format!("n{}", counter);
-                    *counter += 1;
-                    println!("let {var} = b.mk_union({l}, {r});");
-                    var
-                }
-                k => panic!("unexpected {:?}", k),
+                var
             }
-        }
+            Kind::Concat => {
+                let l = emit(b, node.left(b), visited, counter);
+                let r = emit(b, node.right(b), visited, counter);
+                let var = format!("n{}", counter);
+                *counter += 1;
+                println!("let {var} = b.mk_concat({l}, {r});");
+                var
+            }
+            Kind::Union => {
+                let l = emit(b, node.left(b), visited, counter);
+                let r = emit(b, node.right(b), visited, counter);
+                let var = format!("n{}", counter);
+                *counter += 1;
+                println!("let {var} = b.mk_union({l}, {r});");
+                var
+            }
+            k => panic!("unexpected {:?}", k),
+        },
     };
     visited.insert(node, name.clone());
     name
@@ -140,7 +146,6 @@ fn main() {
         println!();
     }
 
-    // full Unicode classes (all UTF-8 sequence lengths)
     for (pat, fn_name, label) in &[
         (r"\w", "build_word_class_full", "\\w(full)"),
         (r"\d", "build_digit_class_full", "\\d(full)"),

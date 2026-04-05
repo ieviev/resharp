@@ -46,9 +46,11 @@ fn profile(label: &str, pattern: &str, input: &[u8], iters: u32) {
 }
 
 fn main() {
-    let en = std::fs::read_to_string(
-        format!("{}/../data/haystacks/en-sampled.txt", env!("CARGO_MANIFEST_DIR"))
-    ).unwrap();
+    let en = std::fs::read_to_string(format!(
+        "{}/../data/haystacks/en-sampled.txt",
+        env!("CARGO_MANIFEST_DIR")
+    ))
+    .unwrap();
     let input = en.as_bytes();
     let len = input.len();
 
@@ -71,12 +73,21 @@ fn main() {
         profile(label, pattern, input, 50);
     }
 
-    let date_monster = std::fs::read_to_string(
-        format!("{}/tests/date_pattern.toml", env!("CARGO_MANIFEST_DIR"))
-    ).unwrap();
-    let date_pat: String = date_monster.lines()
+    let date_monster = std::fs::read_to_string(format!(
+        "{}/tests/date_pattern.toml",
+        env!("CARGO_MANIFEST_DIR")
+    ))
+    .unwrap();
+    let date_pat: String = date_monster
+        .lines()
         .find(|l| l.starts_with("pattern = '((19"))
-        .map(|l| l.strip_prefix("pattern = '").unwrap().strip_suffix("'").unwrap().to_string())
+        .map(|l| {
+            l.strip_prefix("pattern = '")
+                .unwrap()
+                .strip_suffix("'")
+                .unwrap()
+                .to_string()
+        })
         .unwrap();
     println!("\n--- date-monster on en-sampled.txt ---");
     profile("date-monster", &date_pat, input, 10);
