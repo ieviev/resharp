@@ -433,6 +433,11 @@ impl NodeId {
     }
 
     #[inline]
+    pub(crate) fn is_inter(self, b: &RegexBuilder) -> bool {
+        b.get_kind(self) == Kind::Inter
+    }
+
+    #[inline]
     pub(crate) fn is_plus(self, b: &RegexBuilder) -> bool {
         if self.is_concat(b) {
             let r = self.right(b);
@@ -2279,7 +2284,8 @@ impl RegexBuilder {
                 }
 
                 // xa|ya => (x|y)a - suffix factoring via reverse
-                // looks prettier but not good for builder perf - leaving out for now
+                // TODO: valid and looks prettier but .reverse is not good for builder perf,
+                // leaving out unless i find a case where it helps significantly
                 if false {
                     let end1 = self.get_concat_end(left);
                     let end2 = self.get_concat_end(right);
@@ -2308,8 +2314,7 @@ impl RegexBuilder {
         }
 
         // (.*&X{19}_*&C) | (.*&X{20}_*&C) => (.*&X{19}_*&C)
-        // TODO: an extra check that both sides are Kind::Inter
-        if self.flags == BuilderFlags::SUBSUME {
+        if left.is_inter(self) && right.is_inter(self) {
             if let Some(rw) = self.try_subsume_inter_union(left, right) {
                 return Some(rw);
             }

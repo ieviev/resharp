@@ -189,7 +189,7 @@ fn bench_hardened_regression(c: &mut Criterion) {
 
 criterion_group! {
     name = regression;
-    config = Criterion::default().without_plots();
+    config = Criterion::default().without_plots().sample_size(20).measurement_time(std::time::Duration::from_secs(2));
     targets = bench_resharp_regression
 }
 criterion_main!(regression);

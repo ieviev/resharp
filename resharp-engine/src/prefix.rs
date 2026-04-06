@@ -247,6 +247,10 @@ impl PrefixSets {
 }
 
 const SKIP_FREQ_THRESHOLD: u32 = 75_000;
+/// Maximum BYTE_FREQ sum for the rarest Teddy position before the false-positive
+/// rate becomes high enough that Teddy hurts overall throughput.
+/// Midpoint of the suggested 20 000–30 000 range from profiling.
+const TEDDY_MAX_FREQ_SUM: u64 = 25_000;
 /// A single byte whose `BYTE_FREQ` value meets or exceeds this is too common
 /// to anchor a SIMD literal search against.  Approximately 38% of `u16::MAX`.
 const RARE_BYTE_FREQ_LIMIT: u16 = 25_000;
@@ -389,9 +393,16 @@ fn try_build_fwd_search_raw(
     freqs.sort_by_key(|&(_, f)| f);
 
     let rarest_idx = freqs[0].0;
+    let rarest_freq_sum = freqs[0].1;
     let rarest_len = byte_sets_raw[rarest_idx].len();
 
     if rarest_len > 16 {
+        return try_build_fwd_range_prefix(byte_sets_raw, rarest_idx).map(|r| r.0);
+    }
+
+    // Reject Teddy when the rarest position is too common (high false-positive
+    // rate). Try a range-based prefix first; if that also fails, skip entirely.
+    if rarest_freq_sum > TEDDY_MAX_FREQ_SUM {
         return try_build_fwd_range_prefix(byte_sets_raw, rarest_idx).map(|r| r.0);
     }
 
@@ -580,6 +591,21 @@ pub(crate) fn build_rev_prefix_search(
     if combined > threshold {
         return None;
     }
+    // Reject Teddy when the rarest position is too common: nearly every
+    // window will be a false positive, slowing the overall match below the
+    // cost of a plain DFA scan.
+    let rarest_freq_sum: u64 = byte_sets_raw[..num_simd]
+        .iter()
+        .map(|bs| {
+            bs.iter()
+                .map(|&b| crate::simd::BYTE_FREQ[b as usize] as u64)
+                .sum::<u64>()
+        })
+        .min()
+        .unwrap_or(u64::MAX);
+    if rarest_freq_sum > TEDDY_MAX_FREQ_SUM {
+        return None;
+    }
     let all_sets: Vec<crate::accel::TSet> = byte_sets_raw
         .iter()
         .map(|bytes| crate::accel::TSet::from_bytes(bytes))
@@ -729,11 +755,11 @@ fn select_prefix_simd(
                 let lb_nonbegin = b.nonbegins(lb_inner);
                 let lb_stripped = b.strip_prefix_safe(lb_nonbegin);
                 let (_, lb_max) = b.get_min_max_length(lb_stripped);
-                if lb_max >= 1 && lb_max <= 4 {
+                if (1..=4).contains(&lb_max) {
                     let lb_body = b.mk_concat(lb_stripped, body);
                     let (fp, stripped) = build_fwd_prefix(b, lb_body)?;
                     if let (Some(_), false) = (fp, stripped) {
-                        // TODO: excluded for now
+                        // TODO: invalid for now, need to reimplemnet the prefixes
                         // return Ok((Some(PrefixKind::AnchoredFwdLb(fp)), None));
                     }
                 }
@@ -747,7 +773,7 @@ fn select_prefix_simd(
             if !stripped {
                 return Ok((Some(PrefixKind::AnchoredFwd(fp)), None));
             }
-            // TODO: excluded for now
+            // TODO: excluded and waiting till prefix refactor
             // let kind = if stripped {
             //     PrefixKind::UnanchoredFwd(fp)
             // } else {

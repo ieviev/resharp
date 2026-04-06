@@ -62,14 +62,11 @@ fn walk(path: &Path, counts: &mut [u64; 256], total: &mut u64) -> io::Result<()>
         if fs::metadata(path).map(|m| m.len()).unwrap_or(0) > MAX_FILE_BYTES {
             return Ok(());
         }
-        match fs::read(path) {
-            Ok(data) => {
-                for &b in &data {
-                    counts[b as usize] += 1;
-                }
-                *total += data.len() as u64;
+        if let Ok(data) = fs::read(path) {
+            for &b in &data {
+                counts[b as usize] += 1;
             }
-            Err(_) => {}
+            *total += data.len() as u64;
         }
     } else if path.is_dir() {
         let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");

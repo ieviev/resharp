@@ -697,9 +697,6 @@ impl Regex {
             .rev_ts
             .collect_rev(&mut inner.b, input.len() - 1, input, &mut inner.nulls)?;
 
-        // #[cfg(feature = "diag")]
-        // eprintln!("  [diag] dfa nulls={} input={}", inner.nulls.len(), input.len());
-
         inner.matches.clear();
         let matches = &mut inner.matches;
         #[cfg(feature = "debug-nulls")]
@@ -756,7 +753,6 @@ impl Regex {
         matches: &mut Vec<Match>,
     ) -> Result<(), Error> {
         let mut pos = 0;
-        fwd.build_skip_all(b);
         while pos < input.len() {
             let max_end = fwd.scan_fwd_slow(b, pos, input)?;
             if max_end != engine::NO_MATCH && max_end > pos {

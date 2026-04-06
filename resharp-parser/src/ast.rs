@@ -7,12 +7,8 @@ use regex_syntax::ast::{ClassBracketed, ClassPerl, ClassUnicode, Literal, Span};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Error {
-    /// The kind of error.
     kind: ErrorKind,
-    /// The original pattern that the parser generated the error from. Every
-    /// span in an error is a valid range into this string.
     pattern: String,
-    /// The span of this error.
     span: Span,
 }
 
@@ -888,13 +884,10 @@ pub enum LookaroundKind {
     NegativeLookbehind,
 }
 
-/// An alternation of regular expressions.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Lookaround {
     pub kind: LookaroundKind,
-    /// The span of this alternation.
     pub span: Span,
-    /// The regular expression in this group.
     pub ast: Box<Ast>,
 }
 
