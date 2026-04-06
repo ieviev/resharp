@@ -26,7 +26,6 @@ fn load_dictionary_pattern(n: usize) -> String {
     contents.lines().take(n).collect::<Vec<_>>().join("|")
 }
 
-
 macro_rules! bench_three {
     ($group:expr, $pattern:expr, $input:expr) => {{
         let input = $input;
@@ -393,31 +392,6 @@ fn bench_dotstar_eq_redos(c: &mut Criterion) {
     group.throughput(Throughput::Bytes(input.len() as u64));
     bench_three!(group, ".*=.*", input);
     group.finish();
-}
-
-fn bench_credit_card(c: &mut Criterion) {
-    let pattern = r"\b(?:4\d{3}[\s\-]?\d{4}[\s\-]?\d{4}[\s\-]?\d{4}|5[1-5]\d{2}[\s\-]?\d{4}[\s\-]?\d{4}[\s\-]?\d{4}|3[47]\d{2}[\s\-]?\d{6}[\s\-]?\d{5}|6011[\s\-]?\d{4}[\s\-]?\d{4}[\s\-]?\d{4})\b";
-
-    for haystack_name in &["en-sampled.txt", "rust-src-tools-3b0d4813.txt"] {
-        let haystack = load_haystack(haystack_name);
-        let input = haystack.as_bytes();
-
-        let mut group = c.benchmark_group(format!("credit-card/{}", haystack_name));
-        group.throughput(Throughput::Bytes(input.len() as u64));
-
-        let re_resharp = resharp::Regex::new(pattern).unwrap();
-        re_resharp.find_all(input).ok();
-        group.bench_function("resharp", |b| {
-            b.iter(|| black_box(re_resharp.find_all(black_box(input)).unwrap().len()));
-        });
-
-        let re_regex = regex::bytes::Regex::new(pattern).unwrap();
-        group.bench_function("regex", |b| {
-            b.iter(|| black_box(re_regex.find_iter(black_box(input)).count()));
-        });
-
-        group.finish();
-    }
 }
 
 criterion_group! {

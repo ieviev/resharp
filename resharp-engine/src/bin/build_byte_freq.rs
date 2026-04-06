@@ -4,13 +4,12 @@
 ///   cargo run --bin build_byte_freq -- [corpus_path] [output_path]
 ///
 /// Defaults:
-///   corpus_path  /mnt/g/repos/rust
+///   corpus_path  /mnt/g/repos/rust (rust compiler source)
 ///   output_path  stdout
 ///
 /// To regenerate resharp-engine/src/simd/byte_freq.rs:
 ///   cargo run --bin build_byte_freq -- /mnt/g/repos/rust \
 ///       resharp-engine/src/simd/byte_freq.rs
-
 use std::fs;
 use std::io::{self, Write};
 use std::path::Path;
@@ -20,26 +19,24 @@ const DEFAULT_CORPUS: &str = "/mnt/g/repos/rust";
 
 /// Directory names that are never source code.
 const SKIP_DIRS: &[&str] = &[
-    ".git", "target", "__pycache__", "node_modules", ".svn", ".hg",
+    ".git",
+    "target",
+    "__pycache__",
+    "node_modules",
+    ".svn",
+    ".hg",
 ];
 
-/// File extensions whose content is binary and should not contribute to source
-/// code byte statistics.
 const SKIP_EXTENSIONS: &[&str] = &[
     // images
-    "png", "jpg", "jpeg", "gif", "ico", "webp", "bmp", "tiff",
-    // fonts
-    "woff", "woff2", "ttf", "eot", "otf",
-    // compiled / linked objects
-    "exe", "dll", "so", "dylib", "a", "o", "rlib", "rmeta", "pdb", "d",
-    // archives
-    "gz", "zip", "tar", "zst", "xz", "bz2", "7z",
-    // other binary
+    "png", "jpg", "jpeg", "gif", "ico", "webp", "bmp", "tiff", // fonts
+    "woff", "woff2", "ttf", "eot", "otf", // compiled / linked objects
+    "exe", "dll", "so", "dylib", "a", "o", "rlib", "rmeta", "pdb", "d", // archives
+    "gz", "zip", "tar", "zst", "xz", "bz2", "7z", // other binary
     "pyc", "db", "sqlite", "pdf", "class", "jar",
 ];
 
-/// Maximum file size to scan (10 MiB). Protects against huge blobs in test
-/// fixtures while keeping memory use bounded.
+/// Maximum file size to scan (10 MiB)
 const MAX_FILE_BYTES: u64 = 10 * 1024 * 1024;
 
 fn should_skip_dir(name: &str) -> bool {
@@ -65,14 +62,11 @@ fn walk(path: &Path, counts: &mut [u64; 256], total: &mut u64) -> io::Result<()>
         if fs::metadata(path).map(|m| m.len()).unwrap_or(0) > MAX_FILE_BYTES {
             return Ok(());
         }
-        match fs::read(path) {
-            Ok(data) => {
-                for &b in &data {
-                    counts[b as usize] += 1;
-                }
-                *total += data.len() as u64;
+        if let Ok(data) = fs::read(path) {
+            for &b in &data {
+                counts[b as usize] += 1;
             }
-            Err(_) => {}
+            *total += data.len() as u64;
         }
     } else if path.is_dir() {
         let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
@@ -80,9 +74,7 @@ fn walk(path: &Path, counts: &mut [u64; 256], total: &mut u64) -> io::Result<()>
             return Ok(());
         }
         // Sort entries for deterministic output across runs and platforms.
-        let mut entries: Vec<_> = fs::read_dir(path)?
-            .filter_map(|e| e.ok())
-            .collect();
+        let mut entries: Vec<_> = fs::read_dir(path)?.filter_map(|e| e.ok()).collect();
         entries.sort_by_key(|e| e.file_name());
         for entry in entries {
             walk(&entry.path(), counts, total)?;
@@ -97,9 +89,7 @@ fn generate_source(counts: &[u64; 256]) -> String {
     let mut table = [0u16; 256];
     for (b, &count) in counts.iter().enumerate() {
         if count > 0 {
-            // Normalize to u16::MAX: most frequent byte → 65535, all others
-            // proportionally scaled.  Bytes that appeared at least once get
-            // at least 1 so that zero is unambiguously "not observed".
+            // Normalize to 65535
             let v = ((count * u16::MAX as u64 + max_count / 2) / max_count).max(1) as u16;
             table[b] = v;
         }

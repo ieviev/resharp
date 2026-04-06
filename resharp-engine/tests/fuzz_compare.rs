@@ -76,7 +76,11 @@ fn resharp_find(pattern: &str, input: &[u8]) -> Option<Vec<[usize; 2]>> {
 fn rust_regex_find(pattern: &str, input: &[u8]) -> Option<Vec<[usize; 2]>> {
     let re = regex::Regex::new(pattern).ok()?;
     let input_str = std::str::from_utf8(input).ok()?;
-    Some(re.find_iter(input_str).map(|m| [m.start(), m.end()]).collect())
+    Some(
+        re.find_iter(input_str)
+            .map(|m| [m.start(), m.end()])
+            .collect(),
+    )
 }
 
 fn bounded_run<F, T>(f: F, timeout: Duration) -> Result<T, &'static str>
@@ -126,7 +130,12 @@ fn run_all_engines(filename: &str) {
     let mut resharp_cmp = CompareResult {
         file: filename.to_string(),
         engine: "resharp".to_string(),
-        tested: 0, passed: 0, compile_fail: 0, match_fail: 0, panicked: 0, timed_out: 0,
+        tested: 0,
+        passed: 0,
+        compile_fail: 0,
+        match_fail: 0,
+        panicked: 0,
+        timed_out: 0,
         failures: Vec::new(),
     };
 
@@ -150,13 +159,30 @@ fn run_all_engines(filename: &str) {
                 }
                 resharp_results.push(Some(actual));
             }
-            Err("compile/runtime") => { resharp_cmp.compile_fail += 1; resharp_results.push(None); }
-            Err("panic") => { resharp_cmp.panicked += 1; resharp_results.push(None); }
-            Err("timeout") => { resharp_cmp.timed_out += 1; resharp_results.push(None); }
-            _ => { resharp_results.push(None); }
+            Err("compile/runtime") => {
+                resharp_cmp.compile_fail += 1;
+                resharp_results.push(None);
+            }
+            Err("panic") => {
+                resharp_cmp.panicked += 1;
+                resharp_results.push(None);
+            }
+            Err("timeout") => {
+                resharp_cmp.timed_out += 1;
+                resharp_results.push(None);
+            }
+            _ => {
+                resharp_results.push(None);
+            }
         }
         if (i + 1) % 5000 == 0 {
-            eprintln!("  resharp [{}/{}] passed={} fail={}", i + 1, entries.len(), resharp_cmp.passed, resharp_cmp.match_fail);
+            eprintln!(
+                "  resharp [{}/{}] passed={} fail={}",
+                i + 1,
+                entries.len(),
+                resharp_cmp.passed,
+                resharp_cmp.match_fail
+            );
         }
     }
 
@@ -165,13 +191,23 @@ fn run_all_engines(filename: &str) {
     let mut regex_vs_oracle = CompareResult {
         file: filename.to_string(),
         engine: "regex-crate-vs-oracle".to_string(),
-        tested: 0, passed: 0, compile_fail: 0, match_fail: 0, panicked: 0, timed_out: 0,
+        tested: 0,
+        passed: 0,
+        compile_fail: 0,
+        match_fail: 0,
+        panicked: 0,
+        timed_out: 0,
         failures: Vec::new(),
     };
     let mut regex_vs_resharp = CompareResult {
         file: filename.to_string(),
         engine: "regex-crate-vs-resharp".to_string(),
-        tested: 0, passed: 0, compile_fail: 0, match_fail: 0, panicked: 0, timed_out: 0,
+        tested: 0,
+        passed: 0,
+        compile_fail: 0,
+        match_fail: 0,
+        panicked: 0,
+        timed_out: 0,
         failures: Vec::new(),
     };
 
@@ -212,17 +248,26 @@ fn run_all_engines(filename: &str) {
                     }
                 }
             }
-            Err("compile/runtime") => { regex_vs_oracle.compile_fail += 1; }
-            Err("panic") => { regex_vs_oracle.panicked += 1; }
-            Err("timeout") => { regex_vs_oracle.timed_out += 1; }
+            Err("compile/runtime") => {
+                regex_vs_oracle.compile_fail += 1;
+            }
+            Err("panic") => {
+                regex_vs_oracle.panicked += 1;
+            }
+            Err("timeout") => {
+                regex_vs_oracle.timed_out += 1;
+            }
             _ => {}
         }
         if (i + 1) % 5000 == 0 {
             eprintln!(
                 "  regex [{}/{}] vs-oracle: passed={} fail={} | vs-resharp: passed={} fail={}",
-                i + 1, entries.len(),
-                regex_vs_oracle.passed, regex_vs_oracle.match_fail,
-                regex_vs_resharp.passed, regex_vs_resharp.match_fail,
+                i + 1,
+                entries.len(),
+                regex_vs_oracle.passed,
+                regex_vs_oracle.match_fail,
+                regex_vs_resharp.passed,
+                regex_vs_resharp.match_fail,
             );
         }
     }
@@ -238,9 +283,14 @@ fn run_all_engines(filename: &str) {
         std::fs::write(&out_path, json).unwrap();
         eprintln!(
             "{} {}: tested={} passed={} fail={} compile_fail={} panicked={} timeout={}",
-            filename, suffix,
-            result.tested, result.passed, result.match_fail,
-            result.compile_fail, result.panicked, result.timed_out
+            filename,
+            suffix,
+            result.tested,
+            result.passed,
+            result.match_fail,
+            result.compile_fail,
+            result.panicked,
+            result.timed_out
         );
     }
 }

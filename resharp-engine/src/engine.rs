@@ -209,6 +209,7 @@ pub struct LDFA {
     pub skip_searchers: Vec<MintermSearchValue>,
     pub prefix_skip: Option<crate::accel::RevPrefixSearch>,
     pub max_capacity: usize,
+    pub skip_built: bool,
 }
 
 impl LDFA {
@@ -280,6 +281,7 @@ impl LDFA {
             skip_searchers: Vec::new(),
             prefix_skip: None,
             max_capacity,
+            skip_built: false,
         })
     }
 
@@ -694,7 +696,7 @@ impl LDFA {
         } else {
             Nullability::CENTER
         };
-        collect_nulls_fwd(
+        collect_max_fwd(
             &self.effects_id,
             &self.effects,
             curr,
@@ -719,17 +721,9 @@ impl LDFA {
             };
 
             let (state, new_pos, new_max, cache_miss) = if use_skip {
-                scan_fwd_skip(
-                    &tables,
-                    &self.skip_ids,
-                    &self.skip_searchers,
-                    curr,
-                    pos,
-                    end,
-                    max_end,
-                )
+                scan_fwd::<true>(&tables, &self.skip_ids, &self.skip_searchers, curr, pos, end, max_end)
             } else {
-                scan_fwd_noskip(&tables, curr, pos, end, max_end)
+                scan_fwd::<false>(&tables, &[], &[], curr, pos, end, max_end)
             };
 
             max_end = new_max;
@@ -766,7 +760,7 @@ impl LDFA {
             } else {
                 Nullability::CENTER
             };
-            collect_nulls_fwd(
+            collect_max_fwd(
                 &self.effects_id,
                 &self.effects,
                 curr,
@@ -809,7 +803,6 @@ impl LDFA {
         }
 
         let mut skip_until = 0usize;
-        let mut skip_rebuilt = false;
         let mut use_skip = self.can_skip();
         if cfg!(feature = "debug-nulls") {
             eprintln!(
@@ -839,7 +832,7 @@ impl LDFA {
             } else {
                 Nullability::CENTER
             };
-            collect_nulls_fwd(
+            collect_max_fwd(
                 &self.effects_id,
                 &self.effects,
                 DFA_INITIAL as u32,
@@ -872,7 +865,7 @@ impl LDFA {
             } else {
                 Nullability::CENTER
             };
-            collect_nulls_fwd(
+            collect_max_fwd(
                 &self.effects_id,
                 &self.effects,
                 curr,
@@ -893,17 +886,9 @@ impl LDFA {
                     };
 
                     let (state, new_pos, new_max, cache_miss) = if use_skip {
-                        scan_fwd_skip(
-                            &tables,
-                            &self.skip_ids,
-                            &self.skip_searchers,
-                            curr,
-                            pos,
-                            end,
-                            max_end,
-                        )
+                        scan_fwd::<true>(&tables, &self.skip_ids, &self.skip_searchers, curr, pos, end, max_end)
                     } else {
-                        scan_fwd_noskip(&tables, curr, pos, end, max_end)
+                        scan_fwd::<false>(&tables, &[], &[], curr, pos, end, max_end)
                     };
                     max_end = new_max;
 
@@ -923,7 +908,7 @@ impl LDFA {
                     } else {
                         Nullability::CENTER
                     };
-                    collect_nulls_fwd(
+                    collect_max_fwd(
                         &self.effects_id,
                         &self.effects,
                         curr,
@@ -938,8 +923,8 @@ impl LDFA {
                 }
             }
 
-            if !skip_rebuilt && nulls.len() > 64 && self.state_nodes.len() < 256 {
-                skip_rebuilt = true;
+            if !self.skip_built && nulls.len() > 64 && self.state_nodes.len() < 256 {
+                self.skip_built = true;
                 self.build_skip_all(b);
                 use_skip = self.can_skip();
             }
@@ -986,7 +971,7 @@ impl LDFA {
             } else {
                 Nullability::CENTER
             };
-            collect_nulls_fwd(
+            collect_max_fwd(
                 &self.effects_id,
                 &self.effects,
                 DFA_INITIAL as u32,
@@ -995,7 +980,7 @@ impl LDFA {
                 &mut me,
             );
         }
-        collect_nulls_fwd(
+        collect_max_fwd(
             &self.effects_id,
             &self.effects,
             ss as u32,
@@ -1023,7 +1008,7 @@ impl LDFA {
             } else {
                 Nullability::CENTER
             };
-            collect_nulls_fwd(
+            collect_max_fwd(
                 &self.effects_id,
                 &self.effects,
                 rs as u32,
@@ -1129,7 +1114,7 @@ impl LDFA {
                     } else {
                         Nullability::CENTER
                     };
-                    collect_nulls_fwd(
+                    collect_max_fwd(
                         &self.effects_id,
                         &self.effects,
                         ldfa_state,
@@ -1253,7 +1238,7 @@ impl LDFA {
                 } else {
                     Nullability::CENTER
                 };
-                collect_nulls_fwd(
+                collect_max_fwd(
                     &self.effects_id,
                     &self.effects,
                     next_state as u32,
@@ -1289,7 +1274,7 @@ impl LDFA {
                     } else {
                         Nullability::CENTER
                     };
-                    collect_nulls_fwd(
+                    collect_max_fwd(
                         &self.effects_id,
                         &self.effects,
                         DFA_INITIAL as u32,
@@ -1315,7 +1300,7 @@ impl LDFA {
                     } else {
                         Nullability::CENTER
                     };
-                    collect_nulls_fwd(
+                    collect_max_fwd(
                         &self.effects_id,
                         &self.effects,
                         spawn_state as u32,
@@ -1459,7 +1444,7 @@ impl LDFA {
         let mut curr = state;
         let mut max_end: usize = 0;
 
-        collect_nulls_fwd(
+        collect_max_fwd(
             &self.effects_id,
             &self.effects,
             curr,
@@ -1469,7 +1454,7 @@ impl LDFA {
         );
 
         if pos >= end {
-            collect_nulls_fwd(
+            collect_max_fwd(
                 &self.effects_id,
                 &self.effects,
                 curr,
@@ -1490,23 +1475,11 @@ impl LDFA {
                 mt_log: self.mt_log,
             };
 
-            #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
             let (state_out, new_pos, new_max, cache_miss) = if self.can_skip() {
-                scan_fwd_skip(
-                    &tables,
-                    &self.skip_ids,
-                    &self.skip_searchers,
-                    curr,
-                    pos,
-                    end,
-                    max_end,
-                )
+                scan_fwd::<true>(&tables, &self.skip_ids, &self.skip_searchers, curr, pos, end, max_end)
             } else {
-                scan_fwd_noskip(&tables, curr, pos, end, max_end)
+                scan_fwd::<false>(&tables, &[], &[], curr, pos, end, max_end)
             };
-            #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
-            let (state_out, new_pos, new_max, cache_miss) =
-                scan_fwd_noskip(&tables, curr, pos, end, max_end);
             max_end = new_max;
 
             if !cache_miss {
@@ -1528,7 +1501,7 @@ impl LDFA {
             } else {
                 Nullability::CENTER
             };
-            collect_nulls_fwd(
+            collect_max_fwd(
                 &self.effects_id,
                 &self.effects,
                 curr,
@@ -1543,6 +1516,79 @@ impl LDFA {
         }
 
         Ok(if max_end > 0 { max_end } else { NO_MATCH })
+    }
+
+    /// Reverse analog of `scan_fwd_from`: starting from `end` (exclusive), scan
+    /// backwards to `begin` (inclusive) using the bare reverse DFA, and return
+    /// the minimum (leftmost) match-start position, or `NO_MATCH`.
+    pub fn scan_rev_from(
+        &mut self,
+        b: &mut RegexBuilder,
+        end: usize,
+        begin: usize,
+        data: &[u8],
+    ) -> Result<usize, Error> {
+        if end == 0 || end > data.len() || end <= begin {
+            return Ok(NO_MATCH);
+        }
+        let start_pos = end - 1;
+        let mt = self.mt_lookup[data[start_pos] as usize] as u32;
+        let mut curr = self.begin_table[mt as usize] as u32;
+        if curr <= DFA_DEAD as u32 {
+            return Ok(NO_MATCH);
+        }
+        self.create_state(b, curr as u16)?;
+
+        let mut min_start = NO_MATCH;
+        let mask = if start_pos == begin {
+            Nullability::END
+        } else {
+            Nullability::CENTER
+        };
+        collect_max_rev(
+            &self.effects_id,
+            &self.effects,
+            curr,
+            start_pos,
+            mask,
+            &mut min_start,
+        );
+
+        let mut pos = start_pos;
+        while pos > begin {
+            pos -= 1;
+            let mt = self.mt_lookup[data[pos] as usize] as u32;
+            let delta = (curr << self.mt_log | mt) as usize;
+            let next = if delta < self.center_table.len() {
+                self.center_table[delta]
+            } else {
+                DFA_MISSING
+            };
+            if next == DFA_MISSING {
+                curr = self.lazy_transition(b, curr as u16, mt)? as u32;
+                self.create_state(b, curr as u16).ok();
+            } else {
+                curr = next as u32;
+            }
+            if curr <= DFA_DEAD as u32 {
+                break;
+            }
+            let mask = if pos == begin {
+                Nullability::END
+            } else {
+                Nullability::CENTER
+            };
+            collect_max_rev(
+                &self.effects_id,
+                &self.effects,
+                curr,
+                pos,
+                mask,
+                &mut min_start,
+            );
+        }
+
+        Ok(min_start)
     }
 
     pub fn compute_fwd_skip(&mut self, b: &mut RegexBuilder) {
@@ -1621,7 +1667,7 @@ impl LDFA {
     }
 
     pub(crate) fn can_skip(&self) -> bool {
-        !self.skip_searchers.is_empty()
+        self.prefix_skip.is_some() || !self.skip_searchers.is_empty()
     }
 
     pub(crate) fn build_skip_all(&mut self, b: &mut RegexBuilder) {
@@ -1703,9 +1749,14 @@ impl LDFA {
         );
 
         if let Some(preskip) = self.prefix_skip.as_ref() {
-            let prefix_ptr = preskip as *const crate::accel::RevPrefixSearch;
-            return self
-                .collect_rev_prefix::<EARLY_EXIT>(b, prefix_ptr, start_pos, curr, data, nulls);
+            return self.collect_rev_prefix::<EARLY_EXIT>(
+                b,
+                preskip as *const crate::accel::RevPrefixSearch,
+                start_pos,
+                curr,
+                data,
+                nulls,
+            );
         }
 
         if EARLY_EXIT && !nulls.is_empty() {
@@ -1726,11 +1777,11 @@ impl LDFA {
 
             let use_skip = self.can_skip();
             let (state, new_pos, cache_miss) = if use_skip {
-                collect_rev_skip::<EARLY_EXIT, false>(
+                collect_rev::<EARLY_EXIT, true, false>(
                     &tables,
                     &self.skip_ids,
                     &self.skip_searchers,
-                    0 as *const crate::accel::RevPrefixSearch,
+                    std::ptr::null(),
                     curr,
                     pos,
                     data,
@@ -1738,7 +1789,17 @@ impl LDFA {
                     self.pruned as u32,
                 )
             } else {
-                collect_rev_noskip::<EARLY_EXIT>(&tables, curr, pos, nulls)
+                collect_rev::<EARLY_EXIT, false, false>(
+                    &tables,
+                    &[],
+                    &[],
+                    std::ptr::null(),
+                    curr,
+                    pos,
+                    data,
+                    nulls,
+                    0,
+                )
             };
 
             if EARLY_EXIT && !nulls.is_empty() {
@@ -1755,9 +1816,9 @@ impl LDFA {
                 break;
             }
 
-            if cfg!(feature = "debug-nulls") {
-                eprintln!("  [collect_rev] CACHE MISS state={} pos={}", state, new_pos);
-            }
+            // if cfg!(feature = "debug-nulls") {
+            //     eprintln!("  [collect_rev] CACHE MISS state={} pos={}", state, new_pos);
+            // }
 
             let sid = state as u16;
             self.create_state(b, sid)?;
@@ -1816,7 +1877,7 @@ impl LDFA {
 
             let use_skip = self.can_skip();
             let (state, new_pos, cache_miss) = if use_skip {
-                collect_rev_skip::<EARLY_EXIT, true>(
+                collect_rev::<EARLY_EXIT, true, true>(
                     &tables,
                     &self.skip_ids,
                     &self.skip_searchers,
@@ -1828,37 +1889,34 @@ impl LDFA {
                     self.pruned as u32,
                 )
             } else {
-                collect_rev_noskip::<EARLY_EXIT>(&tables, curr, pos, nulls)
+                collect_rev::<EARLY_EXIT, false, false>(
+                    &tables,
+                    &[],
+                    &[],
+                    std::ptr::null(),
+                    curr,
+                    pos,
+                    data,
+                    nulls,
+                    0,
+                )
             };
 
             if EARLY_EXIT && !nulls.is_empty() {
                 return Ok(());
             }
 
-            if !cache_miss {
-                break;
-            }
-
-            let sid = state as u16;
-            self.create_state(b, sid)?;
-
-            let mt = self.mt_lookup[data[new_pos] as usize] as u32;
-            let delta = self.dfa_delta(sid, mt);
-            curr = self.center_table[delta] as u32;
-            pos = new_pos;
-
-            if curr <= DFA_DEAD as u32 {
-                break;
-            }
-
-            let mask = if pos == 0 {
-                Nullability::END
+            if cache_miss {
+                let sid = state as u16;
+                self.create_state(b, sid)?;
+                curr = sid as u32;
+                pos = new_pos + 1;
+                continue;
             } else {
-                Nullability::CENTER
-            };
-            collect_nulls(&self.effects_id, &self.effects, curr, pos, mask, nulls);
-            if EARLY_EXIT && !nulls.is_empty() {
-                return Ok(());
+                // println!("pos: {:?}", new_pos);
+                // panic!("{}", "ssd");
+                // collect_rev_complex(t.effects, prev_eid, 0, Nullability::END, nulls);
+                break;
             }
         }
 
@@ -1882,6 +1940,14 @@ pub(crate) fn has_any_null(
     effects[eid as usize].iter().any(|n| n.mask.has(mask))
 }
 
+// Pre-defined NullsId constants mirrored from resharp_algebra::nulls::NullsId.
+// ALWAYS0=1, CENTER0=2, BEGIN0=3, END0=4.
+// These are guaranteed by NullsBuilder::init() initialization order.
+const EID_ALWAYS0: u32 = 1;
+const EID_CENTER0: u32 = 2;
+const EID_BEGIN0: u32 = 3;
+const EID_END0: u32 = 4;
+
 #[inline(always)]
 fn collect_nulls(
     effects_id: &[u16],
@@ -1893,31 +1959,46 @@ fn collect_nulls(
 ) {
     let eid = effects_id[state as usize] as u32;
     if eid != 0 {
-        if eid == 1 {
-            if mask.has(Nullability::ALWAYS) {
-                if cfg!(feature = "debug-nulls") {
-                    eprintln!(
-                        "  [collect_nulls] state={} pos={} eid=1 push={}",
-                        state, pos, pos
-                    );
+        // Fast paths for the four well-known NullsIds (no heap indirection).
+        match eid {
+            EID_ALWAYS0 => {
+                if mask.has(Nullability::ALWAYS) {
+                    if cfg!(feature = "debug-nulls") {
+                        eprintln!("  [collect_nulls] state={} pos={} eid=1 push={}", state, pos, pos);
+                    }
+                    nulls.push(pos);
                 }
-                nulls.push(pos);
             }
-            return;
-        }
-        for n in &effects[eid as usize] {
-            if n.mask.has(mask) {
-                if cfg!(feature = "debug-nulls") {
-                    eprintln!(
-                        "  [collect_nulls] state={} pos={} eid={} rel={} push={}",
-                        state,
-                        pos,
-                        eid,
-                        n.rel,
-                        pos + n.rel as usize
-                    );
+            EID_CENTER0 => {
+                if mask.has(Nullability::CENTER) {
+                    if cfg!(feature = "debug-nulls") {
+                        eprintln!("  [collect_nulls] state={} pos={} eid=2 push={}", state, pos, pos);
+                    }
+                    nulls.push(pos);
                 }
-                nulls.push(pos + n.rel as usize);
+            }
+            EID_BEGIN0 => {
+                if mask.has(Nullability::BEGIN) {
+                    nulls.push(pos);
+                }
+            }
+            EID_END0 => {
+                if mask.has(Nullability::END) {
+                    nulls.push(pos);
+                }
+            }
+            _ => {
+                for n in &effects[eid as usize] {
+                    if n.mask.has(mask) {
+                        if cfg!(feature = "debug-nulls") {
+                            eprintln!(
+                                "  [collect_nulls] state={} pos={} eid={} rel={} push={}",
+                                state, pos, eid, n.rel, pos + n.rel as usize
+                            );
+                        }
+                        nulls.push(pos + n.rel as usize);
+                    }
+                }
             }
         }
     }
@@ -1999,103 +2080,69 @@ fn flush_dead(
 }
 
 #[inline(always)]
-fn collect_nulls_fwd(
+fn collect_max<const REV: bool>(
     effects_id: &[u16],
     effects: &[Vec<NullState>],
     state: u32,
     pos: usize,
     mask: Nullability,
-    max_end: &mut usize,
+    best: &mut usize,
 ) {
     let eid = effects_id[state as usize] as u32;
     if eid != 0 {
         if eid == 1 {
             if mask.has(Nullability::ALWAYS) {
-                *max_end = (*max_end).max(pos);
+                if REV {
+                    *best = (*best).min(pos);
+                } else {
+                    *best = (*best).max(pos);
+                }
             }
             return;
         }
         for n in &effects[eid as usize] {
             if n.mask.has(mask) {
-                *max_end = (*max_end).max(pos - n.rel as usize);
-            }
-        }
-    }
-}
-
-#[inline(never)]
-fn collect_rev_noskip<const EARLY_EXIT: bool>(
-    t: &ScanTables,
-    mut curr: u32,
-    mut pos: usize,
-    nulls: &mut Vec<usize>,
-) -> (u32, usize, bool) {
-    let center_table = t.center_table;
-    let effects_id = t.effects_id;
-    let data = t.data;
-    let minterms_lookup = t.minterms_lookup;
-    let mt_log = t.mt_log;
-    let mut prev_eid: u32 = 0;
-    while pos != 0 {
-        pos -= 1;
-
-        unsafe {
-            let mt = *minterms_lookup.add(*data.add(pos) as usize) as u32;
-            if prev_eid != 0 {
-                if prev_eid == 1 {
-                    if cfg!(feature = "debug-nulls") {
-                        eprintln!(
-                            "  [rev_noskip] state={} pos={} eid=1 push={}",
-                            curr,
-                            pos,
-                            pos + 1
-                        );
-                    }
-                    nulls.push(pos + 1);
-                    if EARLY_EXIT {
-                        return (curr, pos, false);
-                    }
+                let candidate = if REV {
+                    pos + n.rel as usize
                 } else {
-                    if cfg!(feature = "debug-nulls") {
-                        eprintln!(
-                            "  [rev_noskip] state={} pos={} eid={} push_complex at {}",
-                            curr,
-                            pos,
-                            prev_eid,
-                            pos + 1
-                        );
-                    }
-                    collect_rev_complex(t.effects, prev_eid, pos + 1, Nullability::CENTER, nulls);
-                    if EARLY_EXIT && !nulls.is_empty() {
-                        return (curr, pos, false);
-                    }
+                    pos - n.rel as usize
+                };
+                if REV {
+                    *best = (*best).min(candidate);
+                } else {
+                    *best = (*best).max(candidate);
                 }
             }
-            let delta = (curr << mt_log | mt) as usize;
-            let next = *center_table.add(delta);
-            if next == DFA_MISSING {
-                return (curr, pos, true); // cache miss
-            }
-            if next == DFA_DEAD {
-                return (DFA_DEAD as u32, pos, false); // dead state
-            }
-            curr = next as u32;
-            prev_eid = *effects_id.add(curr as usize) as u32;
         }
     }
+}
 
-    if prev_eid != 0 {
-        if prev_eid == 1 {
-            nulls.push(0);
-        } else {
-            collect_rev_complex(t.effects, prev_eid, 0, Nullability::END, nulls);
-        }
-    }
-    (curr, 0, false)
+#[inline(always)]
+fn collect_max_fwd(
+    effects_id: &[u16],
+    effects: &[Vec<NullState>],
+    state: u32,
+    pos: usize,
+    mask: Nullability,
+    best: &mut usize,
+) {
+    collect_max::<false>(effects_id, effects, state, pos, mask, best);
+}
+
+#[inline(always)]
+fn collect_max_rev(
+    effects_id: &[u16],
+    effects: &[Vec<NullState>],
+    state: u32,
+    pos: usize,
+    mask: Nullability,
+    best: &mut usize,
+) {
+    collect_max::<true>(effects_id, effects, state, pos, mask, best);
 }
 
 #[inline(never)]
-fn collect_rev_skip<const EARLY_EXIT: bool, const INITIAL_SKIP: bool>(
+fn collect_rev<const EARLY_EXIT: bool, const SKIP: bool, const INITIAL_SKIP: bool>(
     t: &ScanTables,
     skip_ids: &[u8],
     skip_searchers: &[MintermSearchValue],
@@ -2112,11 +2159,11 @@ fn collect_rev_skip<const EARLY_EXIT: bool, const INITIAL_SKIP: bool>(
     let minterms_lookup = t.minterms_lookup;
     let mt_log = t.mt_log;
     let mut prev_eid: u32 = 0;
-    while pos != 0 {
-        let sid = skip_ids[curr as usize];
-        if sid != 0 {
-            if INITIAL_SKIP {
-                if curr == pruned_id {
+    'outer: while pos != 0 {
+        if SKIP {
+            let sid = skip_ids[curr as usize];
+            if sid != 0 {
+                if INITIAL_SKIP && curr == pruned_id {
                     // SAFETY: unreachable unless prefix_ptr is non-null
                     match unsafe { &*prefix_ptr }.find_rev(data, pos) {
                         Some(new_pos) => {
@@ -2130,108 +2177,117 @@ fn collect_rev_skip<const EARLY_EXIT: bool, const INITIAL_SKIP: bool>(
                         }
                     }
                 }
-            }
-
-            // flush deferred null before skip
-            if prev_eid != 0 {
-                if prev_eid == 1 {
-                    nulls.push(pos);
-                    if EARLY_EXIT {
-                        return (curr, pos, false);
-                    }
-                } else {
-                    collect_rev_complex(effects, prev_eid, pos, Nullability::CENTER, nulls);
-                    if EARLY_EXIT && !nulls.is_empty() {
-                        return (curr, pos, false);
-                    }
-                }
-                prev_eid = 0;
-            }
-            let searcher = &skip_searchers[sid as usize - 1];
-            let old_pos = pos;
-            match searcher.find_rev(&data[..pos]) {
-                Some(skip_pos) => {
-                    pos = skip_pos + 1;
-                }
-                None => {
-                    pos = 1;
-                }
-            }
-            if cfg!(feature = "debug-nulls") {
-                eprintln!("  [rev_skip] state={} skip {} -> {}", curr, old_pos, pos);
-            }
-            // nullable self-loop: batch-emit for skipped positions
-            unsafe {
-                let eid = *effects_id.add(curr as usize) as u32;
-                if eid != 0 && pos < old_pos {
-                    if EARLY_EXIT {
-                        if eid == 1 {
-                            nulls.push(old_pos - 1);
-                        } else {
-                            collect_rev_complex(
-                                effects,
-                                eid,
-                                old_pos - 1,
-                                Nullability::CENTER,
-                                nulls,
-                            );
-                        }
-                        if !nulls.is_empty() {
+                // flush deferred null before skip
+                if prev_eid != 0 {
+                    if prev_eid == EID_ALWAYS0 || prev_eid == EID_CENTER0 {
+                        nulls.push(pos);
+                        if EARLY_EXIT {
                             return (curr, pos, false);
                         }
-                    } else {
-                        if eid == 1 {
-                            for p in (pos..old_pos).rev() {
-                                nulls.push(p);
+                    } else if prev_eid > EID_END0 {
+                        collect_rev_complex(effects, prev_eid, pos, Nullability::CENTER, nulls);
+                        if EARLY_EXIT && !nulls.is_empty() {
+                            return (curr, pos, false);
+                        }
+                    }
+                    // BEGIN0/END0: never fire at CENTER, skip
+                    prev_eid = 0;
+                }
+                let searcher = &skip_searchers[sid as usize - 1];
+                let old_pos = pos;
+                match searcher.find_rev(&data[..pos]) {
+                    Some(skip_pos) => pos = skip_pos + 1,
+                    None => pos = 1,
+                }
+                if cfg!(feature = "debug-nulls") {
+                    eprintln!("  [rev_skip] state={} skip {} -> {}", curr, old_pos, pos);
+                }
+                // nullable self-loop: batch-emit for skipped positions
+                unsafe {
+                    let eid = *effects_id.add(curr as usize) as u32;
+                    if eid != 0 && pos < old_pos {
+                        if EARLY_EXIT {
+                            if eid == 1 {
+                                nulls.push(old_pos - 1);
+                            } else {
+                                collect_rev_complex(
+                                    effects,
+                                    eid,
+                                    old_pos - 1,
+                                    Nullability::CENTER,
+                                    nulls,
+                                );
+                            }
+                            if !nulls.is_empty() {
+                                return (curr, pos, false);
                             }
                         } else {
-                            for p in (pos..old_pos).rev() {
-                                collect_rev_complex(effects, eid, p, Nullability::CENTER, nulls);
+                            if eid == 1 {
+                                for p in (pos..old_pos).rev() {
+                                    nulls.push(p);
+                                }
+                            } else {
+                                for p in (pos..old_pos).rev() {
+                                    collect_rev_complex(
+                                        effects,
+                                        eid,
+                                        p,
+                                        Nullability::CENTER,
+                                        nulls,
+                                    );
+                                }
                             }
                         }
                     }
                 }
             }
         }
-
         while pos != 0 {
             pos -= 1;
             unsafe {
-                let mt = *minterms_lookup.add(*t.data.add(pos) as usize) as u32;
+                let mt = *minterms_lookup.add(*data.as_ptr().add(pos) as usize) as u32;
                 if prev_eid != 0 {
-                    if prev_eid == 1 {
+                    if prev_eid == EID_ALWAYS0 || prev_eid == EID_CENTER0 {
                         nulls.push(pos + 1);
                         if EARLY_EXIT {
                             return (curr, pos, false);
                         }
-                    } else {
+                    } else if prev_eid > EID_END0 {
+                        if cfg!(feature = "debug-nulls") {
+                            eprintln!(
+                                "  [rev] state={} pos={} eid={} push_complex at {}",
+                                curr, pos, prev_eid, pos + 1
+                            );
+                        }
                         collect_rev_complex(effects, prev_eid, pos + 1, Nullability::CENTER, nulls);
                         if EARLY_EXIT && !nulls.is_empty() {
                             return (curr, pos, false);
                         }
                     }
+                    // BEGIN0/END0: never fire at CENTER, skip
                 }
-                let delta = (curr << mt_log | mt) as usize;
-                let next = *center_table.add(delta);
+                let next = *center_table.add((curr << mt_log | mt) as usize);
                 if next == DFA_MISSING {
-                    return (curr, pos, true); // cache miss
-                }
-                if next == DFA_DEAD {
-                    return (DFA_DEAD as u32, pos, false); // dead state
+                    return (curr, pos, true);
                 }
                 curr = next as u32;
                 prev_eid = *effects_id.add(curr as usize) as u32;
             }
-            if skip_ids[curr as usize] != 0 {
+            if SKIP && skip_ids[curr as usize] != 0 {
                 break;
             }
         }
         if pos == 0 && prev_eid != 0 {
-            if prev_eid == 1 {
+            // At pos=0 (end of input in reverse) the mask is END.
+            // ALWAYS0/END0 fire at END; CENTER0/BEGIN0 do not.
+            if prev_eid == EID_ALWAYS0 || prev_eid == EID_END0 {
                 nulls.push(0);
-            } else {
+            } else if prev_eid > EID_END0 {
                 collect_rev_complex(effects, prev_eid, 0, Nullability::END, nulls);
             }
+        }
+        if !SKIP {
+            break 'outer;
         }
     }
     (curr, 0, false)
@@ -2318,55 +2374,7 @@ fn scan_single_component(
 }
 
 #[inline(never)]
-fn scan_fwd_noskip(
-    t: &ScanTables,
-    mut curr: u32,
-    mut pos: usize,
-    end: usize,
-    mut max_end: usize,
-) -> (u32, usize, usize, bool) {
-    let center_table = t.center_table;
-    let effects_id = t.effects_id;
-    let data = t.data;
-    let minterms_lookup = t.minterms_lookup;
-    let mt_log = t.mt_log;
-    let mut prev_eid: u32 = 0;
-    while pos < end {
-        unsafe {
-            let mt = *minterms_lookup.add(*data.add(pos) as usize) as u32;
-            if prev_eid != 0 {
-                if prev_eid == 1 {
-                    max_end = max_end.max(pos);
-                } else {
-                    max_end =
-                        scan_fwd_complex(t.effects, prev_eid, pos, Nullability::CENTER, max_end);
-                }
-            }
-            let delta = (curr << mt_log | mt) as usize;
-            let next = *center_table.add(delta);
-            if next == DFA_MISSING {
-                return (curr, pos, max_end, true); // cache miss
-            }
-            if next == DFA_DEAD {
-                return (DFA_DEAD as u32, pos, max_end, false); // dead state
-            }
-            curr = next as u32;
-            prev_eid = *effects_id.add(curr as usize) as u32;
-        }
-        pos += 1;
-    }
-    if prev_eid != 0 {
-        if prev_eid == 1 {
-            max_end = max_end.max(pos);
-        } else {
-            max_end = scan_fwd_complex(t.effects, prev_eid, pos, Nullability::END, max_end);
-        }
-    }
-    (curr, pos, max_end, false)
-}
-
-#[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
-fn scan_fwd_skip(
+fn scan_fwd<const SKIP: bool>(
     t: &ScanTables,
     skip_ids: &[u8],
     skip_searchers: &[MintermSearchValue],
@@ -2382,47 +2390,54 @@ fn scan_fwd_skip(
     let minterms_lookup = t.minterms_lookup;
     let mt_log = t.mt_log;
 
-    while pos < end {
-        let sid = skip_ids[curr as usize];
-        if sid != 0 {
-            let searcher = &skip_searchers[sid as usize - 1];
-            let haystack = unsafe { std::slice::from_raw_parts(data.add(pos), end - pos) };
-            match searcher.find_fwd(haystack) {
-                Some(offset) => {
-                    // nullable self-loop: only need max position for max_end
-                    unsafe {
-                        let eid = *effects_id.add(curr as usize) as u32;
-                        if eid != 0 && offset > 0 {
-                            let skip_end_pos = pos + offset;
-                            if eid == 1 {
-                                max_end = max_end.max(skip_end_pos);
-                            } else {
-                                max_end = scan_fwd_complex(
-                                    effects,
-                                    eid,
-                                    skip_end_pos,
-                                    Nullability::CENTER,
-                                    max_end,
-                                );
+    'outer: while pos < end {
+        if SKIP {
+            #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+            {
+                let sid = skip_ids[curr as usize];
+                if sid != 0 {
+                    let searcher = &skip_searchers[sid as usize - 1];
+                    let haystack =
+                        unsafe { std::slice::from_raw_parts(data.add(pos), end - pos) };
+                    match searcher.find_fwd(haystack) {
+                        Some(offset) => {
+                            // nullable self-loop: only need max position for max_end
+                            unsafe {
+                                let eid = *effects_id.add(curr as usize) as u32;
+                                if eid != 0 && offset > 0 {
+                                    let skip_end_pos = pos + offset;
+                                    if eid == 1 {
+                                        max_end = max_end.max(skip_end_pos);
+                                    } else {
+                                        max_end = scan_fwd_complex(
+                                            effects,
+                                            eid,
+                                            skip_end_pos,
+                                            Nullability::CENTER,
+                                            max_end,
+                                        );
+                                    }
+                                }
                             }
+                            pos += offset;
+                        }
+                        None => {
+                            // no non-self-loop byte: entire rest is self-loop
+                            unsafe {
+                                let eid = *effects_id.add(curr as usize) as u32;
+                                if eid != 0 {
+                                    if eid == 1 {
+                                        max_end = max_end.max(end);
+                                    } else {
+                                        max_end = scan_fwd_complex(
+                                            effects, eid, end, Nullability::END, max_end,
+                                        );
+                                    }
+                                }
+                            }
+                            return (curr, end, max_end, false);
                         }
                     }
-                    pos += offset;
-                }
-                None => {
-                    // no non-self-loop byte: entire rest is self-loop
-                    unsafe {
-                        let eid = *effects_id.add(curr as usize) as u32;
-                        if eid != 0 {
-                            if eid == 1 {
-                                max_end = max_end.max(end);
-                            } else {
-                                max_end =
-                                    scan_fwd_complex(effects, eid, end, Nullability::END, max_end);
-                            }
-                        }
-                    }
-                    return (curr, end, max_end, false);
                 }
             }
         }
@@ -2451,7 +2466,7 @@ fn scan_fwd_skip(
                 prev_eid = *effects_id.add(curr as usize) as u32;
             }
             pos += 1;
-            if skip_ids[curr as usize] != 0 {
+            if SKIP && skip_ids[curr as usize] != 0 {
                 // flush deferred prev_eid before returning to skip loop
                 if prev_eid != 0 {
                     let mask = if pos >= end {
@@ -2464,33 +2479,22 @@ fn scan_fwd_skip(
                     } else {
                         max_end = scan_fwd_complex(effects, prev_eid, pos, mask, max_end);
                     }
-                    prev_eid = 0;
                 }
-                break;
+                continue 'outer;
             }
         }
-        if pos >= end && prev_eid != 0 {
+        if prev_eid != 0 {
             if prev_eid == 1 {
                 max_end = max_end.max(pos);
             } else {
                 max_end = scan_fwd_complex(effects, prev_eid, pos, Nullability::END, max_end);
             }
         }
+        if !SKIP {
+            break 'outer;
+        }
     }
     (curr, pos, max_end, false)
-}
-
-#[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
-fn scan_fwd_skip(
-    _t: &ScanTables,
-    _skip_ids: &[u8],
-    _skip_searchers: &[MintermSearchValue],
-    _curr: u32,
-    _pos: usize,
-    _end: usize,
-    _max_end: usize,
-) -> (u32, usize, usize, bool) {
-    unreachable!("scan_fwd_skip requires SIMD")
 }
 
 fn register_state(
@@ -2633,7 +2637,7 @@ impl BDFA {
         b: &mut RegexBuilder,
         pattern_node: NodeId,
     ) -> Result<(), Error> {
-        let sets = calc_potential_start(b, pattern_node, 16, 64)?;
+        let sets = calc_potential_start(b, pattern_node, 16, 64, false)?;
         if cfg!(feature = "debug-nulls") {
             eprintln!(
                 "  [bdfa-prefix-potential] node={:?} sets={}",

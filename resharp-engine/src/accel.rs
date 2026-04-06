@@ -50,6 +50,7 @@ pub enum FwdPrefixSearch {
 }
 
 #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+#[allow(dead_code)]
 impl FwdPrefixSearch {
     pub fn is_literal(&self) -> bool {
         matches!(self, FwdPrefixSearch::Literal(_))
@@ -73,6 +74,14 @@ impl FwdPrefixSearch {
     }
 
     /// bulk collect all fixed-length literal matches. returns true if this is a literal.
+    pub fn variant_name(&self) -> &'static str {
+        match self {
+            FwdPrefixSearch::Literal(_) => "Literal",
+            FwdPrefixSearch::Prefix(_) => "Teddy",
+            FwdPrefixSearch::Range(_) => "Range",
+        }
+    }
+
     pub fn find_all_literal(&self, haystack: &[u8], matches: &mut Vec<crate::Match>) -> bool {
         match self {
             FwdPrefixSearch::Literal(s) => {

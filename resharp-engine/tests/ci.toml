@@ -1,0 +1,208 @@
+description = '''
+case-insensitive matching tests, cross-validated against the regex crate (vs_regex = true)
+or with explicit expected matches.
+'''
+
+[[test]]
+name = "ci_literal"
+pattern = '(?i)abc'
+input = "xAbCx"
+vs_regex = true
+
+[[test]]
+name = "ci_literal_no_match"
+pattern = '(?i)abc'
+input = "xyz"
+vs_regex = true
+
+[[test]]
+name = "ci_alternation"
+pattern = '(?i)(foo|bar)'
+input = "FOO and Bar and bAr"
+vs_regex = true
+
+[[test]]
+name = "ci_class_range"
+pattern = '(?i)[a-f]+'
+input = "xABCDEFx"
+vs_regex = true
+
+[[test]]
+name = "ci_quantifier"
+pattern = '(?i)a+'
+input = "aAaA"
+vs_regex = true
+
+[[test]]
+name = "ci_bounded_repeat"
+pattern = '(?i)ab{2,4}'
+input = "aBBBx"
+vs_regex = true
+
+[[test]]
+name = "ci_dotstar"
+pattern = '(?i)a.*z'
+input = "AbcZ"
+vs_regex = true
+
+[[test]]
+name = "ci_mixed_case_literal"
+pattern = '(?i)HeLLo'
+input = "hello HELLO HeLLo hElLo"
+vs_regex = true
+
+[[test]]
+name = "ci_word_boundary"
+pattern = '(?i)\bhello\b'
+input = "Hello HELLO hello"
+vs_regex = true
+
+[[test]]
+name = "ci_digits_unaffected"
+pattern = '(?i)test123'
+input = "TEST123 test123 TeSt123"
+vs_regex = true
+
+[[test]]
+name = "ci_char_class_explicit"
+pattern = '(?i)[xyz]+'
+input = "XyZxYz"
+vs_regex = true
+
+[[test]]
+name = "ci_negated_class"
+pattern = '(?i)[^a-c]+'
+input = "xABCxDEFx"
+vs_regex = true
+
+[[test]]
+name = "ci_anchored_start"
+pattern = '(?i)^hello'
+input = "Hello world"
+vs_regex = true
+
+[[test]]
+name = "ci_anchored_end"
+pattern = '(?i)world$'
+input = "hello WORLD"
+vs_regex = true
+
+[[test]]
+name = "ci_anchored_full"
+pattern = '(?i)^hello world$'
+input = "HELLO WORLD"
+vs_regex = true
+
+[[test]]
+name = "ci_anchored_no_match"
+pattern = '(?i)^hello$'
+input = "xhellox"
+vs_regex = true
+
+[[test]]
+name = "ci_optional"
+pattern = '(?i)colou?r'
+input = "Color COLOUR color colour"
+vs_regex = true
+
+[[test]]
+name = "ci_plus_quantifier"
+pattern = '(?i)z+'
+input = "zZzZZz"
+vs_regex = true
+
+[[test]]
+name = "ci_star_quantifier"
+pattern = '(?i)ab*c'
+input = "AC ABC ABBC ac abc"
+vs_regex = true
+
+[[test]]
+name = "ci_escape_sequence"
+pattern = '(?i)\d+[a-f]+'
+input = "123ABC 456def 789aF"
+vs_regex = true
+
+[[test]]
+name = "ci_lookahead"
+pattern = '(?i)foo(?=bar)'
+input = "FOOBAR foobar FoObAr foobaz"
+matches = [[0, 3], [7, 10], [14, 17]]
+
+[[test]]
+name = "ci_lookbehind"
+pattern = '(?i)(?<=foo)bar'
+input = "FOOBAR foobar FoObAr bazbar"
+matches = [[3, 6], [10, 13], [17, 20]]
+
+[[test]]
+name = "ci_empty_input"
+pattern = '(?i)abc'
+input = ""
+vs_regex = true
+
+[[test]]
+name = "ci_single_char"
+pattern = '(?i)a'
+input = "AaAa"
+vs_regex = true
+
+[[test]]
+name = "ci_unicode_ascii"
+pattern = '(?i)caf'
+input = "CAF caf Caf"
+vs_regex = true
+
+[[test]]
+name = "ci_pipe_in_group"
+pattern = '(?i)(cat|dog|bird)'
+input = "CAT Dog BIRD cat"
+vs_regex = true
+
+[[test]]
+name = "ci_nested_groups"
+pattern = '(?i)(a(bc)d)'
+input = "ABCD abcd AbCd"
+vs_regex = true
+
+[[test]]
+name = "ci_exact_repeat"
+pattern = '(?i)a{3}'
+input = "aAa AAA aaa"
+vs_regex = true
+
+[[test]]
+name = "ci_range_repeat"
+pattern = '(?i)x{2,4}'
+input = "xX XXx xXxX"
+vs_regex = true
+
+[[test]]
+name = "ci_scoped"
+pattern = '(?i:abc)def'
+input = "ABCdef abcDEF ABCDef abcdef"
+vs_regex = true
+
+[[test]]
+name = "ci_scoped_no_leak"
+pattern = '(?i:abc)def'
+input = "ABCDEF"
+vs_regex = true
+
+[[test]]
+name = "ci_scoped_alternation"
+pattern = '(?i:foo|bar)baz'
+input = "FOObaz BARbaz foobaz FOOBAZ"
+vs_regex = true
+
+[[test]]
+name = "ci_scoped_class"
+pattern = '(?i:[a-f])+g'
+input = "ABCDEFg abcdefg ABCDEfG"
+vs_regex = true
+
+[[test]]
+name = "ci_scoped_nested"
+pattern = '(?i:a(?-i:b)c)'
+input = "AbC ABC abc aBc"
+vs_regex = true

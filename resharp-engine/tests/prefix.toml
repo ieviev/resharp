@@ -1,9 +1,34 @@
 description = "prefix set and potential_start computation tests"
 
 [[test]]
+name = "prefix_twain"
+pattern = "Twain"
+prefix_rev = "n;i;a;w;T"
+potential_rev = "n;i;a;w;T"
+
+[[test]]
+name = "prefix_la1"
+pattern = 'a(?=b)'
+prefix_rev = "b"
+
+[[test]]
+name = "prefix_la"
+pattern = 'bb(?=aa)'
+prefix_fwd = "b;b;a;a"
+
+
+[[test]]
 name = "num"
 pattern = '^\d+$'
 prefix_fwd = "\\n"
+
+[[test]]
+name = "claude_user_frustration"
+pattern = '\b(wtf|wth|ffs|omfg|shit(ty|tiest)?|dumbass|horrible|awful|piss(ed|ing)? off|piece of (shit|crap|junk)|what the (fuck|hell)|fucking? (broken|useless|terrible|awful|horrible)|fuck you|screw (this|you)|so frustrating|this sucks|damn it)\b'
+prefix_rev = ""
+prefix_fwd = ''
+potential_rev = "[e-hklnps-uy];[acefiklnos-u];[ a-cefhikmortuwy]"
+potential_fwd = "[\\x00-/:-@\\[-\\^`\\{-\\x7F\\xC0-\\xC3\\xCB\\xCD-\\xCF\\xD2\\xD4-\\xD9\\xDB-\\xF7];[adfhopstw\\x80-\\xBF];[acdfhimops-uw\\x80-\\xBF];[ ac-fhimopr-uw\\x80-\\xBF]"
 
 
 [[test]]
@@ -18,7 +43,13 @@ pattern = '\d+(?=[aA]\.?[mM]\.?)'
 potential_rev = "[Mm];[\\.Aa];[0-9Aa\\x80-\\x89\\xA0-\\xA9\\xB0-\\xB9]"
 prefix_rev = "[Mm]"
 
-
+[[test]]
+name = "apache"
+pattern = '(?m)^(?:\S+) \S+ \S+ \[(?:[^\]]+)\] "(?:\S+) (?:\S+) [^"]*" (?:\d{3}) (?:\d+|-)'
+prefix_rev = ""
+prefix_fwd = '\n'
+potential_rev = "[\\-0-9\\x80-\\x89\\xA0-\\xA9\\xB0-\\xB9];[ 0-9\\x80-\\x89\\xA0-\\xA9\\xB0-\\xB9\\xD9\\xDB\\xDF];[ 0-9\\x80-\\x89\\xA0-\\xA9\\xB0-\\xB9\\xD9\\xDB\\xDF];[ 0-9\\x80-\\x89\\xA0-\\xA9\\xB0-\\xB9\\xD9\\xDB\\xDF];[ 0-9\\x80-\\x89\\xA0-\\xA9\\xB0-\\xB9\\xD9\\xDB\\xDF];[ 0-9\\x80-\\x89\\xA0-\\xA9\\xB0-\\xB9\\xD9\\xDB\\xDF];[ \"0-9\\x80-\\x89\\xA0-\\xA9\\xB0-\\xB9\\xD9\\xDB\\xDF];[\\x00-\\xBF\\xD9\\xDB\\xDF];[\\x00-\\xBF\\xC2-\\xDF];[\\x00-\\xEF];[\\x00-\\xF4];[\\x00-\\xF7];[\\x00-\\xF7];[\\x00-\\xF7];[\\x00-\\xF7]"
+potential_fwd = "_;_;_;_;_;_;_;_;_;_;_;_;_"
 
 [[test]]
 name = "simple_lb"
@@ -38,33 +69,24 @@ prefix_fwd = ""
 prefix_rev = ""
 potential_rev = "[a-c];[4-6]"
 
-
-[[test]]
-name = "prefix_world_dollar"
-pattern = 'world$'
-ignore = true
-prefix_rev = "TODO"
-potential_rev = "TODO"
-
-[[test]]
-name = "prefix_twain"
-pattern = "Twain"
-prefix_rev = "n;i;a;w;T"
-
-[[test]]
-name = "prefix_la1"
-pattern = 'a(?=b)'
-prefix_rev = "b"
-
-[[test]]
-name = "prefix_la"
-pattern = 'bb(?=aa)'
-prefix_fwd = "b;b;a;a"
-
 [[test]]
 name = "prefix_intersection"
 pattern = "_*A_*&_*B"
 prefix_rev = "B"
+
+[[test]]
+name = "huck_complement"
+pattern = '.*Huck.*&~(.*F.*)'
+prefix_rev = ""
+prefix_fwd = ""
+potential_rev = "[Fk];.;.;."
+potential_fwd = ".;.;.;."
+
+[[test]]
+name = "huck_complement_kind"
+pattern = '.*Huck.*&~(.*F.*)'
+ignore = true
+kind = "UnanchoredFwd"
 
 [[test]]
 name = "prefix_huck"
@@ -132,10 +154,6 @@ name = "potential_start_rev_char_class_plus"
 pattern = '[0-9]+'
 potential_rev = "[0-9]"
 
-# Bug: normalize_lb inlines \A·~(_*\w) from the Unicode \b lookbehind into
-# Concat(\A, Concat(~(_*\w), body)). BFS hits d[\A] at CENTER = BOT → returns "".
-# After fixing nonbegins to strip \A paths, potential_fwd should see the non-word
-# boundary byte followed by the literal chars.
 [[test]]
 name = "wb_fwd_prefix_alternation"
 pattern = '\b(4a|5b|6c)'
@@ -145,3 +163,19 @@ potential_fwd = "[\\x00-/:-@\\[-\\^`\\{-\\x7F\\xC0-\\xC3\\xCB\\xCD-\\xCF\\xD2\\x
 name = "wb_fwd_prefix_simple"
 pattern = '\b4a'
 potential_fwd = "[\\x00-/:-@\\[-\\^`\\{-\\x7F\\xC0-\\xC3\\xCB\\xCD-\\xCF\\xD2\\xD4-\\xD9\\xDB-\\xF7];[4\\x80-\\xBF];[4a\\x80-\\xBF]"
+
+[[test]]
+name = "prefix_bounded_repeat"
+pattern = "ab{2,4}c"
+prefix_rev = "c;b;b"
+
+[[test]]
+name = "prefix_dotdot_g"
+pattern = "..g"
+prefix_rev = "g;.;."
+
+[[test]]
+name = "word_boundary_the"
+pattern = '\bthe\b'
+prefix_rev = ""
+potential_rev = "e;h;t"

@@ -65,6 +65,24 @@ input = "bBb"
 matches = [[0, 3], [3, 3]]
 
 [[test]]
+name = "ci_alternation_flag_prefix_left"
+pattern = "(?i)min|max"
+input = "MIN"
+matches = [[0, 3]]
+
+[[test]]
+name = "ci_alternation_flag_prefix_right"
+pattern = "(?i)min|max"
+input = "MAX"
+matches = [[0, 3]]
+
+[[test]]
+name = "ci_alternation_flag_prefix_both"
+pattern = "(?i)min|max"
+input = "MIN MAX"
+matches = [[0, 3], [4, 7]]
+
+[[test]]
 name = "ci_intersection"
 pattern = "(?i)(.*cat.*&.*dog.*)"
 input = "my CAT and DOG"

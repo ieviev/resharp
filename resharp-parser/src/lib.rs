@@ -1085,9 +1085,18 @@ impl<'s> ResharpParser<'s> {
                     Ok(result)
                 }
             },
-            hir::HirKind::Look(_) => todo!(),
-            hir::HirKind::Repetition(_) => todo!(),
-            hir::HirKind::Capture(_) => todo!(),
+            hir::HirKind::Look(_) => Err(self.error(
+                Span::splat(self.pos()),
+                ast::ErrorKind::UnsupportedResharpRegex,
+            )),
+            hir::HirKind::Repetition(_) => Err(self.error(
+                Span::splat(self.pos()),
+                ast::ErrorKind::UnsupportedResharpRegex,
+            )),
+            hir::HirKind::Capture(_) => Err(self.error(
+                Span::splat(self.pos()),
+                ast::ErrorKind::UnsupportedResharpRegex,
+            )),
             hir::HirKind::Concat(body) => {
                 let mut result = NodeId::EPS;
                 for child in body {
@@ -1096,7 +1105,10 @@ impl<'s> ResharpParser<'s> {
                 }
                 Ok(result)
             }
-            hir::HirKind::Alternation(_) => todo!(),
+            hir::HirKind::Alternation(_) => Err(self.error(
+                Span::splat(self.pos()),
+                ast::ErrorKind::UnsupportedResharpRegex,
+            )),
         }
     }
 
@@ -1149,7 +1161,11 @@ impl<'s> ResharpParser<'s> {
                             } else {
                                 self.unicode_classes.ensure_word(tb);
                             }
-                            if negated { self.unicode_classes.non_word } else { self.unicode_classes.word }
+                            if negated {
+                                self.unicode_classes.non_word
+                            } else {
+                                self.unicode_classes.word
+                            }
                         }
                         regex_syntax::ast::ClassPerlKind::Digit => {
                             if self.global_full_unicode {
@@ -1157,7 +1173,11 @@ impl<'s> ResharpParser<'s> {
                             } else {
                                 self.unicode_classes.ensure_digit(tb);
                             }
-                            if negated { self.unicode_classes.non_digit } else { self.unicode_classes.digit }
+                            if negated {
+                                self.unicode_classes.non_digit
+                            } else {
+                                self.unicode_classes.digit
+                            }
                         }
                         regex_syntax::ast::ClassPerlKind::Space => {
                             self.unicode_classes.ensure_space(tb);
@@ -1243,7 +1263,10 @@ impl<'s> ResharpParser<'s> {
             }
             Ast::Alternation(alt) if !alt.asts.is_empty() => {
                 let first = Self::word_char_kind(&alt.asts[0], left);
-                if alt.asts[1..].iter().all(|a| Self::word_char_kind(a, left) == first) {
+                if alt.asts[1..]
+                    .iter()
+                    .all(|a| Self::word_char_kind(a, left) == first)
+                {
                     first
                 } else {
                     Unknown
@@ -1401,7 +1424,7 @@ impl<'s> ResharpParser<'s> {
             }
             // TODO: (Unknown, Unknown) is possible via make_full_word_boundary but
             // the full expansion (lb(\w)·la(\W) | lb(\W)·la(\w)) is too expensive
-            // reimplement once the builder is more optimized
+            // reimplement once/if the builder is more optimized
             _ => Err(self.error(self.span(), ast::ErrorKind::UnsupportedResharpRegex)),
         }
     }
@@ -1487,12 +1510,24 @@ impl<'s> ResharpParser<'s> {
                     let union = tb.mk_union(left, right);
                     Ok(tb.mk_lookahead(union, NodeId::MISSING, 0))
                 }
-                ast::AssertionKind::WordBoundaryStart => todo!(),
-                ast::AssertionKind::WordBoundaryEnd => todo!(),
-                ast::AssertionKind::WordBoundaryStartAngle => todo!(),
-                ast::AssertionKind::WordBoundaryEndAngle => Ok(tb.mk_string(">")),
-                ast::AssertionKind::WordBoundaryStartHalf => todo!(),
-                ast::AssertionKind::WordBoundaryEndHalf => todo!(),
+                ast::AssertionKind::WordBoundaryStart => {
+                    Err(self.error(a.span, ast::ErrorKind::UnsupportedResharpRegex))
+                }
+                ast::AssertionKind::WordBoundaryEnd => {
+                    Err(self.error(a.span, ast::ErrorKind::UnsupportedResharpRegex))
+                }
+                ast::AssertionKind::WordBoundaryStartAngle => {
+                    Err(self.error(a.span, ast::ErrorKind::UnsupportedResharpRegex))
+                }
+                ast::AssertionKind::WordBoundaryEndAngle => {
+                    Err(self.error(a.span, ast::ErrorKind::UnsupportedResharpRegex))
+                }
+                ast::AssertionKind::WordBoundaryStartHalf => {
+                    Err(self.error(a.span, ast::ErrorKind::UnsupportedResharpRegex))
+                }
+                ast::AssertionKind::WordBoundaryEndHalf => {
+                    Err(self.error(a.span, ast::ErrorKind::UnsupportedResharpRegex))
+                }
             },
             Ast::ClassUnicode(c) => {
                 let tmp = regex_syntax::ast::ClassUnicode {
@@ -1544,7 +1579,9 @@ impl<'s> ResharpParser<'s> {
                     let orig_ast = regex_syntax::ast::Ast::class_bracketed(tmp);
                     self.translator_to_node_id(&orig_ast, translator, tb)
                 }
-                regex_syntax::ast::ClassSet::BinaryOp(_) => todo!(),
+                regex_syntax::ast::ClassSet::BinaryOp(_) => {
+                    Err(self.error(c.span, ast::ErrorKind::UnsupportedResharpRegex))
+                }
             },
             Ast::Repetition(r) => {
                 let body = self.ast_to_node_id(&r.ast, translator, tb);
@@ -1631,6 +1668,7 @@ impl<'s> ResharpParser<'s> {
                                 self.dot_all.set(state);
                             }
                             concat_translator = Some(translator_builder.build());
+                            *translator = concat_translator.clone();
                             i += 1;
                             continue;
                         }

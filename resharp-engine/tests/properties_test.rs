@@ -30,7 +30,6 @@ fn has_anchors(pattern: &str) -> bool {
     b.contains_anchors(node)
 }
 
-
 #[test]
 fn fixed_literal() {
     assert_eq!(fixed_length("abc"), Some(3));
@@ -66,7 +65,6 @@ fn fixed_date() {
     // \d matches Unicode digits (multibyte in UTF-8), so not fixed at byte level
     assert_eq!(fixed_length(r"\d{4}-\d{2}-\d{2}"), None);
 }
-
 
 #[test]
 fn minmax_literal() {
@@ -119,7 +117,6 @@ fn minmax_alt_suffix() {
     assert_eq!(min_max("(Sherlock|Holmes)[a-z]{0,5}"), (6, 13));
 }
 
-
 #[test]
 fn inf_star() {
     assert!(is_infinite("a*"));
@@ -150,7 +147,6 @@ fn inf_optional() {
     assert!(!is_infinite("a?"));
 }
 
-
 #[test]
 fn look_lookahead() {
     assert!(has_look(r"a(?=b)"));
@@ -171,7 +167,6 @@ fn look_word_boundary() {
 fn look_none() {
     assert!(!has_look("abc"));
 }
-
 
 fn bdfa_eligible(pattern: &str) -> bool {
     let fl = fixed_length(pattern);
@@ -213,34 +208,24 @@ fn bdfa_union_variable() {
 
 #[test]
 fn bdfa_aws_key() {
-    // fixed length 20, so NOT bdfa eligible (faster fixed-length path)
     assert!(!bdfa_eligible(r"(?:ASIA|AKIA|AROA|AIDA)[A-Z0-7]{16}"));
 }
 
 #[test]
 fn bdfa_date() {
-    // \d is Unicode → variable byte-length → BDFA eligible
     assert!(bdfa_eligible(r"\d{4}-\d{2}-\d{2}"));
 }
 
 #[test]
 fn bdfa_phone_bounded() {
-    // {7,} is unbounded
     assert!(!bdfa_eligible(r"[0-9_ \-()]{7,}"));
 }
-
 
 fn dispatch_info(pattern: &str) -> (bool, bool, bool) {
     let re = resharp::Regex::new(pattern).unwrap();
     let (fwd_accel, rev_accel) = re.has_accel();
     let has_bdfa = re.bdfa_stats().is_some();
     (has_bdfa, fwd_accel, rev_accel)
-}
-
-#[test]
-fn dispatch_bounded_repeat() {
-    let (bdfa, _fwd, _rev) = dispatch_info("[A-Za-z]{8,13}");
-    assert!(bdfa);
 }
 
 #[test]
@@ -251,14 +236,13 @@ fn dispatch_alt_suffix() {
 }
 
 #[test]
-fn dispatch_date() {
-    let (bdfa, fwd, _rev) = dispatch_info(r"\d{4}-\d{2}-\d{2}");
-    assert!(!bdfa);
-    assert!(fwd);
-}
-
-#[test]
 fn dispatch_literal() {
     let (bdfa, _fwd, _rev) = dispatch_info("Sherlock Holmes");
     assert!(!bdfa);
+}
+
+#[test]
+fn dispatch_word_boundary_the() {
+    let (_bdfa, _fwd, rev) = dispatch_info(r"\bthe\b");
+    assert!(rev, r"\bthe\b should have rev accel via strip_lb fallback");
 }

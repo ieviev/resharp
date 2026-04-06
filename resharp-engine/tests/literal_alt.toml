@@ -1,0 +1,99 @@
+description = '''
+literal alternation, prefix, and dotstar tests, cross-validated against the regex crate.
+'''
+
+[[test]]
+name = "literal_alt_with_suffix_digits"
+pattern = '(cat|dog)\d+'
+input = "cat123 dog45 cat bird99"
+vs_regex = true
+
+[[test]]
+name = "literal_alt_with_suffix_no_match"
+pattern = '(cat|dog)\d+'
+input = "cat! dog? catdog"
+vs_regex = true
+
+[[test]]
+name = "literal_alt_with_suffix_at_end"
+pattern = '(foo|bar)\d{1,3}'
+input = "foo99"
+vs_regex = true
+
+[[test]]
+name = "literal_alt_with_suffix_zero_width"
+pattern = '(cat|dog)[a-z]{0,3}'
+input = "cat dog123 catfish dogs"
+vs_regex = true
+
+[[test]]
+name = "literal_alt_factored_with_suffix"
+pattern = '(bar|baz)\d+'
+input = "bar99 baz1 ba! bar"
+vs_regex = true
+
+[[test]]
+name = "literal_alt_single"
+pattern = 'hello|world'
+input = "hello world"
+vs_regex = true
+
+[[test]]
+name = "literal_alt_at_boundaries"
+pattern = 'cat|dog'
+input = "catdog"
+vs_regex = true
+
+[[test]]
+name = "literal_alt_repeated_input"
+pattern = 'Sherlock|Holmes|Watson'
+input = "Sherlock Holmes and Watson met Sherlock"
+vs_regex = true
+
+[[test]]
+name = "literal_prefix_with_suffix_dfa"
+pattern = 'hello\w+'
+input = "helloworld hello123 hello"
+vs_regex = true
+
+[[test]]
+name = "literal_prefix_suffix_at_end"
+pattern = 'http\w*'
+input = "http https httpd"
+vs_regex = true
+
+[[test]]
+name = "dotstar_inner_literal_key_value"
+pattern = '.*=.*'
+input = "key=value"
+vs_regex = true
+
+[[test]]
+name = "dotstar_inner_literal_no_equals"
+pattern = '.*=.*'
+input = "no equals here"
+vs_regex = true
+
+[[test]]
+name = "dotstar_inner_literal_multi_pairs"
+pattern = '.*=.*'
+input = "a=b c=d e=f"
+vs_regex = true
+
+[[test]]
+name = "dotstar_inner_literal_multiline"
+pattern = '.*=.*'
+input = "first line\nsecond=line\nthird"
+vs_regex = true
+
+[[test]]
+name = "dotstar_inner_literal_all_equals"
+pattern = '.*=.*'
+input = "==="
+vs_regex = true
+
+[[test]]
+name = "dotstar_inner_literal_multiline2"
+pattern = '.*=.*'
+input = "x=y\na=b\n"
+vs_regex = true

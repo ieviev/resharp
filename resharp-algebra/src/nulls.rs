@@ -197,9 +197,7 @@ impl NullsBuilder {
             }
         }
 
-        let result = result
-            .into_iter().cloned()
-            .collect::<BTreeSet<_>>();
+        let result = result.into_iter().cloned().collect::<BTreeSet<_>>();
 
         let new_id = self.get_id(result);
         self.created.insert(key, new_id);

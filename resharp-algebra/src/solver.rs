@@ -247,20 +247,22 @@ impl Solver {
                 return Self::pp_byte(*s);
             } else {
                 return ranges
-                        .iter()
-                        .map(|(s, e)| display_range(*s, *e))
-                        .collect::<Vec<_>>()
-                        .join("").to_string();
+                    .iter()
+                    .map(|(s, e)| display_range(*s, *e))
+                    .collect::<Vec<_>>()
+                    .join("")
+                    .to_string();
             }
         }
         if ranges.len() > 20 {
             return "\u{03c6}".to_owned();
         }
         ranges
-                .iter()
-                .map(|(s, e)| display_range(*s, *e))
-                .collect::<Vec<_>>()
-                .join("").to_string()
+            .iter()
+            .map(|(s, e)| display_range(*s, *e))
+            .collect::<Vec<_>>()
+            .join("")
+            .to_string()
     }
 
     pub fn pp_first(&self, tset: &TSet) -> char {
