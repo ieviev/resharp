@@ -3,6 +3,11 @@ lookahead, lookbehind, combined lookaround, and negative lookaround tests.
 matches = [[start, end]] in utf8 bytes (half-open intervals).
 '''
 
+[[test]]
+name = "lookbehind_a_wb_b"
+pattern = '(?<=a.*)\bb'
+input = "a  b"
+matches = [[3, 4]]
 
 [[test]]
 name = "lookahead_greedy"
@@ -269,13 +274,6 @@ input = "aab"
 matches = [[2, 3]]
 
 [[test]]
-name = "lookbehind_a_wb_b"
-pattern = '(?<=a.*)\bb'
-input = "a  b"
-matches = [[3, 4]]
-
-
-[[test]]
 name = "lookbehind_lookahead_dot_c"
 pattern = "(?<=a.*).(?=.*c)"
 input = "abc"
@@ -411,8 +409,7 @@ matches = [[0, 2]]
 name = "lookbehind_dot_a"
 pattern = ".(?<=a)"
 input = "aaa"
-expect_error = true
-reason = "unsupported: lookbehind as match filter"
+matches = [[0, 1], [1, 2], [2, 3]]
 
 
 [[test]]

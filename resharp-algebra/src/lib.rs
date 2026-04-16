@@ -1095,7 +1095,7 @@ impl RegexBuilder {
         None
     }
 
-    pub(crate) fn transition_term(&mut self, der: TRegexId, set: TSetId) -> NodeId {
+    pub fn transition_term(&mut self, der: TRegexId, set: TSetId) -> NodeId {
         let mut term = self.get_tregex(der);
         loop {
             match *term {
@@ -1835,7 +1835,14 @@ impl RegexBuilder {
         if self.get_kind(node_id) == Kind::Concat
             && self.get_kind(node_id.left(self)) == Kind::Lookbehind
         {
-            return self.strip_lb_inner(node_id.right(self));
+            let lb = node_id.left(self);
+            let prev = self.get_lookbehind_prev(lb);
+            let tail = self.strip_lb_inner(node_id.right(self))?;
+            if prev != NodeId::MISSING {
+                let stripped_prev = self.strip_lb_inner(prev)?;
+                return Ok(self.mk_concat(stripped_prev, tail));
+            }
+            return Ok(tail);
         }
         if self.get_kind(node_id) == Kind::Inter {
             let left = self.strip_lb_inner(node_id.left(self))?;
@@ -1848,7 +1855,14 @@ impl RegexBuilder {
             return Ok(self.mk_union(left, right));
         }
         match self.get_kind(node_id) {
-            Kind::Lookbehind => Err(AlgebraError::UnsupportedPattern),
+            Kind::Lookbehind => {
+                let prev = self.get_lookbehind_prev(node_id);
+                if prev != NodeId::MISSING {
+                    self.strip_lb_inner(prev)
+                } else {
+                    Ok(NodeId::EPS)
+                }
+            }
             Kind::Lookahead if self.get_lookahead_tail(node_id).is_missing() => {
                 Err(AlgebraError::UnsupportedPattern)
             }
@@ -3170,7 +3184,7 @@ impl RegexBuilder {
     }
 
     #[allow(dead_code)]
-    pub(crate) fn pp_nulls(&self, node_id: NodeId) -> String {
+    pub fn pp_nulls(&self, node_id: NodeId) -> String {
         let nu = self.get_nulls_id(node_id);
         let nr = self.mb.nb.get_set_ref(nu);
         let s1 = format!("{:?}", nr);
@@ -3594,7 +3608,7 @@ impl RegexBuilder {
         f(self, curr);
     }
 
-    pub(crate) fn try_elim_lookarounds(&mut self, node_id: NodeId) -> Option<NodeId> {
+    pub fn try_elim_lookarounds(&mut self, node_id: NodeId) -> Option<NodeId> {
         if !self.contains_look(node_id) {
             return Some(node_id);
         }

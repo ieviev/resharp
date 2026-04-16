@@ -1,5 +1,3 @@
-/// Corpus-driven byte-frequency table generator.
-///
 /// Usage:
 ///   cargo run --bin build_byte_freq -- [corpus_path] [output_path]
 ///
@@ -14,7 +12,8 @@ use std::fs;
 use std::io::{self, Write};
 use std::path::Path;
 
-// using rust compiler source for now
+// substitute for your own if you want to tune resharp for your own dataset
+// this uses the rust compiler repository source code and contents
 const DEFAULT_CORPUS: &str = "/mnt/g/repos/rust";
 
 /// Directory names that are never source code.

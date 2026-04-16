@@ -238,8 +238,7 @@ impl PrefixSets {
         })
     }
 
-    /// Minimum byte-frequency score for `sets` — lower is rarer and more
-    /// profitable for SIMD skip.  Returns `u64::MAX` for an empty sequence.
+    /// Lower is rarer and more profitable for SIMD skip. `u64::MAX` for an empty sequence.
     #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
     pub fn rarity(b: &mut RegexBuilder, sets: &[TSetId]) -> u64 {
         rarest_freq(b, sets)
@@ -652,7 +651,7 @@ pub enum PrefixKind {
     /// The match may start before the candidate - a leftward walk of the fwd DFA
     /// from the initial state extends the match start backwards.
     #[allow(dead_code)]
-    /// TODO: reenable after prefixes are refactored 
+    /// TODO: reenable after prefixes are refactored
     UnanchoredFwd(crate::accel::FwdPrefixSearch),
 
     /// Forward prefix for patterns with a leading lookbehind (e.g. `\b`, `^`).
@@ -662,7 +661,7 @@ pub enum PrefixKind {
     /// the full pattern - including the leading lookbehind - by initialising the
     /// full-pattern fwd DFA (`fwd_lb`) with the preceding byte as context.
     #[allow(dead_code)]
-    /// TODO: reenable after prefixes are refactored 
+    /// TODO: reenable after prefixes are refactored
     AnchoredFwdLb(crate::accel::FwdPrefixSearch),
 
     /// `calc_potential_start` prefix - Teddy-accelerated, may have false positives.
@@ -769,6 +768,7 @@ fn select_prefix_simd(
     if !has_look {
         let (fp, stripped) =
             build_fwd_prefix_from_sets(b, &sets.fwd_potential, &sets.fwd_potential_stripped)?;
+
         if let Some(fp) = fp {
             if !stripped {
                 return Ok((Some(PrefixKind::AnchoredFwd(fp)), None));

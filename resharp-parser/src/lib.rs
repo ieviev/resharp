@@ -49,7 +49,7 @@ impl Default for PatternFlags {
     }
 }
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq, Debug)]
 enum WordCharKind {
     Word,
     NonWord,
@@ -1295,6 +1295,7 @@ impl<'s> ResharpParser<'s> {
         }
     }
 
+    // ok to return None here, it's only an optimization
     fn edge_class_ast(ast: &Ast, left: bool) -> Option<&Ast> {
         match ast {
             Ast::Literal(_)
@@ -1307,8 +1308,19 @@ impl<'s> ResharpParser<'s> {
             Ast::Concat(c) if !c.asts.is_empty() => {
                 Self::edge_class_ast(&c.asts[if left { c.asts.len() - 1 } else { 0 }], left)
             }
-            Ast::Repetition(r) => Self::edge_class_ast(&r.ast, left),
-            Ast::Lookaround(la) => Self::edge_class_ast(&la.ast, left),
+            Ast::Repetition(r) => {
+                let nullable = matches!(
+                    &r.op.kind,
+                    ast::RepetitionKind::ZeroOrMore
+                        | ast::RepetitionKind::ZeroOrOne
+                        | ast::RepetitionKind::Range(ast::RepetitionRange::Bounded(0, _))
+                );
+                if nullable {
+                    None
+                } else {
+                    Self::edge_class_ast(&r.ast, left)
+                }
+            }
             _ => None,
         }
     }
@@ -1334,6 +1346,14 @@ impl<'s> ResharpParser<'s> {
         } else {
             // check if \w_* (starts-with-word) or \W_* (starts-with-non-word) subsumes it.
             let neighbor_node = self.ast_to_node_id(&asts[neighbor_idx], translator, tb)?;
+            let mut neighbor_node = tb
+                .try_elim_lookarounds(neighbor_node)
+                .ok_or_else(|| self.error(self.span(), ast::ErrorKind::UnsupportedResharpRegex))?;
+            if dir < 0 {
+                neighbor_node = tb.reverse(neighbor_node).or_else(|_| {
+                    Err(self.error(self.span(), ast::ErrorKind::UnsupportedResharpRegex))
+                })?;
+            }
             let word_prefix = if dir > 0 {
                 tb.mk_concat(word_id, NodeId::TS)
             } else {
@@ -1405,7 +1425,6 @@ impl<'s> ResharpParser<'s> {
         };
         let left = self.resolve_word_kind(asts, idx, -1, translator, tb, word_id, not_word_id)?;
         let right = self.resolve_word_kind(asts, idx, 1, translator, tb, word_id, not_word_id)?;
-
         match (left, right) {
             (NonWord, Word) | (Word, NonWord) => Ok((NodeId::EPS, idx + 1)),
             (Word, _) => {

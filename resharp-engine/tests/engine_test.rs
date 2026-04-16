@@ -134,7 +134,7 @@ fn boolean() {
 }
 
 #[test]
-fn lookaround() {
+fn normal_lookaround() {
     run_file("lookaround.toml");
 }
 
@@ -1483,3 +1483,82 @@ fn run_file_internal(filename: &str) {
 fn internal() {
     run_file_internal("internal.toml");
 }
+
+#[test]
+fn nullable_pattern_empty_interspersed() {
+    let re = Regex::new(r"\d{0,7}([\.\|\,]\d{0,2})?").unwrap();
+    let input = b"xxxxx0yyyyy";
+    let ms = re.find_all(input).unwrap();
+    let actual: Vec<[usize; 2]> = ms.iter().map(|m| [m.start, m.end]).collect();
+    let expected: &[[usize; 2]] = &[
+        [0, 0],
+        [1, 1],
+        [2, 2],
+        [3, 3],
+        [4, 4],
+        [5, 6],
+        [6, 6],
+        [7, 7],
+        [8, 8],
+        [9, 9],
+        [10, 10],
+        [11, 11],
+    ];
+    assert_eq!(actual, expected);
+}
+
+#[test]
+fn quantifier_a_star_1() {
+    let re = Regex::new(r"a*").unwrap();
+    let input = b"bbbbaaabbbbb";
+    let ms = re.find_all(input).unwrap();
+    let actual: Vec<[usize; 2]> = ms.iter().map(|m| [m.start, m.end]).collect();
+    let expected: &[[usize; 2]] = &[
+        [0, 0],
+        [1, 1],
+        [2, 2],
+        [3, 3],
+        [4, 7],
+        [7, 7],
+        [8, 8],
+        [9, 9],
+        [10, 10],
+        [11, 11],
+        [12, 12],
+    ];
+    assert_eq!(actual, expected);
+}
+
+#[test]
+fn line_anchors_counted_group() {
+    let re = Regex::new(r"^[^0-9]*(?:(\d)[^0-9]*){10}$").unwrap();
+    let input = b"0\n0\n0\n0\n0\n0\n0\n0\n00 0\n0\n0\n0\n0\n0\n0\n0\n00";
+    let ms = re.find_all(input).unwrap();
+    let actual: Vec<[usize; 2]> = ms.iter().map(|m| [m.start, m.end]).collect();
+    assert_eq!(actual, &[[2, 20]]);
+}
+
+#[test]
+fn word_boundary_scientific_notation() {
+    assert!(Regex::new(r"\b-?[1-9](?:\.\d+)?[Ee][-+]?\d+\b").is_err());
+}
+
+#[test]
+fn word_boundary_inference() {
+    let re = Regex::new(r"<.*(?<=<)bg").unwrap();
+    let input = b"<bg";
+    let ms = re.find_all(input).unwrap();
+    let actual: Vec<[usize; 2]> = ms.iter().map(|m| [m.start, m.end]).collect();
+    assert_eq!(actual, &[[0, 3]]);
+}
+
+#[test]
+fn anchors_end() {
+    let re = Regex::new(r"(\A|(.*,))VALUE(\z|([,]?.))").unwrap();
+    let input = b"VALUE";
+    let ms = re.find_all(input).unwrap();
+    let actual: Vec<[usize; 2]> = ms.iter().map(|m| [m.start, m.end]).collect();
+    assert_eq!(actual, &[[0, 5]]);
+}
+
+

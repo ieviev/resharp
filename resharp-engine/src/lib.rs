@@ -64,6 +64,7 @@ const PREFIX_LITERAL: u8 = 2;
 pub use resharp_algebra::nulls::Nullability;
 pub use resharp_algebra::NodeId;
 pub use resharp_algebra::RegexBuilder;
+pub use resharp_algebra::TRegexId;
 /// escape all resharp meta characters in `text`, returning a pattern
 /// that matches the literal string.
 ///
@@ -428,7 +429,8 @@ impl Regex {
             && fixed_length.is_none()
             && !has_look
             && !b.contains_anchors(node)
-            && pattern_len <= 150;
+            && pattern_len <= 150
+            && !empty_nullable;
 
         if cfg!(feature = "debug-nulls") {
             eprintln!(
@@ -1052,6 +1054,22 @@ impl Regex {
             && fwd_prefix.find_all_literal(input, matches)
         {
         } else {
+            // Try position 0 via the begins table, which handles \A anchors
+            // that the SIMD prefix search may skip.
+            {
+                let mt = inner.fwd.mt_lookup[input[0] as usize];
+                let state = inner.fwd.begin_table[mt as usize] as u32;
+                if state != inner.fwd.pruned as u32 {
+                    let max_end = inner.fwd.scan_fwd_from(&mut inner.b, state, 1, input)?;
+                    if max_end != engine::NO_MATCH && max_end > 0 {
+                        matches.push(Match {
+                            start: 0,
+                            end: max_end,
+                        });
+                        search_start = max_end;
+                    }
+                }
+            }
             let prefix_len = fwd_prefix.len();
             while let Some(candidate) = fwd_prefix.find_fwd(input, search_start) {
                 let state = inner
