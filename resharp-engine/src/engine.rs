@@ -749,7 +749,7 @@ impl LDFA {
             }
 
             self.create_state(b, curr as u16)?;
-            if cfg!(feature = "debug-nulls") {
+            if cfg!(feature = "debug") {
                 eprintln!(
                     "  [fwd-miss] sid={} curr={} skip_ids=[{},{}]",
                     sid,
@@ -798,17 +798,16 @@ impl LDFA {
         b: &mut RegexBuilder,
         nulls: &[usize],
         data: &[u8],
-        max_length: Option<u32>,
         matches: &mut Vec<Match>,
     ) -> Result<(), Error> {
-        let data_end = data.len();
-        if data_end == 0 || nulls.is_empty() {
+        if nulls.is_empty() {
             return Ok(());
         }
+        let data_end = data.len();
 
-        let mut skip_until = 0usize;
+        let mut max_end = 0usize;
         let mut use_skip = self.can_skip();
-        if cfg!(feature = "debug-nulls") {
+        if cfg!(feature = "debug") {
             eprintln!(
                 "  [scan_fwd_all] can_skip={} searchers={} nulls={}",
                 use_skip,
@@ -818,19 +817,25 @@ impl LDFA {
         }
 
         for &begin_pos in nulls.iter().rev() {
-            if begin_pos < skip_until || begin_pos >= data_end {
+            if cfg!(feature = "debug") {
+                println!(
+                    "  [scan_fwd_all] begin_pos={}, data_end={}",
+                    begin_pos, data_end
+                );
+            }
+            if begin_pos < max_end {
+                continue;
+            }
+            if begin_pos == data_end {
+                matches.push(Match {
+                    start: begin_pos,
+                    end: begin_pos,
+                });
                 continue;
             }
 
-            let end = match max_length {
-                Some(ml) => (begin_pos + ml as usize).min(data_end),
-                None => data_end,
-            };
-
             let mut pos = begin_pos;
-            let mut max_end: usize = 0;
 
-            // check nullability before consuming any byte (empty match at begin_pos)
             let pre_mask = if pos == 0 {
                 Nullability::BEGIN
             } else {
@@ -845,110 +850,90 @@ impl LDFA {
                 &mut max_end,
             );
 
-            let mt = self.mt_lookup[data[begin_pos] as usize];
-            let mut curr = self.begin_table[mt as usize] as u32;
-            if curr <= DFA_DEAD as u32 {
-                if max_end > 0 {
-                    matches.push(Match {
-                        start: begin_pos,
-                        end: max_end,
-                    });
-                    skip_until = if max_end > begin_pos {
-                        max_end
-                    } else {
-                        begin_pos + 1
-                    };
-                }
-                continue;
+            let mut curr = DFA_INITIAL as u32;
+            if pos == 0 {
+                let mt = self.mt_lookup[data[begin_pos] as usize];
+                curr = self.begin_table[mt as usize] as u32;
+                pos += 1;
             }
 
-            pos = begin_pos + 1;
-
-            let init_mask = if pos >= end {
-                Nullability::END
-            } else {
-                Nullability::CENTER
-            };
             collect_max_fwd(
                 &self.effects_id,
                 &self.effects,
                 curr,
                 pos,
-                init_mask,
+                if pos < data_end {
+                    Nullability::CENTER
+                } else {
+                    Nullability::END
+                },
                 &mut max_end,
             );
 
-            if pos < end {
-                loop {
-                    let tables = ScanTables {
-                        center_table: self.center_table.as_ptr(),
-                        effects_id: self.effects_id.as_ptr(),
-                        effects: self.effects.as_ptr(),
-                        data: data.as_ptr(),
-                        minterms_lookup: self.mt_lookup.as_ptr(),
-                        mt_log: self.mt_log,
-                    };
+            loop {
+                let tables = ScanTables {
+                    center_table: self.center_table.as_ptr(),
+                    effects_id: self.effects_id.as_ptr(),
+                    effects: self.effects.as_ptr(),
+                    data: data.as_ptr(),
+                    minterms_lookup: self.mt_lookup.as_ptr(),
+                    mt_log: self.mt_log,
+                };
 
-                    let (state, new_pos, new_max, cache_miss) = if use_skip {
-                        scan_fwd::<true>(
-                            &tables,
-                            &self.skip_ids,
-                            &self.skip_searchers,
-                            curr,
-                            pos,
-                            end,
-                            max_end,
-                        )
-                    } else {
-                        scan_fwd::<false>(&tables, &[], &[], curr, pos, end, max_end)
-                    };
-                    max_end = new_max;
-
-                    if !cache_miss {
-                        break;
-                    }
-
-                    let mt = self.mt_lookup[data[new_pos] as usize] as u32;
-                    self.try_build_skip(b, state as usize);
-                    curr = self.lazy_transition(b, state as u16, mt)? as u32;
-                    pos = new_pos + 1;
-                    if curr <= DFA_DEAD as u32 {
-                        break;
-                    }
-                    self.try_build_skip(b, curr as usize);
-                    use_skip = self.can_skip();
-
-                    let mask = if pos >= end {
-                        Nullability::END
-                    } else {
-                        Nullability::CENTER
-                    };
-                    collect_max_fwd(
-                        &self.effects_id,
-                        &self.effects,
+                let (state, new_pos, new_max, cache_miss) = if use_skip {
+                    scan_fwd::<true>(
+                        &tables,
+                        &self.skip_ids,
+                        &self.skip_searchers,
                         curr,
                         pos,
-                        mask,
-                        &mut max_end,
-                    );
+                        data_end,
+                        max_end,
+                    )
+                } else {
+                    scan_fwd::<false>(&tables, &[], &[], curr, pos, data_end, max_end)
+                };
+                max_end = new_max;
 
-                    if pos >= end {
-                        break;
-                    }
+                if !cache_miss {
+                    break;
+                }
+
+                let mt = self.mt_lookup[data[new_pos] as usize] as u32;
+                self.try_build_skip(b, state as usize);
+                curr = self.lazy_transition(b, state as u16, mt)? as u32;
+                pos = new_pos + 1;
+                if curr <= DFA_DEAD as u32 {
+                    break;
+                }
+                self.try_build_skip(b, curr as usize);
+                use_skip = self.can_skip();
+
+                let mask = if pos >= data_end {
+                    Nullability::END
+                } else {
+                    Nullability::CENTER
+                };
+                collect_max_fwd(
+                    &self.effects_id,
+                    &self.effects,
+                    curr,
+                    pos,
+                    mask,
+                    &mut max_end,
+                );
+
+                if pos >= data_end {
+                    break;
                 }
             }
-
-            if max_end > 0 {
-                matches.push(Match {
-                    start: begin_pos,
-                    end: max_end,
-                });
-                skip_until = if max_end > begin_pos {
-                    max_end
-                } else {
-                    begin_pos + 1
-                };
-            }
+            matches.push(Match {
+                start: begin_pos,
+                end: max_end,
+            });
+            if max_end == begin_pos {
+                max_end = max_end + 1
+            };
         }
 
         Ok(())
@@ -1052,7 +1037,7 @@ impl LDFA {
         let mut pos = first_pos;
 
         while pos < data_end {
-            if cfg!(feature = "debug-nulls") {
+            if cfg!(feature = "debug") {
                 eprintln!(
                     "  [ordered] pos={} regs={:?} ni={} skip={} nulls={:?}",
                     pos, regs, null_idx, skip_until, nulls
@@ -1229,7 +1214,7 @@ impl LDFA {
 
                 if next_state <= DFA_DEAD {
                     if max_end > 0 {
-                        if cfg!(feature = "debug-nulls") {
+                        if cfg!(feature = "debug") {
                             eprintln!("  [dead-die] ({}, {}) state={}", start, max_end, state);
                         }
                         dead.push((start, max_end));
@@ -1332,7 +1317,7 @@ impl LDFA {
             if !dead.is_empty() {
                 let min_active = regs.iter().map(|r| r.1).min().unwrap_or(usize::MAX);
                 if min_active > skip_until {
-                    if cfg!(feature = "debug-nulls") {
+                    if cfg!(feature = "debug") {
                         eprintln!(
                             "  [dead-flush] pos={} min_active={} skip={} dead={:?} regs={:?}",
                             pos, min_active, skip_until, dead, regs
@@ -1653,7 +1638,7 @@ impl LDFA {
         for &sid in &states {
             self.try_build_skip(b, sid as usize);
         }
-        if cfg!(feature = "debug-nulls") {
+        if cfg!(feature = "debug") {
             eprintln!(
                 "  [fwd-skip] visited={} can_skip={}",
                 states.len(),
@@ -1699,6 +1684,7 @@ impl LDFA {
         Ok(())
     }
 
+    /// whole input rev to pos 0
     fn collect_rev_inner<const EARLY_EXIT: bool>(
         &mut self,
         b: &mut RegexBuilder,
@@ -1706,8 +1692,13 @@ impl LDFA {
         data: &[u8],
         nulls: &mut Vec<usize>,
     ) -> Result<(), Error> {
+        #[cfg(feature = "debug")]
+        {
+            eprintln!("  [rev0]: {}", b.pp(self.state_nodes[DFA_INITIAL as usize]));
+        }
+
         let mut curr = self.begin_table[self.mt_lookup[data[start_pos] as usize] as usize] as u32;
-        #[cfg(feature = "debug-nulls")]
+        #[cfg(feature = "debug")]
         {
             eprintln!("prefix_skip: {}", self.prefix_skip.is_some());
             eprintln!("rev1: {}", b.pp(self.state_nodes[curr as usize]));
@@ -1751,8 +1742,7 @@ impl LDFA {
                 mt_log: self.mt_log,
             };
 
-            let use_skip = self.can_skip();
-            let (state, new_pos, cache_miss) = if use_skip {
+            let (state, new_pos, cache_miss) = if self.can_skip() {
                 collect_rev::<EARLY_EXIT, true, false>(
                     &tables,
                     &self.skip_ids,
@@ -1783,7 +1773,7 @@ impl LDFA {
             }
 
             if !cache_miss {
-                if cfg!(feature = "debug-nulls") {
+                if cfg!(feature = "debug") {
                     eprintln!(
                         "  [collect_rev] no cache miss, state={} pos={}",
                         state, new_pos
@@ -1792,7 +1782,7 @@ impl LDFA {
                 break;
             }
 
-            // if cfg!(feature = "debug-nulls") {
+            // if cfg!(feature = "debug") {
             //     eprintln!("  [collect_rev] CACHE MISS state={} pos={}", state, new_pos);
             // }
 
@@ -1834,7 +1824,7 @@ impl LDFA {
         let mut curr = start_state;
         let mut pos = start_pos;
 
-        if cfg!(feature = "debug-nulls") {
+        if cfg!(feature = "debug") {
             eprintln!("  [rev_prefix] after_collect_nulls nulls={:?}", nulls);
         }
         if EARLY_EXIT && !nulls.is_empty() {
@@ -1939,7 +1929,7 @@ fn collect_nulls(
         match eid {
             EID_ALWAYS0 => {
                 if mask.has(Nullability::ALWAYS) {
-                    if cfg!(feature = "debug-nulls") {
+                    if cfg!(feature = "debug") {
                         eprintln!(
                             "  [collect_nulls] state={} pos={} eid=1 push={}",
                             state, pos, pos
@@ -1950,7 +1940,7 @@ fn collect_nulls(
             }
             EID_CENTER0 => {
                 if mask.has(Nullability::CENTER) {
-                    if cfg!(feature = "debug-nulls") {
+                    if cfg!(feature = "debug") {
                         eprintln!(
                             "  [collect_nulls] state={} pos={} eid=2 push={}",
                             state, pos, pos
@@ -1972,7 +1962,7 @@ fn collect_nulls(
             _ => {
                 for n in &effects[eid as usize] {
                     if n.mask.has(mask) {
-                        if cfg!(feature = "debug-nulls") {
+                        if cfg!(feature = "debug") {
                             eprintln!(
                                 "  [collect_nulls] state={} pos={} eid={} rel={} push={}",
                                 state,
@@ -2185,7 +2175,7 @@ fn collect_rev<const EARLY_EXIT: bool, const SKIP: bool, const INITIAL_SKIP: boo
                     Some(skip_pos) => pos = skip_pos + 1,
                     None => pos = 1,
                 }
-                if cfg!(feature = "debug-nulls") {
+                if cfg!(feature = "debug") {
                     eprintln!("  [rev_skip] state={} skip {} -> {}", curr, old_pos, pos);
                 }
                 // nullable self-loop: batch-emit for skipped positions
@@ -2239,7 +2229,7 @@ fn collect_rev<const EARLY_EXIT: bool, const SKIP: bool, const INITIAL_SKIP: boo
                             return (curr, pos, false);
                         }
                     } else if prev_eid > EID_END0 {
-                        if cfg!(feature = "debug-nulls") {
+                        if cfg!(feature = "debug") {
                             eprintln!(
                                 "  [rev] state={} pos={} eid={} push_complex at {}",
                                 curr,
@@ -2581,7 +2571,7 @@ impl BDFA {
         if prefix_sets.len() > 16 {
             prefix_sets.truncate(16);
         }
-        if cfg!(feature = "debug-nulls") {
+        if cfg!(feature = "debug") {
             let byte_counts: Vec<usize> = prefix_sets
                 .iter()
                 .map(|&s| b.solver_ref().collect_bytes(s).len())
@@ -2632,7 +2622,7 @@ impl BDFA {
         pattern_node: NodeId,
     ) -> Result<(), Error> {
         let sets = calc_potential_start(b, pattern_node, 16, 64, false)?;
-        if cfg!(feature = "debug-nulls") {
+        if cfg!(feature = "debug") {
             eprintln!(
                 "  [bdfa-prefix-potential] node={:?} sets={}",
                 pattern_node,
@@ -2646,7 +2636,7 @@ impl BDFA {
             .iter()
             .map(|&s| b.solver_ref().collect_bytes(s))
             .collect();
-        if cfg!(feature = "debug-nulls") {
+        if cfg!(feature = "debug") {
             for (i, bs) in byte_sets_raw.iter().enumerate() {
                 eprintln!("  [bdfa-prefix-potential] pos={} bytes={}", i, bs.len());
             }
@@ -2728,7 +2718,7 @@ impl BDFA {
             .iter()
             .map(|bytes| crate::accel::TSet::from_bytes(bytes))
             .collect();
-        if cfg!(feature = "debug-nulls") {
+        if cfg!(feature = "debug") {
             eprintln!(
                 "  [bdfa-prefix-range] anchor=pos{} ranges={:?} len={}",
                 anchor_pos,
@@ -2773,7 +2763,7 @@ impl BDFA {
             }
             cur = cur.right(b);
         }
-        if cfg!(feature = "debug-nulls") {
+        if cfg!(feature = "debug") {
             eprintln!(
                 "  [bounded] register state {} node={} step={} best={}",
                 sid,
@@ -2869,7 +2859,7 @@ impl BDFA {
         let new_head = Self::rebuild_chain(b, &candidates);
         let next_sid = self.register(new_head, b);
 
-        if cfg!(feature = "debug-nulls") {
+        if cfg!(feature = "debug") {
             eprintln!(
                 "  [bdfa-slow] state={} mt={} head={} candidates=[{}] new_head={} -> sid={}",
                 state,

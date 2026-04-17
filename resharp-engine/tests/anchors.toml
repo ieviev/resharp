@@ -10,6 +10,19 @@ input = "1"
 matches = [[0, 1]]
 
 [[test]]
+name = "anchor_z_bare"
+pattern = '\z'
+input = "abc"
+matches = [[3, 3]]
+
+[[test]]
+name = "anchor_A_bare"
+pattern = '\A'
+input = "abc"
+matches = [[0, 0]]
+
+
+[[test]]
 name = "string_anchor_A_z_star_no_match"
 pattern = '\A[a-zA-Z]*\z'
 input = "(asdf)asdf"
@@ -499,18 +512,6 @@ pattern = '\b11\b'
 input = "a11b"
 matches = []
 
-
-[[test]]
-name = "anchor_A_bare"
-pattern = '\A'
-input = "abc"
-matches = [[0, 0]]
-
-[[test]]
-name = "anchor_z_bare"
-pattern = '\z'
-input = "abc"
-matches = [[3, 3]]
 
 [[test]]
 name = "anchor_A_with_content"

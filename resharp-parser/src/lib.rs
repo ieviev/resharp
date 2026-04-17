@@ -1432,15 +1432,11 @@ impl<'s> ResharpParser<'s> {
                 Ok((neg, idx + 1))
             }
             (NonWord, _) => {
-                let set = tb.mk_union(NodeId::END, word_id);
-                let tail = tb.mk_concat(set, NodeId::TS);
+                let tail = tb.mk_concat(word_id, NodeId::TS);
                 self.merge_boundary_with_following_lookaheads(asts, idx, tail, translator, tb)
             }
             (_, Word) => Ok((tb.mk_neg_lookbehind(word_id), idx + 1)),
-            (_, NonWord) => {
-                let body = tb.mk_union(NodeId::BEGIN, word_id);
-                Ok((tb.mk_lookbehind(body, NodeId::MISSING), idx + 1))
-            }
+            (_, NonWord) => Ok((tb.mk_lookbehind(word_id, NodeId::MISSING), idx + 1)),
             // TODO: (Unknown, Unknown) is possible via make_full_word_boundary but
             // the full expansion (lb(\w)·la(\W) | lb(\W)·la(\w)) is too expensive
             // reimplement once/if the builder is more optimized
@@ -1481,6 +1477,9 @@ impl<'s> ResharpParser<'s> {
         match ast {
             Ast::Empty(_) => Ok(NodeId::EPS),
             Ast::Flags(f) => {
+                if f.flags.flag_state(ast::Flag::SwapGreed).is_some() {
+                    return Err(self.error(f.span, ast::ErrorKind::UnsupportedResharpRegex));
+                }
                 let mut translator_builder = self.default_translator_builder();
                 if let Some(state) = f.flags.flag_state(ast::Flag::CaseInsensitive) {
                     translator_builder.case_insensitive(state);
@@ -1676,6 +1675,11 @@ impl<'s> ResharpParser<'s> {
                     let ast = &c.asts[i];
                     match ast {
                         Ast::Flags(f) => {
+                            if f.flags.flag_state(ast::Flag::SwapGreed).is_some() {
+                                return Err(
+                                    self.error(f.span, ast::ErrorKind::UnsupportedResharpRegex)
+                                );
+                            }
                             let mut translator_builder = self.default_translator_builder();
                             if let Some(state) = f.flags.flag_state(ast::Flag::CaseInsensitive) {
                                 translator_builder.case_insensitive(state);

@@ -3,6 +3,17 @@ complement, intersection, and boolean combination tests.
 matches = [[start, end]] in utf8 bytes (half-open intervals).
 '''
 
+[[test]]
+name = "intersection_string_anchor_multiline"
+pattern = '(\A#\[command.*\n.*&_*name_*)'
+input = "#[command(name = \"foo\")]\nfn foo() {}\n#[command(name = \"bar\")]\nfn bar() {}"
+matches = [[0, 36]]
+
+[[test]]
+name = "lookbehind_complement"
+pattern = "(?<=__).*&~(.*and.*)"
+input = "__ abc and def"
+matches = [[2, 9], [9, 14], [14, 14]]
 
 [[test]]
 name = "complement_no_double_digits"
@@ -160,12 +171,6 @@ input = "author: abc and def"
 matches = [[6, 19]]
 
 [[test]]
-name = "lookbehind_complement"
-pattern = "(?<=__).*&~(.*and.*)"
-input = "__ abc and def"
-matches = [[2, 9], [9, 14], [14, 14]]
-
-[[test]]
 name = "lookbehind_lookahead_intersection"
 pattern = "(?<=__).*(?=.*def)&.*and.*"
 input = "__abc and def"
@@ -231,8 +236,3 @@ pattern = '(^#\[command.*\n.*&_*name_*)'
 input = "  #[command(name = \"foo\")]\nfn foo() {}"
 matches = []
 
-[[test]]
-name = "intersection_string_anchor_multiline"
-pattern = '(\A#\[command.*\n.*&_*name_*)'
-input = "#[command(name = \"foo\")]\nfn foo() {}\n#[command(name = \"bar\")]\nfn bar() {}"
-matches = [[0, 36]]

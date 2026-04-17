@@ -16,7 +16,7 @@ readme = "../README.md"
 doctest = false
 
 [features]
-debug-nulls = []
+debug = []
 diag = []
 precompile-tests = []
 

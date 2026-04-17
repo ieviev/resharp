@@ -2,13 +2,12 @@ use resharp::{NodeId, RegexBuilder};
 use resharp_algebra::nulls::Nullability;
 use std::path::Path;
 
-struct DerivTestCase {
+struct TestCase {
     name: String,
     pattern: String,
     ignore: bool,
     input: String,
-    rev: Vec<Option<String>>,
-    fwd: Vec<Option<String>>,
+    rev_nulls: Vec<Option<String>>,
 }
 
 fn parse_expected(t: &toml::Value, key: &str) -> Vec<Option<String>> {
@@ -29,16 +28,16 @@ fn parse_expected(t: &toml::Value, key: &str) -> Vec<Option<String>> {
         .unwrap_or_default()
 }
 
-fn load_tests() -> Vec<DerivTestCase> {
+fn load_tests() -> Vec<TestCase> {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests")
-        .join("deriv.toml");
+        .join("rev_nulls.toml");
     let content = std::fs::read_to_string(&path).unwrap();
     let table: toml::Value = content.parse().unwrap();
     let tests = table["test"].as_array().unwrap();
     tests
         .iter()
-        .map(|t| DerivTestCase {
+        .map(|t| TestCase {
             name: t["name"].as_str().unwrap().to_string(),
             pattern: t["pattern"].as_str().unwrap().to_string(),
             ignore: t.get("ignore").and_then(|v| v.as_bool()).unwrap_or(false),
@@ -47,24 +46,22 @@ fn load_tests() -> Vec<DerivTestCase> {
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .to_string(),
-            rev: parse_expected(t, "rev"),
-            fwd: parse_expected(t, "fwd"),
+            rev_nulls: parse_expected(t, "rev_nulls"),
         })
         .collect()
 }
 
-fn walk_bytes(
+fn walk_rev(
     b: &mut RegexBuilder,
     mut node: NodeId,
     bytes: &[u8],
     expected: &[Option<String>],
-    dir: &str,
     name: &str,
 ) {
     assert_eq!(
         bytes.len(),
         expected.len(),
-        "input length must match {dir} expected length for {name}"
+        "input length must match rev_nulls length for {name}"
     );
     let n = bytes.len();
     for (i, byte) in bytes.iter().enumerate() {
@@ -79,15 +76,25 @@ fn walk_bytes(
         let tregex = b.der(node, mask).unwrap();
         let next = b.transition_term(tregex, tset);
         let pp = b.pp(next);
+        let nulls_pp = b.pp_nulls(next);
         eprintln!(
-            "  [{}] step={} byte='{}' (0x{:02x}) node={:?} => {}",
-            dir, i, *byte as char, byte, next, pp
+            "  [rev] step={} byte='{}' (0x{:02x}) node={:?} nulls={} => {}",
+            i,
+            *byte as char,
+            byte,
+            next,
+            nulls_pp,
+            if pp.len() > 40 {
+                format!("{}...", &pp[..40])
+            } else {
+                pp.clone()
+            }
         );
         if let Some(exp) = &expected[i] {
             assert_eq!(
-                pp, *exp,
-                "deriv pp mismatch: name={} dir={} step={} byte='{}'",
-                name, dir, i, *byte as char
+                nulls_pp, *exp,
+                "nulls mismatch: name={} step={} byte='{}'",
+                name, i, *byte as char
             );
         }
         node = next;
@@ -95,31 +102,17 @@ fn walk_bytes(
 }
 
 #[test]
-fn test_deriv_toml() {
+fn test_rev_nulls_toml() {
     for tc in load_tests() {
         if tc.ignore {
             continue;
         }
         let mut b = RegexBuilder::new();
         let node = resharp_parser::parse_ast(&mut b, &tc.pattern).unwrap();
+        let rev = b.reverse(node).unwrap();
 
-        if !tc.rev.is_empty() {
-            let rev = b.reverse(node).unwrap();
-            eprintln!("\n[{}] rev initial: node={:?}", tc.name, rev);
-            let bytes: Vec<u8> = tc.input.as_bytes().iter().rev().copied().collect();
-            walk_bytes(&mut b, rev, &bytes, &tc.rev, "rev", &tc.name);
-        }
-
-        if !tc.fwd.is_empty() {
-            eprintln!(
-                "\n[{}] fwd initial: node={:?} kind={:?} pp={}",
-                tc.name,
-                node,
-                b.get_kind(node),
-                b.pp(node)
-            );
-            let bytes: Vec<u8> = tc.input.as_bytes().to_vec();
-            walk_bytes(&mut b, node, &bytes, &tc.fwd, "fwd", &tc.name);
-        }
+        // let rev_ts = b.mk_concat(NodeId::TS, rev);
+        let bytes: Vec<u8> = tc.input.as_bytes().iter().rev().copied().collect();
+        walk_rev(&mut b, rev, &bytes, &tc.rev_nulls, &tc.name);
     }
 }

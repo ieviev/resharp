@@ -4,6 +4,12 @@ matches = [[start, end]] in utf8 bytes (half-open intervals).
 '''
 
 [[test]]
+name = "lookahead_conditional_digit"
+pattern = '1(?=[012])\d'
+input = "11"
+matches = [[0, 2]]
+
+[[test]]
 name = "lookbehind_a_wb_b"
 pattern = '(?<=a.*)\bb'
 input = "a  b"
@@ -397,13 +403,6 @@ name = "neg_lookbehind_digit_a_space"
 pattern = '(?<!\d)a'
 input = " a"
 matches = [[1, 2]]
-
-
-[[test]]
-name = "lookahead_conditional_digit"
-pattern = '1(?=[012])\d'
-input = "11"
-matches = [[0, 2]]
 
 [[test]]
 name = "lookbehind_dot_a"

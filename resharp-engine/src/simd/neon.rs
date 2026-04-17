@@ -42,8 +42,16 @@ impl RevSearchBytes {
         let ptr = haystack.as_ptr();
         let v0 = vdupq_n_u8(self.bytes[0]);
         let n = self.bytes.len();
-        let v1 = if n >= 2 { vdupq_n_u8(self.bytes[1]) } else { v0 };
-        let v2 = if n >= 3 { vdupq_n_u8(self.bytes[2]) } else { v0 };
+        let v1 = if n >= 2 {
+            vdupq_n_u8(self.bytes[1])
+        } else {
+            v0
+        };
+        let v2 = if n >= 3 {
+            vdupq_n_u8(self.bytes[2])
+        } else {
+            v0
+        };
 
         macro_rules! compute_combined {
             ($chunk:expr) => {{
@@ -141,10 +149,26 @@ impl RevSearchRanges {
         let n = self.ranges.len();
         let lo0 = vdupq_n_u8(self.ranges[0].0);
         let hi0 = vdupq_n_u8(self.ranges[0].1);
-        let lo1 = if n >= 2 { vdupq_n_u8(self.ranges[1].0) } else { lo0 };
-        let hi1 = if n >= 2 { vdupq_n_u8(self.ranges[1].1) } else { hi0 };
-        let lo2 = if n >= 3 { vdupq_n_u8(self.ranges[2].0) } else { lo0 };
-        let hi2 = if n >= 3 { vdupq_n_u8(self.ranges[2].1) } else { hi0 };
+        let lo1 = if n >= 2 {
+            vdupq_n_u8(self.ranges[1].0)
+        } else {
+            lo0
+        };
+        let hi1 = if n >= 2 {
+            vdupq_n_u8(self.ranges[1].1)
+        } else {
+            hi0
+        };
+        let lo2 = if n >= 3 {
+            vdupq_n_u8(self.ranges[2].0)
+        } else {
+            lo0
+        };
+        let hi2 = if n >= 3 {
+            vdupq_n_u8(self.ranges[2].1)
+        } else {
+            hi0
+        };
 
         macro_rules! compute_combined {
             ($chunk:expr) => {{

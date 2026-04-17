@@ -89,8 +89,7 @@ impl RevSearchBytes {
             if pos < len {
                 let mut buf = [0u8; 32];
                 buf[..len - pos].copy_from_slice(&haystack[pos..]);
-                let mut mask =
-                    compute_mask!(_mm256_loadu_si256(buf.as_ptr() as *const __m256i));
+                let mut mask = compute_mask!(_mm256_loadu_si256(buf.as_ptr() as *const __m256i));
                 mask &= (1u32 << (len - pos)) - 1;
                 if mask != 0 {
                     return Some(pos + mask.trailing_zeros() as usize);
@@ -100,8 +99,7 @@ impl RevSearchBytes {
             if len >= 32 {
                 let mut pos = len - 32;
                 loop {
-                    let mask =
-                        compute_mask!(_mm256_loadu_si256(ptr.add(pos) as *const __m256i));
+                    let mask = compute_mask!(_mm256_loadu_si256(ptr.add(pos) as *const __m256i));
                     if mask != 0 {
                         return Some(pos + 31 - mask.leading_zeros() as usize);
                     }
@@ -115,8 +113,7 @@ impl RevSearchBytes {
             if gap > 0 {
                 let mut buf = [0u8; 32];
                 buf[..gap].copy_from_slice(&haystack[..gap]);
-                let mut mask =
-                    compute_mask!(_mm256_loadu_si256(buf.as_ptr() as *const __m256i));
+                let mut mask = compute_mask!(_mm256_loadu_si256(buf.as_ptr() as *const __m256i));
                 mask &= (1u32 << gap) - 1;
                 if mask != 0 {
                     return Some(31 - mask.leading_zeros() as usize);
@@ -1238,8 +1235,7 @@ impl RevSearchRanges {
             if pos < len {
                 let mut buf = [0u8; 32];
                 buf[..len - pos].copy_from_slice(&haystack[pos..]);
-                let mut mask =
-                    compute_mask!(_mm256_loadu_si256(buf.as_ptr() as *const __m256i));
+                let mut mask = compute_mask!(_mm256_loadu_si256(buf.as_ptr() as *const __m256i));
                 mask &= (1u32 << (len - pos)) - 1;
                 if mask != 0 {
                     return Some(pos + mask.trailing_zeros() as usize);
@@ -1249,8 +1245,7 @@ impl RevSearchRanges {
             if len >= 32 {
                 let mut pos = len - 32;
                 loop {
-                    let mask =
-                        compute_mask!(_mm256_loadu_si256(ptr.add(pos) as *const __m256i));
+                    let mask = compute_mask!(_mm256_loadu_si256(ptr.add(pos) as *const __m256i));
                     if mask != 0 {
                         return Some(pos + 31 - mask.leading_zeros() as usize);
                     }
@@ -1264,8 +1259,7 @@ impl RevSearchRanges {
             if gap > 0 {
                 let mut buf = [0u8; 32];
                 buf[..gap].copy_from_slice(&haystack[..gap]);
-                let mut mask =
-                    compute_mask!(_mm256_loadu_si256(buf.as_ptr() as *const __m256i));
+                let mut mask = compute_mask!(_mm256_loadu_si256(buf.as_ptr() as *const __m256i));
                 mask &= (1u32 << gap) - 1;
                 if mask != 0 {
                     return Some(31 - mask.leading_zeros() as usize);

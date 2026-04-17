@@ -244,6 +244,8 @@ pub struct Regex {
     pub(crate) fixed_length: Option<u32>,
     pub(crate) max_length: Option<u32>,
     pub(crate) empty_nullable: bool,
+    pub(crate) always_nullable: bool,
+    pub(crate) initial_nullability: Nullability,
     pub(crate) fwd_end_nullable: bool,
     pub(crate) hardened: bool,
     pub(crate) has_bounded_prefix: bool,
@@ -254,6 +256,7 @@ pub struct Regex {
     /// True when the lb contains \A: a match at position 0 is possible
     /// and must be tried via begin_table before the SIMD scan.
     pub(crate) fwd_lb_begin_nullable: bool,
+    pub(crate) has_anchors: bool,
 }
 
 #[inline(never)]
@@ -352,6 +355,8 @@ impl Regex {
         let empty_nullable = b
             .nullability_emptystring(node)
             .has(Nullability::EMPTYSTRING);
+        let always_nullable = b.nullability(node) == Nullability::ALWAYS;
+        let initial_nullability = b.nullability(node);
 
         let fwd_start = b.strip_lb(node)?;
         let fwd_end_nullable = b.nullability(fwd_start).has(Nullability::END);
@@ -432,7 +437,7 @@ impl Regex {
             && pattern_len <= 150
             && !empty_nullable;
 
-        if cfg!(feature = "debug-nulls") {
+        if cfg!(feature = "debug") {
             eprintln!(
                 "  [bounded-check] max_length={:?} fixed_length={:?} has_look={} anchors={} fwd_prefix={} -> use={}",
                 max_length, fixed_length, has_look, b.contains_anchors(node), selected.is_some(), use_bounded
@@ -450,11 +455,19 @@ impl Regex {
             .as_ref()
             .is_some_and(|bd: &crate::engine::BDFA| bd.prefix.is_some());
 
+        let has_anchors = b.contains_anchors(node);
+
         let hardened = if opts.hardened && !has_bounded && fixed_length.is_none() && max_cap >= 64 {
             fwd.has_nonnullable_cycle(&mut b, 256)
         } else {
             false
         };
+
+        if cfg!(feature = "debug") {
+            eprintln!("  [raw] {}", b.pp(node));
+            eprintln!("  [fwd] {}", b.pp(fwd_start));
+            eprintln!("  [rev] {}", b.pp(ts_rev_start));
+        }
 
         Ok(Regex {
             inner: Mutex::new(RegexInner {
@@ -470,12 +483,15 @@ impl Regex {
             fixed_length,
             max_length,
             empty_nullable,
+            always_nullable,
+            initial_nullability,
             fwd_end_nullable,
             hardened,
             has_bounded_prefix,
             has_bounded,
             lb_check_bytes,
             fwd_lb_begin_nullable,
+            has_anchors,
         })
     }
 
@@ -593,11 +609,6 @@ impl Regex {
     /// assert_eq!((m[0].start, m[0].end), (4, 7));
     /// ```
     pub fn find_all(&self, input: &[u8]) -> Result<Vec<Match>, Error> {
-        #[cfg(all(feature = "debug-nulls", debug_assertions))]
-        {
-            // eprintln!("prefix: '{:?}'", &self.prefix);
-        }
-
         if input.is_empty() {
             return if self.empty_nullable {
                 Ok(vec![Match { start: 0, end: 0 }])
@@ -610,6 +621,13 @@ impl Regex {
                 return self.find_all_fwd_bounded(input);
             }
             return self.find_all_dfa(input);
+        }
+        #[cfg(all(feature = "debug", debug_assertions))]
+        {
+            eprintln!(
+                "[algorithm] pre='{:?}', bound={}, end-null={}",
+                &self.prefix, self.has_bounded, self.fwd_end_nullable
+            );
         }
         if self.has_bounded_prefix {
             return self.find_all_fwd_bounded(input);
@@ -662,6 +680,13 @@ impl Regex {
         inner.nulls.clone()
     }
 
+    #[cfg(feature = "diag")]
+    #[allow(missing_docs)]
+    pub fn scan_fwd_debug(&self, input: &[u8], pos: usize) -> usize {
+        let inner = &mut *self.inner.lock().unwrap();
+        inner.fwd.scan_fwd_slow(&mut inner.b, pos, input).unwrap()
+    }
+
     fn find_all_dfa(&self, input: &[u8]) -> Result<Vec<Match>, Error> {
         if self.fwd_end_nullable {
             self.find_all_dfa_inner::<true>(input)
@@ -672,36 +697,27 @@ impl Regex {
 
     fn find_all_dfa_inner<const FWD_NULL: bool>(&self, input: &[u8]) -> Result<Vec<Match>, Error> {
         let inner = &mut *self.inner.lock().unwrap();
-        #[cfg(feature = "debug-nulls")]
-        {
-            eprintln!("find_all_dfa_inner:");
-            eprintln!(
-                "rev0: {}",
-                inner
-                    .b
-                    .pp(inner.rev.state_nodes[engine::DFA_INITIAL as usize])
-            );
-        }
+        inner.nulls.clear();
+        inner.matches.clear();
 
-        let rev_initial_nullable = inner.rev_ts.effects_id[engine::DFA_INITIAL as usize] != 0;
-        if rev_initial_nullable {
-            inner.matches.clear();
+        // no reason to run reverse pass
+        if self.always_nullable {
             Self::find_all_nullable_slow(&mut inner.fwd, &mut inner.b, input, &mut inner.matches)?;
             return Ok(inner.matches.clone());
         }
 
-        inner.nulls.clear();
-
-        if rev_initial_nullable {
+        if self.initial_nullability.has(Nullability::END) {
             inner.nulls.push(input.len());
         }
         inner
             .rev_ts
             .collect_rev(&mut inner.b, input.len() - 1, input, &mut inner.nulls)?;
 
-        inner.matches.clear();
-        let matches = &mut inner.matches;
-        #[cfg(feature = "debug-nulls")]
+        // if self.initial_nullability.has(Nullability::BEGIN) {
+        //     inner.nulls.push(0);
+        // }
+
+        #[cfg(feature = "debug")]
         {
             eprintln!("nulls_buf={:?}", inner.nulls);
         }
@@ -711,7 +727,7 @@ impl Regex {
             let mut last_end = 0;
             for &start in inner.nulls.iter().rev() {
                 if start >= last_end && start + fl <= input.len() {
-                    matches.push(Match {
+                    inner.matches.push(Match {
                         start,
                         end: start + fl,
                     });
@@ -719,7 +735,7 @@ impl Regex {
                 }
             }
         } else if self.hardened {
-            if cfg!(feature = "debug-nulls") {
+            if cfg!(feature = "debug") {
                 eprintln!("  [dispatch] scan_fwd_ordered");
             }
             inner.fwd.scan_fwd_ordered(
@@ -727,19 +743,16 @@ impl Regex {
                 &inner.nulls,
                 input,
                 self.max_length,
-                matches,
+                &mut inner.matches,
             )?;
         } else {
             inner
                 .fwd
-                .scan_fwd_all(&mut inner.b, &inner.nulls, input, self.max_length, matches)?;
+                .scan_fwd_all(&mut inner.b, &inner.nulls, input, &mut inner.matches)?;
         }
 
-        if FWD_NULL
-            && inner.nulls.first() == Some(&input.len())
-            && matches.last().map_or(true, |m| m.end <= input.len())
-        {
-            matches.push(Match {
+        if self.always_nullable {
+            inner.matches.push(Match {
                 start: input.len(),
                 end: input.len(),
             });
@@ -1051,6 +1064,7 @@ impl Regex {
         let mut search_start = 0;
 
         if self.fixed_length == Some(fwd_prefix.len() as u32)
+            && !self.has_anchors
             && fwd_prefix.find_all_literal(input, matches)
         {
         } else {
@@ -1093,13 +1107,6 @@ impl Regex {
                 }
                 search_start = candidate + 1;
             }
-            #[cfg(feature = "debug-nulls")]
-            eprintln!(
-                "  [debug-nulls] fwd_prefix candidates={} confirmed={} false_positives={}",
-                n_candidates,
-                n_confirmed,
-                n_candidates.saturating_sub(n_confirmed)
-            );
         }
 
         Ok(matches.clone())

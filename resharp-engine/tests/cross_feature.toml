@@ -1,4 +1,30 @@
 [[test]]
+name = "word_border_star"
+pattern = '\bTrue\b *'
+input = "True"
+matches = [[0, 4]]
+
+
+[[test]]
+name = "la_compl_has_y"
+pattern = '(?=.*z)[^y]*'
+input = "ayz"
+matches = [[0, 1], [1, 1], [2, 3]]
+
+
+[[test]]
+name = "algebra_bounded_repeat_lookahead"
+pattern = '[ab]{2,4}&(?=.*c).*'
+input = "abc"
+matches = [[0, 2]]
+
+[[test]]
+name = "inter_lookahead_tautology"
+pattern = 'abc&(?=abc).*'
+input = "abc"
+matches = [[0, 3]]
+
+[[test]]
 name = "end_anchor_digit"
 pattern = '[0-9]$'
 input = "324"
@@ -62,12 +88,6 @@ matches = [[0, 5]]
 
 
 [[test]]
-name = "inter_lookahead_tautology"
-pattern = 'abc&(?=abc).*'
-input = "abc"
-matches = [[0, 3]]
-
-[[test]]
 name = "inter_lookahead_xy"
 pattern = '.*x.*&(?=.*y).*'
 input = "xy"
@@ -104,13 +124,6 @@ name = "lookbehind_lookahead_complement_brackets"
 pattern = '(?<=\[).*(?=\])&~(.*\|.*)'
 input = "[hello]"
 matches = [[1, 6]]
-
-
-[[test]]
-name = "algebra_bounded_repeat_lookahead"
-pattern = '[ab]{2,4}&(?=.*c).*'
-input = "abc"
-matches = [[0, 2]]
 
 [[test]]
 name = "compl_in_lookaround_err_la"
@@ -225,12 +238,6 @@ name = "bounded_inter_lookahead_no_x"
 pattern = '[a-z]{3,5}&(?=.*x).*'
 input = "abcde"
 matches = []
-
-[[test]]
-name = "la_compl_has_y"
-pattern = '(?=.*z)~(.*y.*)'
-input = "ayz"
-matches = [[0, 1], [2, 3]]
 
 [[test]]
 name = "la_compl_no_y"

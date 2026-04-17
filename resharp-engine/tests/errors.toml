@@ -68,3 +68,15 @@ name = "unclosed_class_negated"
 pattern = "[^abc"
 expect_error = true
 reason = "ClassUnclosed - negated"
+
+[[test]]
+name = "swap_greed_flag_inline"
+pattern = '(?U).*'
+expect_error = true
+reason = "SwapGreed flag unsupported"
+
+[[test]]
+name = "swap_greed_flag_group"
+pattern = '(?U:.*?)'
+expect_error = true
+reason = "SwapGreed flag in group unsupported"

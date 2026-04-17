@@ -1,0 +1,6 @@
+
+[[test]]
+name = "digits"
+pattern = '1(?=[012])\d'
+input = "11"
+rev_nulls = ["?", "{{7, 0}}"]

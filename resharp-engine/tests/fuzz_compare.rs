@@ -30,7 +30,11 @@ fn regex_find_multiline(pattern: &str, input: &[u8]) -> Option<Vec<[usize; 2]>> 
         .build()
         .ok()?;
     let input_str = std::str::from_utf8(input).ok()?;
-    Some(re.find_iter(input_str).map(|m| [m.start(), m.end()]).collect())
+    Some(
+        re.find_iter(input_str)
+            .map(|m| [m.start(), m.end()])
+            .collect(),
+    )
 }
 
 fn bounded_run<F, T>(f: F) -> Option<T>
@@ -80,7 +84,9 @@ fn record_regex_crate(filename: &str) {
         let pat = entry.pattern.clone();
         let inp = entry.input.as_bytes().to_vec();
         let matches = bounded_run(move || regex_find_multiline(&pat, &inp));
-        if matches.is_none() { null += 1; }
+        if matches.is_none() {
+            null += 1;
+        }
         results.push(RegexCrateEntry {
             pattern: entry.pattern.clone(),
             input: entry.input.clone(),
@@ -92,7 +98,12 @@ fn record_regex_crate(filename: &str) {
     }
 
     std::fs::write(&out_path, serde_json::to_string(&results).unwrap()).unwrap();
-    eprintln!("wrote {} ({} entries, {} null)", out_path.display(), results.len(), null);
+    eprintln!(
+        "wrote {} ({} entries, {} null)",
+        out_path.display(),
+        results.len(),
+        null
+    );
 }
 
 macro_rules! fuzz_test {

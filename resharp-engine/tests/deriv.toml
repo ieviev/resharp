@@ -1,20 +1,23 @@
 [[test]]
 name = "word_boundary_x_rev"
 pattern = '\bx\b'
-rev_steps = [
-    [
-        "x",
-        "?",
-        "{{4, 0}}",
-    ],
-    [
-        " ",
-        "?",
-        "{{7, 1}}",
-    ],
-    [
-        "x",
-        "?",
-        "{{4, 0}}",
-    ],
-]
+input = "x x"
+rev = ["?", "?", "?"]
+
+[[test]]
+name = "la_compl_has_y_fwd"
+pattern = '(?=.*z)[^y]*'
+input = "ayz"
+fwd = ["?", "?", "?"]
+
+[[test]]
+name = "word_border_star_fwd"
+pattern = '\bTrue\b *'
+input = "True"
+fwd = ["?", "?", "?", "?"]
+
+[[test]]
+name = "la_compl_has_y_from1_fwd"
+pattern = '(?=.*z)[^y]*'
+input = "yz"
+fwd = ["?", "?"]

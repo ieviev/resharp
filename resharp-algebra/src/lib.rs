@@ -415,10 +415,7 @@ impl NodeId {
     fn is_pred(self, b: &RegexBuilder) -> bool {
         b.get_kind(self) == Kind::Pred
     }
-    #[inline]
-    fn is_lookahead(self, b: &RegexBuilder) -> bool {
-        b.get_kind(self) == Kind::Lookahead
-    }
+
     #[inline]
     pub fn pred_tset(self, b: &RegexBuilder) -> TSetId {
         debug_assert!(self.is_pred(b));
@@ -449,6 +446,16 @@ impl NodeId {
     #[inline]
     fn is_concat(self, b: &RegexBuilder) -> bool {
         b.get_kind(self) == Kind::Concat
+    }
+
+    #[inline]
+    fn is_lookahead(self, b: &RegexBuilder) -> bool {
+        b.get_kind(self) == Kind::Lookahead
+    }
+
+    #[inline]
+    fn is_lookbehind(self, b: &RegexBuilder) -> bool {
+        b.get_kind(self) == Kind::Lookbehind
     }
 
     #[inline]
@@ -880,7 +887,7 @@ impl RegexBuilder {
                     if rel != u32::MAX {
                         self.get_nulls(pending_rel + rel, mask, acc, la_inner);
                     }
-                    // tail only contributes when body is satisfied
+                    // tail only contributes when body is sat
                     let la_tail = self.get_lookahead_tail(node_id);
                     if la_tail != NodeId::MISSING {
                         self.get_nulls(pending_rel, mask, acc, la_tail);
@@ -1367,7 +1374,7 @@ impl RegexBuilder {
         }
     }
 
-    fn init_reversed(&mut self, node_id: NodeId, reversed_id: NodeId) {
+    fn cache_reversed(&mut self, node_id: NodeId, reversed_id: NodeId) -> NodeId {
         debug_assert!(reversed_id != NodeId::MISSING);
         match self.reversed.get_mut(node_id.0 as usize) {
             Some(v) => *v = reversed_id,
@@ -1377,6 +1384,7 @@ impl RegexBuilder {
                 self.reversed[node_id.0 as usize] = reversed_id;
             }
         }
+        return reversed_id;
     }
 
     fn init(&mut self, inst: NodeKey) -> NodeId {
@@ -1503,10 +1511,11 @@ impl RegexBuilder {
             }
             Kind::Lookahead => {
                 let mut nulls = self.get_nulls_id(inst.left);
+                // lookahead nulls shifted by rel (distance to body match)
+                nulls = self.mb.nb.add_rel(nulls, inst.extra);
                 let left_nullability = inst.left.nullability(self);
                 let nulls_right = self.get_nulls_id_w_mask(inst.right, left_nullability);
                 nulls = self.mb.nb.or_id(nulls, nulls_right);
-                nulls = self.mb.nb.add_rel(nulls, inst.extra);
 
                 let la_inner = inst.left;
                 let la_tail = inst.right;
@@ -1939,6 +1948,9 @@ impl RegexBuilder {
             && self.get_kind(node_id.left(self)) == Kind::Lookbehind
         {
             let left = node_id.left(self);
+            if !left.left(self).is_missing() {
+                return Ok(node_id);
+            }
             let ll = left.left(self).missing_to_eps();
             let lr = left.right(self).missing_to_eps();
             let new_l = self.mk_concat(ll, lr);
@@ -1956,7 +1968,6 @@ impl RegexBuilder {
             return Ok(self.mk_union(left, right));
         }
         match self.get_kind(node_id) {
-            Kind::Lookbehind => Err(AlgebraError::UnsupportedPattern),
             Kind::Lookahead if self.get_lookahead_tail(node_id).is_missing() => {
                 Err(AlgebraError::UnsupportedPattern)
             }
@@ -2014,16 +2025,15 @@ impl RegexBuilder {
             }
             Kind::Lookahead => {
                 let rel = self.get_lookahead_rel(node_id);
+                // no nullability, we can write as intersection
                 if rel == u32::MAX {
-                    // rel MAX holds no nullability - rewrite to intersection
                     let lbody = self.get_lookahead_inner(node_id);
                     let ltail = self.get_lookahead_tail(node_id).missing_to_eps();
                     let lbody_ts = self.mk_concat(lbody, NodeId::TS);
                     let ltail_ts = self.mk_concat(ltail, NodeId::TS);
                     let as_inter = self.mk_inter(lbody_ts, ltail_ts);
                     let rev = self.reverse(as_inter)?;
-                    self.init_reversed(node_id, rev);
-                    return Ok(rev);
+                    return Ok(self.cache_reversed(node_id, rev));
                 }
                 if rel != 0 {
                     return Err(AlgebraError::UnsupportedPattern);
@@ -2042,7 +2052,7 @@ impl RegexBuilder {
                 return Err(AlgebraError::UnsupportedPattern);
             }
         };
-        self.init_reversed(node_id, rw);
+        self.cache_reversed(node_id, rw);
         Ok(rw)
     }
 
@@ -2115,22 +2125,22 @@ impl RegexBuilder {
             return None;
         }
 
-        if self.get_kind(tail) == Kind::Lookbehind {
+        if tail.is_lookbehind(self) {
             let lbleft = self.mk_concat(head, self.get_lookbehind_prev(tail).missing_to_eps());
             return self
                 .mk_lookbehind_internal(self.get_lookbehind_inner(tail).missing_to_eps(), lbleft)
                 .ok();
         }
-        if self.get_kind(head) == Kind::Lookahead {
+        if head.is_lookahead(self) {
             let la_tail = self.get_lookahead_tail(head);
             let new_la_tail = self.mk_concat(la_tail.missing_to_eps(), tail);
             if new_la_tail.is_center_nullable(self) {
-                let non_null_tail = self.mk_non_nullable_safe(new_la_tail);
-                if non_null_tail == NodeId::BOT {
-                    return None;
-                }
-                let la_body = self.get_lookahead_inner(head);
-                return Some(self.mk_lookahead_internal(la_body, non_null_tail, u32::MAX));
+                let la_new = self.mk_lookahead_internal(
+                    self.get_lookahead_inner(head),
+                    new_la_tail,
+                    u32::MAX,
+                );
+                return Some(la_new);
             }
             let la_body = self.get_lookahead_inner(head);
             let la_rel = self.get_lookahead_rel(head);
@@ -2147,9 +2157,11 @@ impl RegexBuilder {
         if head.is_kind(self, Kind::End) && tail == NodeId::TS {
             return Some(head);
         }
-        if head == NodeId::TS && tail == NodeId::END {
-            return Some(head);
-        }
+
+        // breaks:rev
+        // if head == NodeId::TS && tail == NodeId::END {
+        //     return Some(head);
+        // }
 
         if head == NodeId::TS && self.nullability(tail) == Nullability::ALWAYS {
             return Some(NodeId::TS);
@@ -2662,7 +2674,7 @@ impl RegexBuilder {
         }
 
         match tail {
-            // this is only valid if direction known;
+            // breaks:rev
             NodeId::BEGIN => {
                 if !self.is_nullable(head, Nullability::BEGIN) {
                     return NodeId::BOT;
@@ -2679,10 +2691,6 @@ impl RegexBuilder {
             let newright = self.mk_concat(head.right(self), tail);
             let updated = self.mk_concat(left, newright);
             return self.init_as(key, updated);
-        }
-
-        if head == NodeId::TS && tail == NodeId::END {
-            return NodeId::TS;
         }
 
         if self.get_kind(head) == Kind::End && !self.is_nullable(tail, Nullability::END) {

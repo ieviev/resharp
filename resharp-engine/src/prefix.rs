@@ -246,12 +246,7 @@ impl PrefixSets {
 }
 
 const SKIP_FREQ_THRESHOLD: u32 = 75_000;
-/// Maximum BYTE_FREQ sum for the rarest Teddy position before the false-positive
-/// rate becomes high enough that Teddy hurts overall throughput.
-/// Midpoint of the suggested 20 000–30 000 range from profiling.
 const TEDDY_MAX_FREQ_SUM: u64 = 25_000;
-/// A single byte whose `BYTE_FREQ` value meets or exceeds this is too common
-/// to anchor a SIMD literal search against.  Approximately 38% of `u16::MAX`.
 const RARE_BYTE_FREQ_LIMIT: u16 = 25_000;
 
 pub(crate) fn skip_is_profitable(bytes: &[u8]) -> bool {
@@ -340,7 +335,7 @@ fn try_build_fwd_search_raw(
     byte_sets_raw: &[Vec<u8>],
 ) -> Result<Option<crate::accel::FwdPrefixSearch>, crate::Error> {
     let lit_len = byte_sets_raw.iter().take_while(|bs| bs.len() == 1).count();
-    if cfg!(feature = "debug-nulls") {
+    if cfg!(feature = "debug") {
         eprintln!(
             "  [fwd-prefix] lit_len={} total={} sets={:?}",
             lit_len,
@@ -358,7 +353,7 @@ fn try_build_fwd_search_raw(
     if lit_len >= 3 {
         let needle: Vec<u8> = byte_sets_raw[..lit_len].iter().map(|bs| bs[0]).collect();
         let lit = crate::simd::FwdLiteralSearch::new(&needle);
-        if cfg!(feature = "debug-nulls") {
+        if cfg!(feature = "debug") {
             let freq = crate::simd::BYTE_FREQ[lit.rare_byte() as usize];
             eprintln!(
                 "  [fwd-prefix] literal {:?} rare={} freq={}",
@@ -407,7 +402,7 @@ fn try_build_fwd_search_raw(
 
     let freq_order: Vec<usize> = freqs.iter().map(|&(i, _)| i).collect();
 
-    if cfg!(feature = "debug-nulls") {
+    if cfg!(feature = "debug") {
         for &(i, f) in &freqs {
             eprintln!(
                 "  [fwd-prefix] pos={} bytes={} freq={}",
@@ -540,7 +535,7 @@ fn try_build_fwd_range_prefix(
         .iter()
         .map(|bytes| crate::accel::TSet::from_bytes(bytes))
         .collect();
-    if cfg!(feature = "debug-nulls") {
+    if cfg!(feature = "debug") {
         eprintln!(
             "  [fwd-prefix-range] anchor=pos{} ranges={:?} len={}",
             anchor_pos,

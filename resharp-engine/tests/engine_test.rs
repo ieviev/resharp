@@ -129,7 +129,7 @@ fn normal_anchors() {
 }
 
 #[test]
-fn boolean() {
+fn normal_boolean() {
     run_file("boolean.toml");
 }
 
@@ -1437,6 +1437,7 @@ struct InternalTestCase {
     name: String,
     pattern: String,
     pp: String,
+    ts_rev: Option<String>,
 }
 
 fn load_internal_tests(filename: &str) -> Vec<InternalTestCase> {
@@ -1456,6 +1457,10 @@ fn load_internal_tests(filename: &str) -> Vec<InternalTestCase> {
                 .to_string(),
             pattern: t["pattern"].as_str().unwrap().to_string(),
             pp: t["pp"].as_str().unwrap().to_string(),
+            ts_rev: t
+                .get("ts_rev")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string()),
         })
         .collect()
 }
@@ -1476,12 +1481,34 @@ fn run_file_internal(filename: &str) {
             "file={}, name={:?}, pattern={:?}",
             filename, tc.name, tc.pattern
         );
+        if let Some(expected_ts_rev) = &tc.ts_rev {
+            let rev_start = b.reverse(node).unwrap();
+            let rev_start = b.normalize_rev(rev_start).unwrap();
+            let ts_rev_start = if b.get_kind(rev_start) == resharp_algebra::Kind::Concat
+                && rev_start.left(&b) == resharp_algebra::NodeId::BEGIN
+            {
+                rev_start
+            } else {
+                b.mk_concat(resharp_algebra::NodeId::TS, rev_start)
+            };
+            let got_ts_rev = b.pp(ts_rev_start);
+            assert_eq!(
+                got_ts_rev, *expected_ts_rev,
+                "ts_rev mismatch: file={}, name={:?}, pattern={:?}",
+                filename, tc.name, tc.pattern
+            );
+        }
     }
 }
 
 #[test]
 fn internal() {
     run_file_internal("internal.toml");
+}
+
+#[test]
+fn normalize() {
+    run_file_internal("normalize.toml");
 }
 
 #[test]
@@ -1553,7 +1580,7 @@ fn word_boundary_inference() {
 }
 
 #[test]
-fn anchors_end() {
+fn anchor_union() {
     let re = Regex::new(r"(\A|(.*,))VALUE(\z|([,]?.))").unwrap();
     let input = b"VALUE";
     let ms = re.find_all(input).unwrap();
@@ -1561,4 +1588,85 @@ fn anchors_end() {
     assert_eq!(actual, &[[0, 5]]);
 }
 
+#[test]
+fn unicode_test() {
+    let re = Regex::new(r"alt-1|alt-2|…").unwrap();
+    let input = "…".as_bytes();
+    let ms = re.find_all(input).unwrap();
+    let actual: Vec<[usize; 2]> = ms.iter().map(|m| [m.start, m.end]).collect();
+    assert_eq!(actual, &[[0, 3]]);
+}
 
+#[test]
+fn word_border_star() {
+    let re = Regex::new(r"\bTrue\b *").unwrap();
+    let input = "True".as_bytes();
+    let ms = re.find_all(input).unwrap();
+    let actual: Vec<[usize; 2]> = ms.iter().map(|m| [m.start, m.end]).collect();
+    assert_eq!(actual, &[[0, 4]]);
+}
+
+#[test]
+fn word_border_center() {
+    let re = Regex::new(r"\w*\b\s").unwrap();
+    let input = "So that's his love!".as_bytes();
+    let ms = re.find_all(input).unwrap();
+    let actual: Vec<[usize; 2]> = ms.iter().map(|m| [m.start, m.end]).collect();
+    assert_eq!(actual, &[[0, 3], [8, 10], [10, 14]]);
+}
+
+#[test]
+fn word_border_req_word() {
+    let re = Regex::new(r"!!\b").unwrap();
+    let input = "!!".as_bytes();
+    let ms = re.find_all(input).unwrap();
+    let actual: Vec<[usize; 2]> = ms.iter().map(|m| [m.start, m.end]).collect();
+    assert!(
+        actual.is_empty(),
+        "expected no matches for !!\\b, got {:?}",
+        actual
+    );
+
+    // \b before non-word should not match at start-of-string
+    let re2 = Regex::new(r"\b!!").unwrap();
+    let ms2 = re2.find_all(input).unwrap();
+    let actual2: Vec<[usize; 2]> = ms2.iter().map(|m| [m.start, m.end]).collect();
+    assert!(
+        actual2.is_empty(),
+        "expected no matches for \\b!!, got {:?}",
+        actual2
+    );
+
+    // but \b!! should match at a real word boundary
+    let re3 = Regex::new(r"\b!!").unwrap();
+    let ms3 = re3.find_all("a!!".as_bytes()).unwrap();
+    let actual3: Vec<[usize; 2]> = ms3.iter().map(|m| [m.start, m.end]).collect();
+    assert_eq!(actual3, &[[1, 3]], "\\b!! should match in 'a!!'");
+
+    // and !!\b should match at a real word boundary
+    let ms4 = re.find_all("!!a".as_bytes()).unwrap();
+    let actual4: Vec<[usize; 2]> = ms4.iter().map(|m| [m.start, m.end]).collect();
+    assert_eq!(actual4, &[[0, 2]], "!!\\b should match in '!!a'");
+}
+
+#[test]
+fn z_anchor() {
+    let re = Regex::new(r"\.xs\z").unwrap();
+
+    let input = ".xs .xs".as_bytes();
+
+    let ms = re.find_all(input).unwrap();
+    let actual: Vec<[usize; 2]> = ms.iter().map(|m| [m.start, m.end]).collect();
+    assert_eq!(actual, &[[4, 7]]);
+}
+
+#[test]
+fn a_anchor() {
+    let re = Regex::new(r"\A(\s*)").unwrap();
+
+    let input = "xxxxx\tyyyyy".as_bytes();
+
+    let ms = re.find_all(input).unwrap();
+    let actual: Vec<[usize; 2]> = ms.iter().map(|m| [m.start, m.end]).collect();
+    assert_eq!(actual, &[[0, 0]]);
+}
