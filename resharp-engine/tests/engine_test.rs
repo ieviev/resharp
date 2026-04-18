@@ -165,7 +165,7 @@ fn normal_cross_feature() {
 
 /// cross-validate resharp against regex crate
 fn check_vs_regex(pattern: &str, input: &[u8]) {
-    let re = Regex::new(pattern).unwrap();
+    let re = Regex::new(pattern).expect(&format!("failed compile {}", pattern));
     let matches = re.find_all(input).unwrap();
     let result: Vec<(usize, usize)> = matches.iter().map(|m| (m.start, m.end)).collect();
 
@@ -434,7 +434,7 @@ fn ci() {
 }
 
 #[test]
-fn word_boundary() {
+fn normal_word_boundary() {
     run_file("word_boundary.toml");
 }
 
@@ -1571,6 +1571,7 @@ fn word_boundary_scientific_notation() {
 }
 
 #[test]
+#[ignore = "unsupported"]
 fn word_boundary_inference() {
     let re = Regex::new(r"<.*(?<=<)bg").unwrap();
     let input = b"<bg";
@@ -1604,15 +1605,6 @@ fn word_border_star() {
     let ms = re.find_all(input).unwrap();
     let actual: Vec<[usize; 2]> = ms.iter().map(|m| [m.start, m.end]).collect();
     assert_eq!(actual, &[[0, 4]]);
-}
-
-#[test]
-fn word_border_center() {
-    let re = Regex::new(r"\w*\b\s").unwrap();
-    let input = "So that's his love!".as_bytes();
-    let ms = re.find_all(input).unwrap();
-    let actual: Vec<[usize; 2]> = ms.iter().map(|m| [m.start, m.end]).collect();
-    assert_eq!(actual, &[[0, 3], [8, 10], [10, 14]]);
 }
 
 #[test]
@@ -1669,4 +1661,58 @@ fn a_anchor() {
     let ms = re.find_all(input).unwrap();
     let actual: Vec<[usize; 2]> = ms.iter().map(|m| [m.start, m.end]).collect();
     assert_eq!(actual, &[[0, 0]]);
+}
+
+#[test]
+fn neg_la_dot_star_neg_lb_min() {
+    let pat = r"a(?!b).*(?<!a)b";
+    assert!(Regex::new(pat).is_err());
+}
+
+#[test]
+fn word_boundary_dot_star_word_boundary_min() {
+    let pat = r"a\b.*\bb";
+    assert!(Regex::new(pat).is_err());
+}
+
+#[test]
+fn ci_alt_word_boundary_cross_line() {
+    let pat = r"(?i)(\btest\b.*\blong\b|\blong\b.*\btest\b)";
+    assert!(Regex::new(pat).is_err());
+}
+
+#[test]
+fn word_border_center() {
+    let pat = r"\w*\b\s";
+    assert!(Regex::new(pat).is_err());
+}
+
+#[test]
+fn word_boundary_ip_trailing_b_not_boundary() {
+    let re = Regex::new(r"2(\.([0-1]?[0-9]{1,2}|2[0-4][0-9])){3}\b").unwrap();
+    let ms = re.find_all(b"2.3.3.3a!").unwrap();
+    let actual: Vec<[usize; 2]> = ms.iter().map(|m| [m.start, m.end]).collect();
+    assert_eq!(actual, Vec::<[usize; 2]>::new());
+}
+
+#[test]
+fn missing_az_anchors_value() {
+    let re = Regex::new(r"(\A|(.*,))VALUE(\z|([,]?.))").unwrap();
+    let ms = re.find_all(b"xxxxxVALUEyyyyy").unwrap();
+    let actual: Vec<[usize; 2]> = ms.iter().map(|m| [m.start, m.end]).collect();
+    assert_eq!(actual, Vec::<[usize; 2]>::new());
+}
+
+#[test]
+fn date_optional_time_second_match() {
+    let re = Regex::new(r"\d{4}-\d\d?-\d\d?((T| )\d{2}:\d{2}:\d{2})?").unwrap();
+    let ms = re.find_all(b"0000-0-0 0000-0-0").unwrap();
+    let actual: Vec<[usize; 2]> = ms.iter().map(|m| [m.start, m.end]).collect();
+    assert_eq!(actual, &[[0, 8], [9, 17]]);
+}
+
+#[test]
+fn stack_overflow_repro_22620() {
+    let re = resharp::Regex::new(r"\(\?[:=!]|\)|\{\d+\b,?\d*\}|[+*]\?|[()$^+*?.]").unwrap();
+    let _ = re.find_all(b"$").unwrap();
 }

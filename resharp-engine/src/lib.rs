@@ -292,12 +292,14 @@ fn bdfa_inner<const PREFIX: u8>(
                     return (state, pos, mc);
                 }
                 let end_off = *match_end_off.add(state as usize);
+                let end = pos + 1 - end_off as usize;
                 *match_buf.add(mc) = Match {
                     start: pos + 1 - rel as usize,
-                    end: pos + 1 - end_off as usize,
+                    end,
                 };
                 mc += 1;
                 state = initial;
+                pos = end;
                 continue;
             }
             pos += 1;
@@ -422,12 +424,6 @@ impl Regex {
         } else {
             None
         };
-        if fwd_prefix_stripped {
-            fwd.compute_fwd_skip(&mut b);
-        } else if !opts.hardened && pattern_len <= 150 {
-            fwd.compute_fwd_skip_inner(&mut b, 10);
-        }
-
         let use_bounded = !has_fwd_prefix
             && max_length.is_some()
             && max_len <= 100
@@ -1013,11 +1009,13 @@ impl Regex {
                         return Ok(true);
                     }
                     let end_off = bounded.match_end_off[state as usize];
+                    let end = pos + 1 - end_off as usize;
                     matches.push(Match {
                         start: pos + 1 - rel as usize,
-                        end: pos + 1 - end_off as usize,
+                        end,
                     });
                     state = initial;
+                    pos = end;
                 } else {
                     pos += 1;
                 }

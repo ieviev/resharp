@@ -1,4 +1,17 @@
 [[test]]
+name = "inter_lookahead_no_digit"
+pattern = '[a-z]+&(?=.*[0-9]).*'
+input = "hello"
+matches = []
+
+
+[[test]]
+name = "algebra_bounded_repeat_lookahead"
+pattern = '[ab]{2,4}&(?=.*c).*'
+input = "abc"
+matches = [[0, 2]]
+
+[[test]]
 name = "word_border_star"
 pattern = '\bTrue\b *'
 input = "True"
@@ -11,12 +24,6 @@ pattern = '(?=.*z)[^y]*'
 input = "ayz"
 matches = [[0, 1], [1, 1], [2, 3]]
 
-
-[[test]]
-name = "algebra_bounded_repeat_lookahead"
-pattern = '[ab]{2,4}&(?=.*c).*'
-input = "abc"
-matches = [[0, 2]]
 
 [[test]]
 name = "inter_lookahead_tautology"
@@ -92,12 +99,6 @@ name = "inter_lookahead_xy"
 pattern = '.*x.*&(?=.*y).*'
 input = "xy"
 matches = [[0, 2]]
-
-[[test]]
-name = "inter_lookahead_no_digit"
-pattern = '[a-z]+&(?=.*[0-9]).*'
-input = "hello"
-matches = []
 
 [[test]]
 name = "inter_lookahead_complement"

@@ -224,6 +224,7 @@ impl LDFA {
         node_to_state.insert(NodeId::BOT, DFA_DEAD);
 
         let mut effects_id: Vec<u16> = vec![0u16; 2]; // slots 0,1
+        let mut effects: Vec<Vec<NullState>> = Vec::new();
 
         // state 2
         let initial_sid = state_nodes.len() as u16;
@@ -249,7 +250,14 @@ impl LDFA {
         let mut begin_table = vec![DFA_DEAD; minterms.len()];
         for (idx, mt) in minterms.iter().enumerate() {
             let t = transition_term(b, der0, *mt);
-            let sid = register_state(&mut state_nodes, &mut node_to_state, &mut effects_id, b, t);
+            let sid = register_state(
+                &mut state_nodes,
+                &mut node_to_state,
+                &mut effects_id,
+                &mut effects,
+                b,
+                t,
+            );
             if state_nodes.len() > max_capacity {
                 return Err(Error::CapacityExceeded);
             }
@@ -261,7 +269,9 @@ impl LDFA {
         let center_table_size = state_nodes.len() * stride;
         let center_table = vec![DFA_MISSING; center_table_size];
 
-        let effects = b.nulls_as_vecs();
+        while effects.len() < b.nulls_count() {
+            effects.push(b.nulls_entry_vec(effects.len() as u32));
+        }
         let skip_ids = vec![0u8; state_nodes.len()];
 
         Ok(LDFA {
@@ -314,6 +324,7 @@ impl LDFA {
             &mut self.state_nodes,
             &mut self.node_to_state,
             &mut self.effects_id,
+            &mut self.effects,
             b,
             node,
         )
@@ -344,33 +355,10 @@ impl LDFA {
         if state_id == DFA_DEAD {
             return Ok(DFA_DEAD);
         }
-
-        let node = self.state_nodes[state_id as usize];
-        if node == NodeId::MISSING {
-            return Ok(DFA_DEAD);
-        }
-        let sder = b.der(node, Nullability::CENTER).map_err(Error::Algebra)?;
-        let mt = self.minterms[minterm_idx as usize];
-        let next_node = transition_term(b, sder, mt);
-        if self.state_nodes.len() >= self.max_capacity {
-            return Err(Error::CapacityExceeded);
-        }
-        let next_sid = self.get_or_register(b, next_node);
-        self.ensure_capacity(next_sid);
-        self.sync_effects(b);
-
+        self.ensure_capacity(state_id);
+        self.create_state(b, state_id)?;
         let delta = self.dfa_delta(state_id, minterm_idx);
-        self.center_table[delta] = next_sid;
-
-        Ok(next_sid)
-    }
-
-    fn sync_effects(&mut self, b: &RegexBuilder) {
-        let n = b.nulls_count();
-        while self.effects.len() < n {
-            self.effects
-                .push(b.nulls_entry_vec(self.effects.len() as u32));
-        }
+        Ok(self.center_table[delta])
     }
 
     pub fn precompile(&mut self, b: &mut RegexBuilder, threshold: usize) -> bool {
@@ -384,45 +372,26 @@ impl LDFA {
             }
         }
 
+        let stride = 1usize << self.mt_log;
         while let Some(sid) = worklist.pop_front() {
-            if visited.contains(&sid) {
+            if !visited.insert(sid) {
                 continue;
             }
-            if visited.len() >= threshold {
+            if visited.len() > threshold {
                 return false;
             }
-            visited.insert(sid);
-
-            let node = self.state_nodes[sid as usize];
-            if node == NodeId::MISSING {
-                continue;
-            }
             self.ensure_capacity(sid);
-            let sder = match b.der(node, Nullability::CENTER) {
-                Ok(d) => d,
-                Err(_) => {
-                    return false;
-                }
-            };
-
+            if self.create_state(b, sid).is_err() {
+                return false;
+            }
+            let base = (sid as usize) * stride;
             for mt_idx in 0..self.minterms.len() {
-                let mt = self.minterms[mt_idx];
-                let next_node = transition_term(b, sder, mt);
-                let next_sid = self.get_or_register(b, next_node);
-                if self.state_nodes.len() > self.max_capacity {
-                    return false;
-                }
-                self.ensure_capacity(next_sid);
-                let delta = self.dfa_delta(sid, mt_idx as u32);
-                self.center_table[delta] = next_sid;
-                if !visited.contains(&next_sid) {
+                let next_sid = self.center_table[base + mt_idx];
+                if next_sid > DFA_DEAD && !visited.contains(&next_sid) {
                     worklist.push_back(next_sid);
                 }
             }
         }
-
-        self.sync_effects(b);
-        self.build_skip_info(b, &visited);
 
         true
     }
@@ -535,28 +504,16 @@ impl LDFA {
             }
             let mt = self.minterms[mt_idx];
             let next_node = transition_term(b, sder, mt);
+            if self.state_nodes.len() >= self.max_capacity {
+                return Err(Error::CapacityExceeded);
+            }
             let next_sid = self.get_or_register(b, next_node);
             self.ensure_capacity(next_sid);
             let delta = self.dfa_delta(state_id, mt_idx as u32);
             self.center_table[delta] = next_sid;
         }
-        self.sync_effects(b);
         self.try_build_skip(b, state_id as usize);
         Ok(())
-    }
-
-    fn build_skip_info(&mut self, b: &mut RegexBuilder, visited: &HashSet<u16>) {
-        // non-nullable first to seed can_skip(), then retry nullable
-        for &sid in visited {
-            let s = sid as usize;
-            let is_nullable = s < self.effects_id.len() && self.effects_id[s] != 0;
-            if !is_nullable {
-                self.try_build_skip(b, s);
-            }
-        }
-        for &sid in visited {
-            self.try_build_skip(b, sid as usize);
-        }
     }
 
     fn try_build_skip(&mut self, _b: &mut RegexBuilder, _state: usize) {
@@ -574,10 +531,6 @@ impl LDFA {
         }
         let node = self.state_nodes[state];
         if node == NodeId::MISSING || node == NodeId::BOT {
-            return;
-        }
-        let is_nullable = state < self.effects_id.len() && self.effects_id[state] != 0;
-        if is_nullable && !self.can_skip() {
             return;
         }
         let sder = match b.der(node, Nullability::CENTER) {
@@ -900,13 +853,11 @@ impl LDFA {
                 }
 
                 let mt = self.mt_lookup[data[new_pos] as usize] as u32;
-                self.try_build_skip(b, state as usize);
                 curr = self.lazy_transition(b, state as u16, mt)? as u32;
                 pos = new_pos + 1;
                 if curr <= DFA_DEAD as u32 {
                     break;
                 }
-                self.try_build_skip(b, curr as usize);
                 use_skip = self.can_skip();
 
                 let mask = if pos >= data_end {
@@ -1407,12 +1358,16 @@ impl LDFA {
         len: usize,
         data: &[u8],
     ) -> Result<u32, Error> {
-        let mt = self.mt_lookup[data[pos] as usize];
-        let mut state = self.begin_table[mt as usize];
+        let (mut state, start_i) = if pos == 0 {
+            let mt = self.mt_lookup[data[pos] as usize];
+            (self.begin_table[mt as usize], 1usize)
+        } else {
+            (self.pruned, 0usize)
+        };
         if state <= DFA_DEAD {
             return Ok(0);
         }
-        for i in 1..len {
+        for i in start_i..len {
             let mt = self.mt_lookup[data[pos + i] as usize] as u32;
             state = self.lazy_transition(b, state, mt)?;
             if state <= DFA_DEAD {
@@ -1592,61 +1547,6 @@ impl LDFA {
         Ok(min_start)
     }
 
-    pub fn compute_fwd_skip(&mut self, b: &mut RegexBuilder) {
-        self.compute_fwd_skip_inner(b, 64);
-    }
-
-    pub(crate) fn compute_fwd_skip_inner(&mut self, b: &mut RegexBuilder, limit: usize) {
-        if !crate::simd::has_simd() || self.max_capacity < 64 {
-            return;
-        }
-        use std::collections::VecDeque;
-        let mut worklist: VecDeque<u16> = VecDeque::new();
-        let mut visited = HashSet::new();
-        let ini = self.pruned;
-        if ini > DFA_DEAD {
-            worklist.push_back(ini);
-        }
-        // also seed from begin_table entries
-        for &s in &self.begin_table {
-            if s > DFA_DEAD && !visited.contains(&s) {
-                worklist.push_back(s);
-            }
-        }
-        while let Some(sid) = worklist.pop_front() {
-            if !visited.insert(sid) || visited.len() > limit {
-                continue;
-            }
-            if self.create_state(b, sid).is_err() {
-                break;
-            }
-            let num_mt = self.minterms.len();
-            for mt_idx in 0..num_mt {
-                let delta = self.dfa_delta(sid, mt_idx as u32);
-                if delta < self.center_table.len() {
-                    let next = self.center_table[delta];
-                    if next > DFA_DEAD && !visited.contains(&next) {
-                        worklist.push_back(next);
-                    }
-                }
-            }
-        }
-        self.sync_effects(b);
-        // create_state already built skip for non-nullable states;
-        // retry nullable states now that can_skip() may be seeded
-        let states: Vec<u16> = visited.iter().copied().collect();
-        for &sid in &states {
-            self.try_build_skip(b, sid as usize);
-        }
-        if cfg!(feature = "debug") {
-            eprintln!(
-                "  [fwd-skip] visited={} can_skip={}",
-                states.len(),
-                self.can_skip()
-            );
-        }
-    }
-
     pub(crate) fn can_skip(&self) -> bool {
         self.prefix_skip.is_some() || !self.skip_searchers.is_empty()
     }
@@ -1782,10 +1682,6 @@ impl LDFA {
                 break;
             }
 
-            // if cfg!(feature = "debug") {
-            //     eprintln!("  [collect_rev] CACHE MISS state={} pos={}", state, new_pos);
-            // }
-
             let sid = state as u16;
             self.create_state(b, sid)?;
 
@@ -1803,6 +1699,15 @@ impl LDFA {
             } else {
                 Nullability::CENTER
             };
+            if cfg!(feature = "debug") {
+                if self.effects_id[curr as usize] > 0 {
+                    eprintln!(
+                        "  [effect] pos={} eid=1 push={}",
+                        pos,
+                        b.pp(self.state_nodes[curr as usize])
+                    );
+                }
+            }
             collect_nulls(&self.effects_id, &self.effects, curr, pos, mask, nulls);
             if EARLY_EXIT && !nulls.is_empty() {
                 return Ok(());
@@ -2483,6 +2388,7 @@ fn register_state(
     state_nodes: &mut Vec<NodeId>,
     node_to_state: &mut HashMap<NodeId, u16>,
     effects_id: &mut Vec<u16>,
+    effects: &mut Vec<Vec<NullState>>,
     b: &RegexBuilder,
     node: NodeId,
 ) -> u16 {
@@ -2497,6 +2403,9 @@ fn register_state(
         effects_id.resize(sid as usize + 1, 0u16);
     }
     effects_id[sid as usize] = eff_id.0 as u16;
+    while effects.len() <= eff_id.0 as usize {
+        effects.push(b.nulls_entry_vec(effects.len() as u32));
+    }
     sid
 }
 

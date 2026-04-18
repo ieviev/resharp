@@ -2,11 +2,15 @@ description = '''
 expected internal representation
 '''
 
+
 [[test]]
-pattern = '1(?=[012])\d'
-pp = "1(?=[0-2]_*){∅}『([0-9]|\\xD9[\\xA0-\\xA9]|\\xDB[\\xB0-\\xB9]|\\xDF[\\x80-\\x89])』"
-ts_rev = "_*(_*[0-2]&_*([0-9]|[\\xA0-\\xA9]\\xD9|[\\xB0-\\xB9]\\xDB|[\\x80-\\x89]\\xDF))1"
+pattern = 'a(?!b).*(?<!a)b'
+pp = '❮a(?=~(b_*)\z){∅}❮.*❯❯(?<=(\A|[^a]))b'
 
 [[test]]
 pattern = 'aa(?!a) *'
-pp = 'aa(?=~(a_*)\z){∅}『 *』'
+pp = 'aa(?=~(a_*)\z){∅}❮ *❯'
+
+
+
+

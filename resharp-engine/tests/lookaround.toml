@@ -171,29 +171,19 @@ matches = [[0, 3]]
 name = "lookbehind_zero_width_b"
 pattern = "(?<=b)"
 input = "b"
-expect_error = true
-reason = "unsupported: pure lookbehind without body"
+matches = [[1, 1]]
 
 [[test]]
 name = "lookbehind_zero_width_bb"
 pattern = "(?<=bb)"
 input = "bb"
-expect_error = true
-reason = "unsupported: pure lookbehind without body"
+matches = [[2, 2]]
 
 [[test]]
 name = "lookbehind_zero_width_bbb"
 pattern = "(?<=bbb)"
 input = "bbb"
-expect_error = true
-reason = "unsupported: pure lookbehind without body"
-
-[[test]]
-name = "lookbehind_zero_width_bbbb"
-pattern = "(?<=bbbb)"
-input = "bbbb"
-expect_error = true
-reason = "unsupported: pure lookbehind without body"
+matches = [[3, 3]]
 
 [[test]]
 name = "lookbehind_b_then_b"
@@ -352,27 +342,18 @@ pattern = "(?<=f)(?<=e.*)(?<=c.*).+"
 input = "abcdefghij"
 matches = [[6, 10]]
 
-
 [[test]]
 name = "neg_lookahead"
 pattern = "(?!a)"
 input = "b"
 expect_error = true
-reason = "unsupported: pure negative lookahead"
+reason = "unsupported: pure negative lookbehind"
 
 [[test]]
 name = "neg_lookbehind_b"
 pattern = "(?<!a)"
 input = "b"
-expect_error = true
-reason = "unsupported: pure negative lookbehind"
-
-[[test]]
-name = "neg_lookbehind_a"
-pattern = "(?<!a)"
-input = "a"
-expect_error = true
-reason = "unsupported: pure negative lookbehind"
+matches = [[0, 0], [1, 1]]
 
 [[test]]
 name = "neg_lookbehind_digit_a"

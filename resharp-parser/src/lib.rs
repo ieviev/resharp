@@ -1354,16 +1354,8 @@ impl<'s> ResharpParser<'s> {
                     Err(self.error(self.span(), ast::ErrorKind::UnsupportedResharpRegex))
                 })?;
             }
-            let word_prefix = if dir > 0 {
-                tb.mk_concat(word_id, NodeId::TS)
-            } else {
-                tb.mk_concat(NodeId::TS, word_id)
-            };
-            let non_word_prefix = if dir > 0 {
-                tb.mk_concat(not_word_id, NodeId::TS)
-            } else {
-                tb.mk_concat(NodeId::TS, not_word_id)
-            };
+            let word_prefix = tb.mk_concat(word_id, NodeId::TS);
+            let non_word_prefix = tb.mk_concat(not_word_id, NodeId::TS);
             return if tb.subsumes(word_prefix, neighbor_node) == Some(true) {
                 Ok(Word)
             } else if tb.subsumes(non_word_prefix, neighbor_node) == Some(true) {

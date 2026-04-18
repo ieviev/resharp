@@ -1,5 +1,13 @@
 description = "prefix set and potential_start computation tests"
 
+
+[[test]]
+name = "value"
+pattern = '(\A|(.*,))VALUE(\z|([,]?.))'
+potential_rev = ".;[,E];[EU];[LU];[AL];[AV]"
+potential_fwd = ".;.;.;.;.;."
+
+
 [[test]]
 name = "prefix_twain"
 pattern = "Twain"

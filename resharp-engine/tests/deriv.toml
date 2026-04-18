@@ -1,3 +1,4 @@
+
 [[test]]
 name = "word_boundary_x_rev"
 pattern = '\bx\b'
@@ -21,3 +22,20 @@ name = "la_compl_has_y_from1_fwd"
 pattern = '(?=.*z)[^y]*'
 input = "yz"
 fwd = ["?", "?"]
+
+[[test]]
+name = "simple_literal_null_tracking"
+pattern = 'ab'
+input = "ab"
+fwd_nulls = [2]
+rev_nulls = [2]
+
+[[test]]
+name = "smaller_repro"
+pattern = 'a(?!b).*(?<!a)b'
+input = "a b"
+
+[[test]]
+name = "lb_inference_pp"
+pattern = '<.*(?<=<)bg'
+input = "<bg"
