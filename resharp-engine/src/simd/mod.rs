@@ -13,7 +13,15 @@ pub fn has_simd() -> bool {
     {
         true
     }
-    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+    #[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
+    {
+        true
+    }
+    #[cfg(not(any(
+        target_arch = "x86_64",
+        target_arch = "aarch64",
+        all(target_arch = "wasm32", target_feature = "simd128"),
+    )))]
     {
         false
     }
@@ -26,6 +34,11 @@ use std::arch::x86_64::*;
 mod neon;
 #[cfg(target_arch = "aarch64")]
 pub use neon::*;
+
+#[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
+mod wasm;
+#[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
+pub use wasm::*;
 
 #[cfg(target_arch = "x86_64")]
 pub struct RevSearchBytes {
@@ -221,65 +234,24 @@ impl FwdLiteralSearch {
     }
 
     pub fn find_fwd(&self, haystack: &[u8]) -> Option<usize> {
-        unsafe { self.find_fwd_avx2(haystack) }
+        let mut sink: Vec<(usize, usize)> = Vec::new();
+        unsafe { self.scan_avx2::<false>(haystack, &mut sink) }
     }
 
     pub fn find_all_fixed(&self, haystack: &[u8], matches: &mut Vec<(usize, usize)>) {
-        unsafe { self.find_all_fixed_avx2(haystack, matches) }
-    }
-
-    #[target_feature(enable = "avx2")]
-    unsafe fn find_all_fixed_avx2(&self, haystack: &[u8], matches: &mut Vec<(usize, usize)>) {
-        let nlen = self.needle.len();
-        if haystack.len() < nlen {
-            return;
-        }
-        let ptr = haystack.as_ptr();
-        let rare_idx = self.rare_idx;
-        let rare_byte = self.rare_byte;
-        let confirm_idx = self.confirm.0;
-        let confirm_byte = self.confirm.1;
-        let end = haystack.len() - nlen + rare_idx;
-        let vrare = _mm256_set1_epi8(rare_byte as i8);
-        let mut last_end: usize = 0;
-
-        let mut pos = rare_idx;
-        while pos + 32 <= end + 1 {
-            let chunk = _mm256_loadu_si256(ptr.add(pos) as *const __m256i);
-            let mut mask = _mm256_movemask_epi8(_mm256_cmpeq_epi8(chunk, vrare)) as u32;
-            while mask != 0 {
-                let bit = mask.trailing_zeros() as usize;
-                let start = pos + bit - rare_idx;
-                if start >= last_end
-                    && *ptr.add(start + confirm_idx) == confirm_byte
-                    && self.verify(haystack, start)
-                {
-                    let m_end = start + nlen;
-                    matches.push((start, m_end));
-                    last_end = m_end;
-                }
-                mask &= mask - 1;
-            }
-            pos += 32;
-        }
-        // scalar tail
-        while pos <= end {
-            let start = pos - rare_idx;
-            if start >= last_end
-                && *ptr.add(pos) == rare_byte
-                && *ptr.add(start + confirm_idx) == confirm_byte
-                && self.verify(haystack, start)
-            {
-                let m_end = start + nlen;
-                matches.push((start, m_end));
-                last_end = m_end;
-            }
-            pos += 1;
+        unsafe {
+            self.scan_avx2::<true>(haystack, matches);
         }
     }
 
+    // COLLECT_ALL=false: stop at first match, return its start.
+    // COLLECT_ALL=true:  push every non-overlapping match into `matches`, return None.
     #[target_feature(enable = "avx2")]
-    unsafe fn find_fwd_avx2(&self, haystack: &[u8]) -> Option<usize> {
+    unsafe fn scan_avx2<const COLLECT_ALL: bool>(
+        &self,
+        haystack: &[u8],
+        matches: &mut Vec<(usize, usize)>,
+    ) -> Option<usize> {
         let nlen = self.needle.len();
         if haystack.len() < nlen {
             return None;
@@ -291,6 +263,24 @@ impl FwdLiteralSearch {
         let confirm_byte = self.confirm.1;
         let end = haystack.len() - nlen + rare_idx;
         let vrare = _mm256_set1_epi8(rare_byte as i8);
+        let mut last_end: usize = 0;
+
+        let mut handle = |this: &Self, start: usize| -> Option<usize> {
+            if COLLECT_ALL && start < last_end {
+                return None;
+            }
+            if *ptr.add(start + confirm_idx) != confirm_byte || !this.verify(haystack, start) {
+                return None;
+            }
+            if COLLECT_ALL {
+                let m_end = start + nlen;
+                matches.push((start, m_end));
+                last_end = m_end;
+                None
+            } else {
+                Some(start)
+            }
+        };
 
         let mut pos = rare_idx;
         while pos + 32 <= end + 1 {
@@ -299,8 +289,8 @@ impl FwdLiteralSearch {
             while mask != 0 {
                 let bit = mask.trailing_zeros() as usize;
                 let start = pos + bit - rare_idx;
-                if *ptr.add(start + confirm_idx) == confirm_byte && self.verify(haystack, start) {
-                    return Some(start);
+                if let Some(s) = handle(self, start) {
+                    return Some(s);
                 }
                 mask &= mask - 1;
             }
@@ -310,8 +300,8 @@ impl FwdLiteralSearch {
         while pos <= end {
             if *ptr.add(pos) == rare_byte {
                 let start = pos - rare_idx;
-                if *ptr.add(start + confirm_idx) == confirm_byte && self.verify(haystack, start) {
-                    return Some(start);
+                if let Some(s) = handle(self, start) {
+                    return Some(s);
                 }
             }
             pos += 1;
@@ -639,7 +629,11 @@ pub struct FwdPrefixSearch {
     verify_order: [u8; 16],
 }
 
-#[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+#[cfg(any(
+    target_arch = "x86_64",
+    target_arch = "aarch64",
+    all(target_arch = "wasm32", target_feature = "simd128"),
+))]
 #[repr(align(32))]
 #[cfg_attr(debug_assertions, derive(Debug))]
 pub(crate) struct TeddyMasks {
@@ -1064,6 +1058,7 @@ impl FwdRangeSearch {
 }
 
 #[cfg(target_arch = "aarch64")]
+#[cfg_attr(debug_assertions, derive(Debug))]
 pub struct FwdRangeSearch {
     len: usize,
     pub(crate) anchor_pos: usize,
@@ -1270,12 +1265,20 @@ impl RevSearchRanges {
     }
 }
 
-#[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+#[cfg(not(any(
+    target_arch = "x86_64",
+    target_arch = "aarch64",
+    all(target_arch = "wasm32", target_feature = "simd128"),
+)))]
 pub struct RevSearchBytes {
     _private: (),
 }
 
-#[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+#[cfg(not(any(
+    target_arch = "x86_64",
+    target_arch = "aarch64",
+    all(target_arch = "wasm32", target_feature = "simd128"),
+)))]
 impl RevSearchBytes {
     pub fn bytes(&self) -> &[u8] {
         unreachable!()
@@ -1290,12 +1293,20 @@ impl RevSearchBytes {
     }
 }
 
-#[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+#[cfg(not(any(
+    target_arch = "x86_64",
+    target_arch = "aarch64",
+    all(target_arch = "wasm32", target_feature = "simd128"),
+)))]
 pub struct FwdLiteralSearch {
     _private: (),
 }
 
-#[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+#[cfg(not(any(
+    target_arch = "x86_64",
+    target_arch = "aarch64",
+    all(target_arch = "wasm32", target_feature = "simd128"),
+)))]
 impl FwdLiteralSearch {
     pub fn len(&self) -> usize {
         unreachable!()
@@ -1314,12 +1325,20 @@ impl FwdLiteralSearch {
     }
 }
 
-#[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+#[cfg(not(any(
+    target_arch = "x86_64",
+    target_arch = "aarch64",
+    all(target_arch = "wasm32", target_feature = "simd128"),
+)))]
 pub struct RevPrefixSearch {
     _private: (),
 }
 
-#[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+#[cfg(not(any(
+    target_arch = "x86_64",
+    target_arch = "aarch64",
+    all(target_arch = "wasm32", target_feature = "simd128"),
+)))]
 impl RevPrefixSearch {
     pub fn len(&self) -> usize {
         unreachable!()
@@ -1330,12 +1349,20 @@ impl RevPrefixSearch {
     }
 }
 
-#[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+#[cfg(not(any(
+    target_arch = "x86_64",
+    target_arch = "aarch64",
+    all(target_arch = "wasm32", target_feature = "simd128"),
+)))]
 pub struct FwdPrefixSearch {
     _private: (),
 }
 
-#[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+#[cfg(not(any(
+    target_arch = "x86_64",
+    target_arch = "aarch64",
+    all(target_arch = "wasm32", target_feature = "simd128"),
+)))]
 impl FwdPrefixSearch {
     pub fn len(&self) -> usize {
         unreachable!()
@@ -1346,12 +1373,20 @@ impl FwdPrefixSearch {
     }
 }
 
-#[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+#[cfg(not(any(
+    target_arch = "x86_64",
+    target_arch = "aarch64",
+    all(target_arch = "wasm32", target_feature = "simd128"),
+)))]
 pub struct RevSearchRanges {
     _private: (),
 }
 
-#[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+#[cfg(not(any(
+    target_arch = "x86_64",
+    target_arch = "aarch64",
+    all(target_arch = "wasm32", target_feature = "simd128"),
+)))]
 impl RevSearchRanges {
     pub fn ranges(&self) -> &[(u8, u8)] {
         unreachable!()

@@ -42,6 +42,11 @@ pub(crate) mod engine;
 pub(crate) mod prefix;
 pub(crate) mod simd;
 
+#[doc(hidden)]
+pub fn has_simd() -> bool {
+    simd::has_simd()
+}
+
 #[cfg(feature = "diag")]
 pub use engine::BDFA;
 #[cfg(feature = "diag")]
@@ -87,6 +92,8 @@ pub enum Error {
     Algebra(resharp_algebra::AlgebraError),
     /// DFA state cache exceeded `max_dfa_capacity`.
     CapacityExceeded,
+    /// pattern produced more algebra nodes than the engine supports.
+    PatternTooLarge,
     /// serialization or deserialization failure.
     Serialize(String),
 }
@@ -97,6 +104,7 @@ impl std::fmt::Display for Error {
             Error::Parse(e) => write!(f, "parse error: {}", e),
             Error::Algebra(e) => write!(f, "{}", e),
             Error::CapacityExceeded => write!(f, "DFA state capacity exceeded"),
+            Error::PatternTooLarge => write!(f, "pattern too large"),
             Error::Serialize(ref s) => write!(f, "serialization error: {}", s),
         }
     }
@@ -108,6 +116,7 @@ impl std::error::Error for Error {
             Error::Parse(e) => Some(e),
             Error::Algebra(e) => Some(e),
             Error::CapacityExceeded => None,
+            Error::PatternTooLarge => None,
             Error::Serialize(_) => None,
         }
     }
@@ -308,6 +317,32 @@ fn bdfa_inner<const PREFIX: u8>(
     }
 }
 
+/// rejects obviously unsupported before compiling
+fn ensure_supported(
+    b: &mut RegexBuilder,
+    node: NodeId,
+) -> Result<(), resharp_algebra::AlgebraError> {
+    if !node.contains_lookbehind(b) {
+        return Ok(());
+    }
+    match b.get_kind(node) {
+        Kind::Union => {
+            let (l, r) = (node.left(b), node.right(b));
+            if l.contains_lookbehind(b) || r.contains_lookbehind(b) {
+                return Err(resharp_algebra::AlgebraError::UnsupportedPattern);
+            }
+            Ok(())
+        }
+        Kind::Concat | Kind::Inter => {
+            ensure_supported(b, node.left(b))?;
+            ensure_supported(b, node.right(b))
+        }
+        Kind::Star | Kind::Compl | Kind::Counted => ensure_supported(b, node.left(b)),
+        Kind::Lookbehind | Kind::Lookahead => ensure_supported(b, node.left(b)),
+        _ => Ok(()),
+    }
+}
+
 impl Regex {
     /// compile a pattern with default options.
     ///
@@ -354,6 +389,15 @@ impl Regex {
         opts: EngineOptions,
         pattern_len: usize,
     ) -> Result<Regex, Error> {
+        // Guard against pathological AST sizes (deep recursion in reverse /
+        // der / normalize would otherwise stack-overflow on debug builds,
+        // which default to a 2 MiB thread stack under `cargo test`).
+        const NODE_LIMIT: usize = 200_000;
+        if b.tree_size(node, NODE_LIMIT) >= NODE_LIMIT {
+            return Err(Error::PatternTooLarge);
+        }
+        ensure_supported(&mut b, node)?;
+
         let empty_nullable = b
             .nullability_emptystring(node)
             .has(Nullability::EMPTYSTRING);
@@ -395,7 +439,13 @@ impl Regex {
         );
         let fwd_prefix_stripped = matches!(selected, Some(prefix::PrefixKind::UnanchoredFwd(_)));
 
-        let mut fwd = engine::LDFA::new(&mut b, fwd_start, max_cap)?;
+        let mut fwd = 
+            if opts.hardened {
+                engine::LDFA::new(&mut b, fwd_start, max_cap)?
+            } else {
+                engine::LDFA::new_fwd(&mut b, fwd_start, max_cap)?
+            };
+            
         let mut rev = engine::LDFA::new(&mut b, ts_rev_start, max_cap)?;
         rev.prefix_skip = rev_skip;
 

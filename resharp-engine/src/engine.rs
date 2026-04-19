@@ -1,5 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
+use rustc_hash::FxHashMap;
+
 use resharp_algebra::nulls::{NullState, Nullability, NullsId};
 use resharp_algebra::solver::{Solver, TSetId};
 use resharp_algebra::{Kind, NodeId, RegexBuilder, TRegex, TRegexId};
@@ -195,6 +197,7 @@ fn skip_is_profitable(bytes: &[u8]) -> bool {
 
 pub struct LDFA {
     pub pruned: u16,
+    pub prune_memo: FxHashMap<NodeId, NodeId>,
     pub begin_table: Vec<u16>,
     pub center_table: Vec<u16>,
     pub effects_id: Vec<u16>,
@@ -209,10 +212,28 @@ pub struct LDFA {
     pub skip_searchers: Vec<MintermSearchValue>,
     pub prefix_skip: Option<crate::accel::RevPrefixSearch>,
     pub max_capacity: usize,
+    pub is_forward: bool,
 }
 
 impl LDFA {
     pub fn new(b: &mut RegexBuilder, initial: NodeId, max_capacity: usize) -> Result<LDFA, Error> {
+        Self::new_inner(b, initial, max_capacity, false)
+    }
+
+    pub fn new_fwd(
+        b: &mut RegexBuilder,
+        initial: NodeId,
+        max_capacity: usize,
+    ) -> Result<LDFA, Error> {
+        Self::new_inner(b, initial, max_capacity, true)
+    }
+
+    fn new_inner(
+        b: &mut RegexBuilder,
+        initial: NodeId,
+        max_capacity: usize,
+        is_forward: bool,
+    ) -> Result<LDFA, Error> {
         let sets = collect_sets(b, initial);
         let minterms = PartitionTree::generate_minterms(sets, b.solver());
         let u8_lookup = PartitionTree::minterms_lookup(&minterms, b.solver());
@@ -225,6 +246,8 @@ impl LDFA {
 
         let mut effects_id: Vec<u16> = vec![0u16; 2]; // slots 0,1
         let mut effects: Vec<Vec<NullState>> = Vec::new();
+
+        let mut prune_memo: FxHashMap<NodeId, NodeId> = FxHashMap::default();
 
         // state 2
         let initial_sid = state_nodes.len() as u16;
@@ -249,7 +272,12 @@ impl LDFA {
         let der0 = b.der(initial, Nullability::BEGIN)?;
         let mut begin_table = vec![DFA_DEAD; minterms.len()];
         for (idx, mt) in minterms.iter().enumerate() {
-            let t = transition_term(b, der0, *mt);
+            let mut t = transition_term(b, der0, *mt);
+            if is_forward {
+                t = b.prune_fwd(t, &mut prune_memo);
+            } else {
+                t = b.prune_rev(t, &mut prune_memo);
+            }
             let sid = register_state(
                 &mut state_nodes,
                 &mut node_to_state,
@@ -267,7 +295,10 @@ impl LDFA {
         let mt_log = (num_minterms as usize).next_power_of_two().trailing_zeros();
         let stride = 1usize << mt_log;
         let center_table_size = state_nodes.len() * stride;
-        let center_table = vec![DFA_MISSING; center_table_size];
+        let mut center_table = vec![DFA_MISSING; center_table_size];
+        for mt_idx in 0..minterms.len() {
+            center_table[(DFA_DEAD as usize) << mt_log | mt_idx] = DFA_DEAD;
+        }
 
         while effects.len() < b.nulls_count() {
             effects.push(b.nulls_entry_vec(effects.len() as u32));
@@ -276,6 +307,7 @@ impl LDFA {
 
         Ok(LDFA {
             pruned: pruned_sid,
+            prune_memo,
             begin_table,
             center_table,
             effects_id,
@@ -290,6 +322,7 @@ impl LDFA {
             skip_searchers: Vec::new(),
             prefix_skip: None,
             max_capacity,
+            is_forward,
         })
     }
 
@@ -489,9 +522,6 @@ impl LDFA {
         b: &mut RegexBuilder,
         state_id: u16,
     ) -> Result<(), Error> {
-        if state_id == DFA_DEAD {
-            return Ok(());
-        }
         let node = self.state_nodes[state_id as usize];
         if node == NodeId::MISSING {
             return Ok(());
@@ -503,7 +533,12 @@ impl LDFA {
                 continue;
             }
             let mt = self.minterms[mt_idx];
-            let next_node = transition_term(b, sder, mt);
+            let mut next_node = transition_term(b, sder, mt);
+            if self.is_forward {
+                next_node = b.prune_fwd(next_node, &mut self.prune_memo);
+            } else {
+                next_node = b.prune_rev(next_node, &mut self.prune_memo);
+            }
             if self.state_nodes.len() >= self.max_capacity {
                 return Err(Error::CapacityExceeded);
             }
@@ -517,13 +552,21 @@ impl LDFA {
     }
 
     fn try_build_skip(&mut self, _b: &mut RegexBuilder, _state: usize) {
-        #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+        #[cfg(any(
+            target_arch = "x86_64",
+            target_arch = "aarch64",
+            all(target_arch = "wasm32", target_feature = "simd128")
+        ))]
         if crate::simd::has_simd() {
             self.try_build_skip_simd(_b, _state);
         }
     }
 
-    #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+    #[cfg(any(
+        target_arch = "x86_64",
+        target_arch = "aarch64",
+        all(target_arch = "wasm32", target_feature = "simd128")
+    ))]
     fn try_build_skip_simd(&mut self, b: &mut RegexBuilder, state: usize) {
         let num_mt = self.mt_num as usize;
         if state >= self.skip_ids.len() || self.skip_ids[state] != 0 {
@@ -565,7 +608,11 @@ impl LDFA {
         }
     }
 
-    #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+    #[cfg(any(
+        target_arch = "x86_64",
+        target_arch = "aarch64",
+        all(target_arch = "wasm32", target_feature = "simd128")
+    ))]
     fn try_build_range_skip(&mut self, bytes: &[u8]) -> Option<u8> {
         let tset = crate::accel::TSet::from_bytes(bytes);
         let ranges: Vec<(u8, u8)> = Solver::pp_collect_ranges(&tset).into_iter().collect();
@@ -581,7 +628,11 @@ impl LDFA {
         Some(self.get_or_create_skip_range(ranges))
     }
 
-    #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+    #[cfg(any(
+        target_arch = "x86_64",
+        target_arch = "aarch64",
+        all(target_arch = "wasm32", target_feature = "simd128")
+    ))]
     fn get_or_create_skip_exact(&mut self, mut bytes: Vec<u8>) -> u8 {
         bytes.sort();
         for (i, s) in self.skip_searchers.iter().enumerate() {
@@ -598,7 +649,11 @@ impl LDFA {
         self.skip_searchers.len() as u8
     }
 
-    #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+    #[cfg(any(
+        target_arch = "x86_64",
+        target_arch = "aarch64",
+        all(target_arch = "wasm32", target_feature = "simd128")
+    ))]
     fn get_or_create_skip_range(&mut self, mut ranges: Vec<(u8, u8)>) -> u8 {
         ranges.sort();
         for (i, s) in self.skip_searchers.iter().enumerate() {
@@ -1777,6 +1832,7 @@ impl LDFA {
                 return Ok(());
             }
 
+            
             if cache_miss {
                 let sid = state as u16;
                 self.create_state(b, sid)?;
@@ -2276,7 +2332,11 @@ fn scan_fwd<const SKIP: bool>(
 
     'outer: while pos < end {
         if SKIP {
-            #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+            #[cfg(any(
+                target_arch = "x86_64",
+                target_arch = "aarch64",
+                all(target_arch = "wasm32", target_feature = "simd128")
+            ))]
             {
                 let sid = skip_ids[curr as usize];
                 if sid != 0 {
@@ -2560,7 +2620,11 @@ impl BDFA {
         Ok(())
     }
 
-    #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+    #[cfg(any(
+        target_arch = "x86_64",
+        target_arch = "aarch64",
+        all(target_arch = "wasm32", target_feature = "simd128")
+    ))]
     fn build_prefix_search(byte_sets_raw: &[Vec<u8>]) -> Option<crate::accel::FwdPrefixSearch> {
         if byte_sets_raw.iter().all(|bs| bs.len() == 1) {
             let needle: Vec<u8> = byte_sets_raw.iter().map(|bs| bs[0]).collect();
@@ -2609,7 +2673,11 @@ impl BDFA {
         ))
     }
 
-    #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+    #[cfg(any(
+        target_arch = "x86_64",
+        target_arch = "aarch64",
+        all(target_arch = "wasm32", target_feature = "simd128")
+    ))]
     fn try_build_range_prefix(
         byte_sets_raw: &[Vec<u8>],
         anchor_pos: usize,
@@ -2640,7 +2708,11 @@ impl BDFA {
         ))
     }
 
-    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+    #[cfg(not(any(
+        target_arch = "x86_64",
+        target_arch = "aarch64",
+        all(target_arch = "wasm32", target_feature = "simd128")
+    )))]
     fn build_prefix_search(_byte_sets_raw: &[Vec<u8>]) -> Option<crate::accel::FwdPrefixSearch> {
         None
     }

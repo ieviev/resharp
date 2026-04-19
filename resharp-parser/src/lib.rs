@@ -37,6 +37,12 @@ pub struct PatternFlags {
     pub ignore_whitespace: bool,
 }
 
+// arbitrary safeguards, these will not prevent intentional DoS patterns
+// more to protect you from shooting yourself in the foot
+const REPETITION_COUNT_LIMIT: u32 = 2_000;
+const EXPANDED_AST_LIMIT: u64 = 50_000;
+const MAX_LIST_LEN: usize = 4_000;
+
 impl Default for PatternFlags {
     fn default() -> Self {
         Self {
@@ -867,17 +873,11 @@ impl<'s> ResharpParser<'s> {
         // If we try to pop again, there should be nothing.
         match stack.pop() {
             None => ast,
-            Some(GroupState::Alternation(_)) => {
-                // This unreachable is unfortunate. This case can't happen
-                // because the only way we can be here is if there were two
-                // `GroupState::Alternation`s adjacent in the parser's stack,
-                // which we guarantee to never happen because we never push a
-                // `GroupState::Alternation` if one is already at the top of
-                // the stack.
-                unreachable!()
+            Some(GroupState::Alternation(alt)) => {
+                Err(self.error(alt.span, ast::ErrorKind::UnsupportedResharpRegex))
             }
-            Some(GroupState::Intersection(_)) => {
-                unreachable!()
+            Some(GroupState::Intersection(int)) => {
+                Err(self.error(int.span, ast::ErrorKind::UnsupportedResharpRegex))
             }
             Some(GroupState::Group { group, .. }) => {
                 Err(self.error(group.span, ast::ErrorKind::GroupUnclosed))
@@ -1765,7 +1765,13 @@ impl<'s> ResharpParser<'s> {
                 _ => concat.asts.push(self.parse_primitive()?.into_ast()),
             }
         }
-        self.pop_group_end(concat)
+        let ast = self.pop_group_end(concat)?;
+        if expanded_ast_size(&ast, EXPANDED_AST_LIMIT) >= EXPANDED_AST_LIMIT
+            || max_list_length(&ast) >= MAX_LIST_LEN
+        {
+            return Err(self.error(*ast.span(), ast::ErrorKind::UnsupportedResharpRegex));
+        }
+        Ok(ast)
     }
 
     /// Parse the regular expression and return an abstract syntax tree with
@@ -1891,6 +1897,17 @@ impl<'s> ResharpParser<'s> {
         let op_span = Span::new(start, self.pos());
         if !range.is_valid() {
             return Err(self.error(op_span, ast::ErrorKind::RepetitionCountInvalid));
+        }
+
+        let over_limit = match &range {
+            ast::RepetitionRange::Exactly(n) => *n > REPETITION_COUNT_LIMIT,
+            ast::RepetitionRange::AtLeast(n) => *n > REPETITION_COUNT_LIMIT,
+            ast::RepetitionRange::Bounded(n, m) => {
+                *n > REPETITION_COUNT_LIMIT || *m > REPETITION_COUNT_LIMIT
+            }
+        };
+        if over_limit {
+            return Err(self.error(op_span, ast::ErrorKind::UnsupportedResharpRegex));
         }
         concat.asts.push(Ast::repetition(ast::Repetition {
             span: ast.span().with_end(self.pos()),
@@ -2711,6 +2728,81 @@ impl<'s> ResharpParser<'s> {
             negated,
         }
     }
+}
+
+pub fn max_list_length(ast: &ast::Ast) -> usize {
+    match ast {
+        ast::Ast::Empty(_)
+        | ast::Ast::Flags(_)
+        | ast::Ast::Literal(_)
+        | ast::Ast::Dot(_)
+        | ast::Ast::Top(_)
+        | ast::Ast::Assertion(_)
+        | ast::Ast::ClassUnicode(_)
+        | ast::Ast::ClassPerl(_)
+        | ast::Ast::ClassBracketed(_) => 0,
+        ast::Ast::Group(g) => max_list_length(&g.ast),
+        ast::Ast::Complement(c) => max_list_length(&c.ast),
+        ast::Ast::Lookaround(l) => max_list_length(&l.ast),
+        ast::Ast::Repetition(r) => max_list_length(&r.ast),
+        ast::Ast::Concat(c) => c
+            .asts
+            .len()
+            .max(c.asts.iter().map(max_list_length).max().unwrap_or(0)),
+        ast::Ast::Alternation(a) => a
+            .asts
+            .len()
+            .max(a.asts.iter().map(max_list_length).max().unwrap_or(0)),
+        ast::Ast::Intersection(i) => i
+            .asts
+            .len()
+            .max(i.asts.iter().map(max_list_length).max().unwrap_or(0)),
+    }
+}
+
+pub fn expanded_ast_size(ast: &ast::Ast, limit: u64) -> u64 {
+    fn go(ast: &ast::Ast, limit: u64) -> u64 {
+        match ast {
+            ast::Ast::Empty(_) | ast::Ast::Flags(_) => 1,
+            ast::Ast::Literal(_) | ast::Ast::Dot(_) | ast::Ast::Top(_) => 1,
+            ast::Ast::Assertion(_) => 1,
+            ast::Ast::ClassUnicode(_) | ast::Ast::ClassPerl(_) | ast::Ast::ClassBracketed(_) => 1,
+            ast::Ast::Group(g) => go(&g.ast, limit).saturating_add(1).min(limit),
+            ast::Ast::Complement(c) => go(&c.ast, limit).saturating_add(1).min(limit),
+            ast::Ast::Lookaround(l) => go(&l.ast, limit).saturating_add(1).min(limit),
+            ast::Ast::Concat(c) => sum_children(&c.asts, limit),
+            ast::Ast::Alternation(a) => sum_children(&a.asts, limit),
+            ast::Ast::Intersection(i) => sum_children(&i.asts, limit),
+            ast::Ast::Repetition(r) => {
+                let body = go(&r.ast, limit);
+                let factor: u64 = match &r.op.kind {
+                    ast::RepetitionKind::ZeroOrOne => 2,
+                    ast::RepetitionKind::ZeroOrMore | ast::RepetitionKind::OneOrMore => 2,
+                    ast::RepetitionKind::Range(ast::RepetitionRange::Exactly(n)) => {
+                        (*n as u64).max(1)
+                    }
+                    ast::RepetitionKind::Range(ast::RepetitionRange::AtLeast(n)) => {
+                        (*n as u64).max(1).saturating_add(1)
+                    }
+                    ast::RepetitionKind::Range(ast::RepetitionRange::Bounded(_, m)) => {
+                        (*m as u64).max(1)
+                    }
+                };
+                body.saturating_mul(factor).min(limit)
+            }
+        }
+    }
+    fn sum_children(children: &[ast::Ast], limit: u64) -> u64 {
+        let mut total: u64 = 0;
+        for c in children {
+            total = total.saturating_add(go(c, limit));
+            if total >= limit {
+                return limit;
+            }
+        }
+        total
+    }
+    go(ast, limit)
 }
 
 pub fn parse_ast<'s>(

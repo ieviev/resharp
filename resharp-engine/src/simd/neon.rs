@@ -12,6 +12,7 @@ pub(crate) unsafe fn neon_movemask(v: uint8x16_t) -> u16 {
     (vaddv_u8(lo) as u16) | ((vaddv_u8(hi) as u16) << 8)
 }
 
+#[cfg_attr(debug_assertions, derive(Debug))]
 pub struct RevSearchBytes {
     bytes: Vec<u8>,
 }
@@ -118,6 +119,7 @@ impl RevSearchBytes {
     }
 }
 
+#[cfg_attr(debug_assertions, derive(Debug))]
 pub struct RevSearchRanges {
     ranges: Vec<(u8, u8)>,
 }
@@ -238,6 +240,7 @@ impl RevSearchRanges {
     }
 }
 
+#[cfg_attr(debug_assertions, derive(Debug))]
 pub struct FwdLiteralSearch {
     pub(crate) needle: Vec<u8>,
     chunks: Vec<u64>,
@@ -334,110 +337,24 @@ impl FwdLiteralSearch {
     }
 
     pub fn find_fwd(&self, haystack: &[u8]) -> Option<usize> {
-        unsafe { self.find_fwd_neon(haystack) }
+        let mut sink: Vec<(usize, usize)> = Vec::new();
+        unsafe { self.scan::<false>(haystack, &mut sink) }
     }
 
     pub fn find_all_fixed(&self, haystack: &[u8], matches: &mut Vec<(usize, usize)>) {
-        unsafe { self.find_all_fixed_neon(haystack, matches) }
-    }
-
-    unsafe fn find_all_fixed_neon(&self, haystack: &[u8], matches: &mut Vec<(usize, usize)>) {
-        let nlen = self.needle.len();
-        if haystack.len() < nlen {
-            return;
-        }
-        let ptr = haystack.as_ptr();
-        let rare_idx = self.rare_idx;
-        let rare_byte = self.rare_byte;
-        let confirm_byte = self.confirm.1;
-        let confirm_offset = self.confirm_offset;
-        let end = haystack.len() - nlen + rare_idx;
-        let vrare = vdupq_n_u8(rare_byte);
-        let vconfirm = vdupq_n_u8(confirm_byte);
-        let mut last_end: usize = 0;
-
-        let mut pos = rare_idx;
-        while pos + 32 <= end + 1 {
-            let r0 = vceqq_u8(vld1q_u8(ptr.add(pos)), vrare);
-            let r1 = vceqq_u8(vld1q_u8(ptr.add(pos + 16)), vrare);
-            let c0 = vceqq_u8(
-                vld1q_u8(ptr.offset(pos as isize + confirm_offset)),
-                vconfirm,
-            );
-            let c1 = vceqq_u8(
-                vld1q_u8(ptr.offset(pos as isize + 16 + confirm_offset)),
-                vconfirm,
-            );
-            let and0 = vandq_u8(r0, c0);
-            let and1 = vandq_u8(r1, c1);
-            if vmaxvq_u8(vorrq_u8(and0, and1)) == 0 {
-                pos += 32;
-                continue;
-            }
-            let mut mask = neon_movemask(and0);
-            while mask != 0 {
-                let bit = mask.trailing_zeros() as usize;
-                let start = pos + bit - rare_idx;
-                if start >= last_end && self.verify(haystack, start) {
-                    let m_end = start + nlen;
-                    matches.push((start, m_end));
-                    last_end = m_end;
-                }
-                mask &= mask - 1;
-            }
-            let mut mask = neon_movemask(and1);
-            while mask != 0 {
-                let bit = mask.trailing_zeros() as usize;
-                let start = pos + 16 + bit - rare_idx;
-                if start >= last_end && self.verify(haystack, start) {
-                    let m_end = start + nlen;
-                    matches.push((start, m_end));
-                    last_end = m_end;
-                }
-                mask &= mask - 1;
-            }
-            pos += 32;
-        }
-        while pos + 16 <= end + 1 {
-            let r = vceqq_u8(vld1q_u8(ptr.add(pos)), vrare);
-            let c = vceqq_u8(
-                vld1q_u8(ptr.offset(pos as isize + confirm_offset)),
-                vconfirm,
-            );
-            let and = vandq_u8(r, c);
-            if vmaxvq_u8(and) == 0 {
-                pos += 16;
-                continue;
-            }
-            let mut mask = neon_movemask(and);
-            while mask != 0 {
-                let bit = mask.trailing_zeros() as usize;
-                let start = pos + bit - rare_idx;
-                if start >= last_end && self.verify(haystack, start) {
-                    let m_end = start + nlen;
-                    matches.push((start, m_end));
-                    last_end = m_end;
-                }
-                mask &= mask - 1;
-            }
-            pos += 16;
-        }
-        while pos <= end {
-            let start = pos - rare_idx;
-            if start >= last_end
-                && *ptr.add(pos) == rare_byte
-                && *ptr.offset(pos as isize + confirm_offset) == confirm_byte
-                && self.verify(haystack, start)
-            {
-                let m_end = start + nlen;
-                matches.push((start, m_end));
-                last_end = m_end;
-            }
-            pos += 1;
+        unsafe {
+            self.scan::<true>(haystack, matches);
         }
     }
 
-    unsafe fn find_fwd_neon(&self, haystack: &[u8]) -> Option<usize> {
+    // COLLECT_ALL=false: stop at first match, return its start.
+    // COLLECT_ALL=true:  push every non-overlapping match into `matches`, return None.
+    #[inline(always)]
+    unsafe fn scan<const COLLECT_ALL: bool>(
+        &self,
+        haystack: &[u8],
+        matches: &mut Vec<(usize, usize)>,
+    ) -> Option<usize> {
         let nlen = self.needle.len();
         if haystack.len() < nlen {
             return None;
@@ -450,6 +367,24 @@ impl FwdLiteralSearch {
         let end = haystack.len() - nlen + rare_idx;
         let vrare = vdupq_n_u8(rare_byte);
         let vconfirm = vdupq_n_u8(confirm_byte);
+        let mut last_end: usize = 0;
+
+        let mut handle = |this: &Self, start: usize| -> Option<usize> {
+            if COLLECT_ALL && start < last_end {
+                return None;
+            }
+            if !this.verify(haystack, start) {
+                return None;
+            }
+            if COLLECT_ALL {
+                let m_end = start + nlen;
+                matches.push((start, m_end));
+                last_end = m_end;
+                None
+            } else {
+                Some(start)
+            }
+        };
 
         let mut pos = rare_idx;
         while pos + 32 <= end + 1 {
@@ -473,8 +408,8 @@ impl FwdLiteralSearch {
             while mask != 0 {
                 let bit = mask.trailing_zeros() as usize;
                 let start = pos + bit - rare_idx;
-                if self.verify(haystack, start) {
-                    return Some(start);
+                if let Some(s) = handle(self, start) {
+                    return Some(s);
                 }
                 mask &= mask - 1;
             }
@@ -482,8 +417,8 @@ impl FwdLiteralSearch {
             while mask != 0 {
                 let bit = mask.trailing_zeros() as usize;
                 let start = pos + 16 + bit - rare_idx;
-                if self.verify(haystack, start) {
-                    return Some(start);
+                if let Some(s) = handle(self, start) {
+                    return Some(s);
                 }
                 mask &= mask - 1;
             }
@@ -504,8 +439,8 @@ impl FwdLiteralSearch {
             while mask != 0 {
                 let bit = mask.trailing_zeros() as usize;
                 let start = pos + bit - rare_idx;
-                if self.verify(haystack, start) {
-                    return Some(start);
+                if let Some(s) = handle(self, start) {
+                    return Some(s);
                 }
                 mask &= mask - 1;
             }
@@ -516,8 +451,8 @@ impl FwdLiteralSearch {
                 && *ptr.offset(pos as isize + confirm_offset) == confirm_byte
             {
                 let start = pos - rare_idx;
-                if self.verify(haystack, start) {
-                    return Some(start);
+                if let Some(s) = handle(self, start) {
+                    return Some(s);
                 }
             }
             pos += 1;
@@ -526,6 +461,7 @@ impl FwdLiteralSearch {
     }
 }
 
+#[cfg_attr(debug_assertions, derive(Debug))]
 pub struct RevPrefixSearch {
     len: usize,
     num_simd: usize,
@@ -824,6 +760,7 @@ impl RevPrefixSearch {
     }
 }
 
+#[cfg_attr(debug_assertions, derive(Debug))]
 pub struct FwdPrefixSearch {
     len: usize,
     num_simd: usize,

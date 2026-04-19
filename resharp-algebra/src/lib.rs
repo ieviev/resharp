@@ -141,7 +141,8 @@ impl MetaFlags {
         self.and(
             MetaFlags::CONTAINS_LOOKAROUND
                 .or(MetaFlags::CONTAINS_ANCHORS)
-                .or(MetaFlags::CONTAINS_INTER),
+                .or(MetaFlags::CONTAINS_INTER)
+                .or(MetaFlags::CONTAINS_LOOKBEHIND),
         )
     }
 }
@@ -424,6 +425,10 @@ impl NodeId {
         b.get_kind(self) == Kind::Star
     }
 
+    pub fn contains_lookbehind(self, b: &RegexBuilder) -> bool {
+        b.get_meta_flags(self).has(MetaFlags::CONTAINS_LOOKBEHIND)
+    }
+
     #[inline]
     pub(crate) fn is_inter(self, b: &RegexBuilder) -> bool {
         b.get_kind(self) == Kind::Inter
@@ -436,6 +441,11 @@ impl NodeId {
             return r.is_star(b) && r.left(b) == self.left(b);
         }
         false
+    }
+
+    #[inline]
+    fn is_union(self, b: &RegexBuilder) -> bool {
+        b.get_kind(self) == Kind::Union
     }
 
     #[inline]
@@ -526,6 +536,39 @@ impl NodeId {
         if continue_loop {
             f(b, curr);
         }
+    }
+
+    #[inline]
+    pub(crate) fn any_inter_component(
+        self,
+        b: &RegexBuilder,
+        mut f: impl FnMut(NodeId) -> bool,
+    ) -> bool {
+        debug_assert!(self.kind(b) == Kind::Inter);
+        let mut cur = self;
+        while cur.kind(b) == Kind::Inter {
+            if f(cur.left(b)) {
+                return true;
+            }
+            cur = cur.right(b);
+        }
+        f(cur)
+    }
+
+    #[inline]
+    pub(crate) fn any_union_component(
+        self,
+        b: &RegexBuilder,
+        mut f: impl FnMut(NodeId) -> bool,
+    ) -> bool {
+        let mut cur = self;
+        while cur.kind(b) == Kind::Union {
+            if f(cur.left(b)) {
+                return true;
+            }
+            cur = cur.right(b);
+        }
+        f(cur)
     }
 }
 
@@ -904,7 +947,6 @@ impl RegexBuilder {
             .has(MetaFlags::CONTAINS_LOOKAROUND)
     }
 
-    /// whether node contains `^`, `$`, `\A`, `\z` anchors.
     pub fn contains_anchors(&self, node_id: NodeId) -> bool {
         self.get_meta_flags(node_id)
             .has(MetaFlags::CONTAINS_ANCHORS)
@@ -1642,6 +1684,31 @@ impl RegexBuilder {
     pub fn num_nodes(&self) -> u32 {
         self.num_created
     }
+
+    pub fn tree_size(&self, root: NodeId, limit: usize) -> usize {
+        let mut seen: FxHashMap<NodeId, ()> = FxHashMap::default();
+        let mut stack: Vec<NodeId> = vec![root];
+        while let Some(n) = stack.pop() {
+            if n == NodeId::MISSING
+                || n == NodeId::BOT
+                || n == NodeId::EPS
+                || n == NodeId::TS
+                || n == NodeId::BEGIN
+                || n == NodeId::END
+            {
+                continue;
+            }
+            if seen.insert(n, ()).is_some() {
+                continue;
+            }
+            if seen.len() >= limit {
+                return limit;
+            }
+            stack.push(self.get_left(n));
+            stack.push(self.get_right(n));
+        }
+        seen.len()
+    }
     fn get_node_id(&mut self, inst: NodeKey) -> NodeId {
         match self.index.get(&inst) {
             Some(&id) => id,
@@ -2200,7 +2267,10 @@ impl RegexBuilder {
             return Some(left);
         }
 
-        if right.is_kind(self, Kind::Union) && left == right.left(self) {
+        if right.is_inter(self) && right.any_inter_component(self, |v| v == left) {
+            return Some(left);
+        }
+        if right.is_union(self) && right.any_union_component(self, |v| v == left) {
             return Some(right);
         }
 
@@ -2414,6 +2484,30 @@ impl RegexBuilder {
         }
         if left == right {
             return Some(left);
+        }
+        if right.is_inter(self) && right.any_inter_component(self, |v| v == left) {
+            return Some(right);
+        }
+        if right.is_union(self) && right.any_union_component(self, |v| v == left) {
+            return Some(left);
+        }
+
+        if left.is_pred(self) && right.is_pred(self) {
+            let l = left.pred_tset(self);
+            let r = right.pred_tset(self);
+            let solver = self.solver();
+            let psi = solver.and_id(l, r);
+            let rewrite = self.mk_pred(psi);
+            return Some(rewrite);
+        }
+
+        if left.is_concat(self) && right.is_concat(self) {
+            if left.left(self) == right.left(self) {
+                if left.left(self).is_pred(self) {
+                    let new_right = self.mk_inter(left.right(self), right.right(self));
+                    return Some(self.mk_concat(left.left(self), new_right));
+                }
+            }
         }
 
         if self.get_kind(right) == Kind::Union {
@@ -2950,23 +3044,21 @@ impl RegexBuilder {
         if let Some(id) = self.key_is_created(&key) {
             return *id;
         }
-
         if left == right {
-            return left;
+            return self.init_as(key, left);
         }
         if left == NodeId::BOT {
-            return right;
+            return self.init_as(key, right);
         }
         if right == NodeId::BOT {
-            return left;
+            return self.init_as(key, left);
         }
         if right == NodeId::TS {
-            return right;
+            return self.init_as(key, right);
         }
         if left == NodeId::TS {
-            return left;
+            return self.init_as(key, left);
         }
-
         match (self.get_kind(left), self.get_kind(right)) {
             (Kind::Union, _) => {
                 self.iter_unions_b(left, &mut |b, v| {
@@ -3451,6 +3543,114 @@ impl RegexBuilder {
             result = self.mk_concat(node, result);
         }
         result
+    }
+
+    pub fn prune_fwd(&mut self, node_id: NodeId, memo: &mut FxHashMap<NodeId, NodeId>) -> NodeId {
+        self.prune_rec::<true>(node_id, memo)
+    }
+
+    pub fn prune_rev(&mut self, node_id: NodeId, memo: &mut FxHashMap<NodeId, NodeId>) -> NodeId {
+        self.prune_rec::<false>(node_id, memo)
+    }
+
+    fn strip_la_body_end(&mut self, n: NodeId) -> NodeId {
+        if self.get_kind(n) != Kind::Concat {
+            return n;
+        }
+        let l = n.left(self);
+        let r = n.right(self);
+        if l == NodeId::TS && r == NodeId::END {
+            return NodeId::TS;
+        }
+        let new_r = self.strip_la_body_end(r);
+        if new_r == r {
+            n
+        } else {
+            self.mk_concat(l, new_r)
+        }
+    }
+
+    fn prune_rec<const FWD: bool>(
+        &mut self,
+        node_id: NodeId,
+        memo: &mut FxHashMap<NodeId, NodeId>,
+    ) -> NodeId {
+        if node_id == NodeId::MISSING {
+            return node_id;
+        }
+        if let Some(&v) = memo.get(&node_id) {
+            return v;
+        }
+        let (l, r) = (node_id.left(self), node_id.right(self));
+        let out = match node_id.kind(self) {
+            Kind::Union => {
+                let l = self.prune_rec::<FWD>(l, memo);
+                let r = self.prune_rec::<FWD>(r, memo);
+                let mut parts: Vec<NodeId> = Vec::new();
+                parts.push(l);
+                self.iter_unions_b(r, &mut |_, v| parts.push(v));
+                for p in &mut parts {
+                    *p = self.prune_rec::<FWD>(*p, memo);
+                }
+
+                if FWD {
+                    // min rel per body for pure lookaheads (la_tail MISSING)
+                    let mut best: FxHashMap<NodeId, u32> = FxHashMap::default();
+                    for &p in &parts {
+                        if p.is_lookahead(self) && self.get_lookahead_tail(p) == NodeId::MISSING {
+                            let body = self.get_lookahead_inner(p);
+                            let rel = self.get_lookahead_rel(p);
+                            best.entry(body)
+                                .and_modify(|r| *r = (*r).min(rel))
+                                .or_insert(rel);
+                        }
+                    }
+                    parts.iter().rev().fold(NodeId::BOT, |acc, &p| {
+                        if p.is_lookahead(self) && self.get_lookahead_tail(p) == NodeId::MISSING {
+                            let body = self.get_lookahead_inner(p);
+                            if self.get_lookahead_rel(p) != best[&body] {
+                                return acc;
+                            }
+                        }
+                        self.mk_union(p, acc)
+                    })
+                } else {
+                    parts
+                        .iter()
+                        .rev()
+                        .fold(NodeId::BOT, |acc, &p| self.mk_union(p, acc))
+                }
+            }
+            Kind::Concat => {
+                let l = self.prune_rec::<FWD>(l, memo);
+                let r = self.prune_rec::<FWD>(r, memo);
+                self.mk_concat(l, r)
+            }
+            Kind::Inter => {
+                let l = self.prune_rec::<FWD>(l, memo);
+                let r = self.prune_rec::<FWD>(r, memo);
+                self.mk_inter(l, r)
+            }
+            Kind::Compl => {
+                let l = self.prune_rec::<FWD>(l, memo);
+                self.mk_compl(l)
+            }
+            Kind::Lookahead => {
+                let body = self.strip_la_body_end(self.get_lookahead_inner(node_id));
+                let body = self.prune_rec::<FWD>(body, memo);
+                let tail = self.prune_rec::<FWD>(self.get_lookahead_tail(node_id), memo);
+                self.mk_lookahead_internal(body, tail, self.get_lookahead_rel(node_id))
+            }
+            Kind::Begin => NodeId::BOT,
+            Kind::Counted => {
+                let body = self.prune_rec::<FWD>(l, memo);
+                let chain = self.prune_rec::<FWD>(r, memo);
+                self.mk_counted(body, chain, self.get_extra(node_id))
+            }
+            _ => node_id,
+        };
+        memo.insert(node_id, out);
+        out
     }
 
     pub fn mk_unions(&mut self, nodes: impl DoubleEndedIterator<Item = NodeId>) -> NodeId {

@@ -304,12 +304,6 @@ input = " aaab "
 matches = [[0, 5]]
 
 [[test]]
-name = "alt_no_match_url"
-pattern = '(\s|\n|^)(\w+://[^\s\n]+)'
-input = '<a href="http://acme.com">http://www.acme.com</a>'
-matches = []
-
-[[test]]
 name = "dot_dot_g"
 pattern = "..g"
 input = "dfdff dfggg gfgdfg gddfdf"

@@ -30,11 +30,6 @@ pub(crate) fn collect_derivative_targets(
     }
 }
 
-/// Linear prefix walk: every path through the DFA from `start` must consume
-/// exactly these bytes before it can become nullable.  Returns an empty vec
-/// when no tight constraint exists.
-/// `strip_prefix` removes leading `_*` before walking (used for rev DFA where
-/// `_*` is the no-op prefix of the concatenation `_* ∘ rev_start`).
 pub(crate) fn calc_prefix_sets_inner(
     b: &mut RegexBuilder,
     start: NodeId,
@@ -239,7 +234,7 @@ impl PrefixSets {
     }
 
     /// Lower is rarer and more profitable for SIMD skip. `u64::MAX` for an empty sequence.
-    #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+    #[cfg(any(target_arch = "x86_64", target_arch = "aarch64", all(target_arch = "wasm32", target_feature = "simd128")))]
     pub fn rarity(b: &mut RegexBuilder, sets: &[TSetId]) -> u64 {
         rarest_freq(b, sets)
     }
@@ -277,7 +272,7 @@ pub fn build_strict_literal_prefix(
     b: &mut RegexBuilder,
     node: NodeId,
 ) -> Result<Option<crate::accel::FwdPrefixSearch>, crate::Error> {
-    #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+    #[cfg(any(target_arch = "x86_64", target_arch = "aarch64", all(target_arch = "wasm32", target_feature = "simd128")))]
     {
         let sets = calc_prefix_sets_inner(b, node, false)?;
         if sets.is_empty() {
@@ -294,7 +289,7 @@ pub fn build_strict_literal_prefix(
         }
         Ok(Some(crate::accel::FwdPrefixSearch::Literal(lit)))
     }
-    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64", all(target_arch = "wasm32", target_feature = "simd128"))))]
     {
         let _ = (b, node);
         Ok(None)
@@ -316,7 +311,7 @@ pub fn build_fwd_prefix(
     build_fwd_prefix_simd(b, node)
 }
 
-#[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+#[cfg(any(target_arch = "x86_64", target_arch = "aarch64", all(target_arch = "wasm32", target_feature = "simd128")))]
 fn try_build_fwd_search(
     b: &mut RegexBuilder,
     sets: &[TSetId],
@@ -329,8 +324,8 @@ fn try_build_fwd_search(
 }
 
 /// Core of `try_build_fwd_search`, operating on raw byte sets to avoid
-/// requiring a `RegexBuilder` (used by the self-loop 2-gram heuristic).
-#[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+/// requiring a `RegexBuilder`.
+#[cfg(any(target_arch = "x86_64", target_arch = "aarch64", all(target_arch = "wasm32", target_feature = "simd128")))]
 fn try_build_fwd_search_raw(
     byte_sets_raw: &[Vec<u8>],
 ) -> Result<Option<crate::accel::FwdPrefixSearch>, crate::Error> {
@@ -433,7 +428,7 @@ fn try_build_fwd_search_raw(
     )))
 }
 
-#[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+#[cfg(any(target_arch = "x86_64", target_arch = "aarch64", all(target_arch = "wasm32", target_feature = "simd128")))]
 fn rarest_freq(b: &mut RegexBuilder, sets: &[TSetId]) -> u64 {
     sets.iter()
         .map(|&s| {
@@ -447,40 +442,12 @@ fn rarest_freq(b: &mut RegexBuilder, sets: &[TSetId]) -> u64 {
         .unwrap_or(u64::MAX)
 }
 
-#[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+#[cfg(any(target_arch = "x86_64", target_arch = "aarch64", all(target_arch = "wasm32", target_feature = "simd128")))]
 fn build_fwd_prefix_from_sets(
     b: &mut RegexBuilder,
     full_sets: &[TSetId],
     stripped_sets: &[TSetId],
 ) -> Result<(Option<crate::accel::FwdPrefixSearch>, bool), crate::Error> {
-    // 2-gram heuristic: if the bytes exclusive to stripped position 1 are much
-    // rarer than position 0, anchor on that narrower 2-gram.
-    if !full_sets.is_empty() && stripped_sets.len() >= 2 {
-        let bytes0 = b.solver().collect_bytes(stripped_sets[0]);
-        let bytes1 = b.solver().collect_bytes(stripped_sets[1]);
-        let bytes1_extra: Vec<u8> = bytes1
-            .iter()
-            .copied()
-            .filter(|c| !bytes0.contains(c))
-            .collect();
-        if !bytes1_extra.is_empty() {
-            let freq0: u64 = bytes0
-                .iter()
-                .map(|&byte| crate::simd::BYTE_FREQ[byte as usize] as u64)
-                .sum();
-            let freq1e: u64 = bytes1_extra
-                .iter()
-                .map(|&byte| crate::simd::BYTE_FREQ[byte as usize] as u64)
-                .sum();
-            if freq0 > 0 && freq1e * 8 < freq0 {
-                let raw = [bytes0, bytes1_extra];
-                if let Some(fp) = try_build_fwd_search_raw(&raw)? {
-                    return Ok((Some(fp), true));
-                }
-            }
-        }
-    }
-
     // Prefer stripped when it is meaningfully rarer (≥4× rarity advantage).
     let full_rarity = PrefixSets::rarity(b, full_sets);
     let stripped_rarity = PrefixSets::rarity(b, stripped_sets);
@@ -504,7 +471,7 @@ fn build_fwd_prefix_from_sets(
     Ok((None, false))
 }
 
-#[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+#[cfg(any(target_arch = "x86_64", target_arch = "aarch64", all(target_arch = "wasm32", target_feature = "simd128")))]
 fn build_fwd_prefix_simd(
     b: &mut RegexBuilder,
     node: NodeId,
@@ -517,7 +484,7 @@ fn build_fwd_prefix_simd(
 
 const MAX_RANGE_SETS: usize = 3;
 
-#[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+#[cfg(any(target_arch = "x86_64", target_arch = "aarch64", all(target_arch = "wasm32", target_feature = "simd128")))]
 fn try_build_fwd_range_prefix(
     byte_sets_raw: &[Vec<u8>],
     anchor_pos: usize,
@@ -551,7 +518,7 @@ fn try_build_fwd_range_prefix(
     ))
 }
 
-#[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+#[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64", all(target_arch = "wasm32", target_feature = "simd128"))))]
 fn build_fwd_prefix_simd(
     _b: &mut RegexBuilder,
     _node: NodeId,
@@ -562,7 +529,7 @@ fn build_fwd_prefix_simd(
 /// Build a `RevPrefixSearch` from byte sets, or return `None` if the sets are
 /// too wide to be useful.  `len >= 2` required (single-byte case is handled by
 /// the DFA skip system).
-#[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+#[cfg(any(target_arch = "x86_64", target_arch = "aarch64", all(target_arch = "wasm32", target_feature = "simd128")))]
 pub(crate) fn build_rev_prefix_search(
     b: &mut RegexBuilder,
     sets: &[TSetId],
@@ -645,8 +612,6 @@ pub enum PrefixKind {
     /// Finds candidate positions that are on the shortest path to a match end.
     /// The match may start before the candidate - a leftward walk of the fwd DFA
     /// from the initial state extends the match start backwards.
-    #[allow(dead_code)]
-    /// TODO: reenable after prefixes are refactored
     UnanchoredFwd(crate::accel::FwdPrefixSearch),
 
     /// Forward prefix for patterns with a leading lookbehind (e.g. `\b`, `^`).
@@ -710,7 +675,7 @@ pub fn select_prefix(
     select_prefix_simd(b, node, rev_start, has_look, min_len)
 }
 
-#[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+#[cfg(any(target_arch = "x86_64", target_arch = "aarch64", all(target_arch = "wasm32", target_feature = "simd128")))]
 fn strip_leading_lookbehind(b: &RegexBuilder, mut node: NodeId) -> NodeId {
     use resharp_algebra::Kind;
     loop {
@@ -725,7 +690,7 @@ fn strip_leading_lookbehind(b: &RegexBuilder, mut node: NodeId) -> NodeId {
     node
 }
 
-#[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+#[cfg(any(target_arch = "x86_64", target_arch = "aarch64", all(target_arch = "wasm32", target_feature = "simd128")))]
 fn select_prefix_simd(
     b: &mut RegexBuilder,
     node: NodeId,
@@ -765,16 +730,12 @@ fn select_prefix_simd(
             build_fwd_prefix_from_sets(b, &sets.fwd_potential, &sets.fwd_potential_stripped)?;
 
         if let Some(fp) = fp {
-            if !stripped {
-                return Ok((Some(PrefixKind::AnchoredFwd(fp)), None));
-            }
-            // TODO: excluded and waiting till prefix refactor
-            // let kind = if stripped {
-            //     PrefixKind::UnanchoredFwd(fp)
-            // } else {
-            //     PrefixKind::AnchoredFwd(fp)
-            // };
-            // return Ok((Some(kind), None));
+            let kind = if stripped {
+                PrefixKind::UnanchoredFwd(fp)
+            } else {
+                PrefixKind::AnchoredFwd(fp)
+            };
+            return Ok((Some(kind), None));
         }
         // strict literal fallback (no _* stripping, exact literal)
         if b.is_infinite(node) {
@@ -800,7 +761,7 @@ fn select_prefix_simd(
     Ok((None, None))
 }
 
-#[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+#[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64", all(target_arch = "wasm32", target_feature = "simd128"))))]
 fn select_prefix_simd(
     _b: &mut RegexBuilder,
     _node: NodeId,

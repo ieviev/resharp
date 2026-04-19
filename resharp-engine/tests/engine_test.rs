@@ -1712,7 +1712,62 @@ fn date_optional_time_second_match() {
 }
 
 #[test]
-fn stack_overflow_repro_22620() {
+fn alt_embedded_line_anchor_crosses_newline() {
+    assert!(Regex::new(r"^.*(a|^b)").is_err());
+    assert!(Regex::new(r".*(a|^b)").is_err());
+    assert!(Regex::new(r"(a|\bb)").is_err());
+    assert!(Regex::new(r"^a|^b").is_ok());
+    assert!(Regex::new(r"^(ab)").is_ok());
+}
+
+#[test]
+fn word_boundaries_loop() {
     let re = resharp::Regex::new(r"\(\?[:=!]|\)|\{\d+\b,?\d*\}|[+*]\?|[()$^+*?.]").unwrap();
     let _ = re.find_all(b"$").unwrap();
 }
+
+#[test]
+fn repro_unanchored_fwd_ascii_word() {
+    let re = Regex::new(r"\w\w-\w\w").unwrap();
+    let hay = b"xxxxx00-00yyyyy";
+    let matches: Vec<_> = re.find_all(hay).unwrap().into_iter().map(|m| (m.start, m.end)).collect();
+    assert_eq!(matches, vec![(5, 10)]);
+}
+
+#[test]
+fn repro_unanchored_fwd_date() {
+    let re = Regex::new(r"\d{4}-\d\d?-\d\d?((T| )\d{2}:\d{2}:\d{2})?").unwrap();
+    let matches: Vec<_> = re.find_all(b"0000-0-0 0000-0-0").unwrap()
+        .into_iter().map(|m| (m.start, m.end)).collect();
+    assert_eq!(matches, vec![(0, 8), (9, 17)]);
+}
+
+#[test]
+fn fwd_la_1() {
+    let pattern = r"(?:\[[^\]]*\]|[^\]]|\](?=[^\[]*\]))*";
+    let hay = include_bytes!("../../data/haystacks/smallserver.txt");
+    let ops = EngineOptions::default().unicode(resharp::UnicodeMode::Ascii);
+    let re = Regex::with_options(pattern, ops).unwrap();
+    let _ = re.find_all(hay).unwrap();
+}
+
+#[test]
+fn fwd_la_2() {
+    let pattern = r"^((?=.*[0-9])(?=.*[a-z])(?=.*[A-Z])(?=.*[@#$%]).{6})";
+    let hay = include_bytes!("../../data/haystacks/smallserver.txt");
+    let ops = EngineOptions::default().unicode(resharp::UnicodeMode::Ascii);
+    let re = Regex::with_options(pattern, ops).unwrap();
+    let _ = re.find_all(hay).unwrap();
+}
+
+#[test]
+fn fwd_la_3() {
+    let pattern = "<(?:\\/?(?!(?:div|p|br|span)>)\\w+|(?:(?!(?:span style=\"white-space:\\s?pre;?\">)|br\\s?\\/>))\\w+\\s[^>]+)>";
+    let hay = include_bytes!("../../data/haystacks/smallserver.txt");
+    let ops = EngineOptions::default().unicode(resharp::UnicodeMode::Ascii);
+    let re = Regex::with_options(pattern, ops).unwrap();
+    let _ = re.find_all(&hay[..2]).unwrap();
+}
+
+
+
