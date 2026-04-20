@@ -1548,7 +1548,7 @@ impl LDFA {
         if curr <= DFA_DEAD as u32 {
             return Ok(NO_MATCH);
         }
-        self.create_state(b, curr as u16)?;
+
 
         let mut min_start = NO_MATCH;
         let mask = if start_pos == begin {

@@ -712,20 +712,26 @@ fn select_prefix_simd(
             if b.get_kind(lb) == Kind::Lookbehind {
                 let lb_inner = b.get_lookbehind_inner(lb);
                 let lb_nonbegin = b.nonbegins(lb_inner);
-                let lb_stripped = b.strip_prefix_safe(lb_nonbegin);
-                let (_, lb_max) = b.get_min_max_length(lb_stripped);
-                if (1..=4).contains(&lb_max) {
+                let mut lb_stripped = lb_nonbegin;
+                loop {
+                    let after_strip = b.strip_prefix_safe(lb_stripped);
+                    let after_nb = b.nonbegins(after_strip);
+                    if after_nb == lb_stripped { break; }
+                    lb_stripped = after_nb;
+                }
+                let lb_fixed = b.get_fixed_length(lb_stripped);
+                if matches!(lb_fixed, Some(1..=4)) {
                     let lb_body = b.mk_concat(lb_stripped, body);
                     let (fp, stripped) = build_fwd_prefix(b, lb_body)?;
-                    if let (Some(_), false) = (fp, stripped) {
-                        // TODO: invalid for now, need to reimplemnet the prefixes
-                        // return Ok((Some(PrefixKind::AnchoredFwdLb(fp)), None));
+                    if let (Some(fp), false) = (fp, stripped) {
+                        return Ok((Some(PrefixKind::AnchoredFwdLb(fp)), None));
                     }
                 }
             }
         }
     }
-    if !has_look {
+
+    if !has_look || !node.contains_lookbehind(b) {
         let (fp, stripped) =
             build_fwd_prefix_from_sets(b, &sets.fwd_potential, &sets.fwd_potential_stripped)?;
 

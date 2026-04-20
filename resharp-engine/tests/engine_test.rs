@@ -278,6 +278,35 @@ fn complement_bounded_repeat_inter_3() {
     assert_eq!(r[0], (0, 5), "complement+alpha+contains_d: got {:?}", r);
 }
 
+#[test]
+fn anchored_alt_star_rejected() {
+    use resharp::{EngineOptions, UnicodeMode};
+    for mode in [UnicodeMode::Default, UnicodeMode::Javascript] {
+        let opts = EngineOptions::default().unicode(mode);
+        let err = Regex::with_options("(^\\*|REMARK)*", opts).err();
+        assert!(err.is_some(), "mode={:?} expected rejection, got ok", mode);
+    }
+}
+
+#[test]
+fn space_newline_space() {
+    use resharp::{EngineOptions, UnicodeMode};
+    let mk = || EngineOptions::default().unicode(UnicodeMode::Javascript);
+    let line = "abcdefghij abcdefghij abcdefghij abcdefg ";
+    let mut hay = String::new();
+    while hay.len() < 1_000_000 { hay.push_str(line); hay.push('\n'); }
+    let bytes = hay.as_bytes();
+    for pat in [" *\\n *", " *\\n", "\\n *", "\\n", " +\\n +"] {
+        let re = Regex::with_options(pat, mk()).unwrap();
+        let _ = re.find_all(bytes).unwrap();
+        let t = std::time::Instant::now();
+        let m = re.find_all(bytes).unwrap();
+        let dt = t.elapsed();
+        let mbps = (bytes.len() as f64 / 1e6) / dt.as_secs_f64();
+        eprintln!("pat={:?} matches={} dt={:?} MB/s={:.2}", pat, m.len(), dt, mbps);
+    }
+}
+
 fn extract_prefix(pattern: &str) -> Vec<u8> {
     let mut b = resharp_algebra::RegexBuilder::new();
     let node = resharp_parser::parse_ast(&mut b, pattern).unwrap();
@@ -1761,6 +1790,16 @@ fn fwd_la_2() {
 }
 
 #[test]
+fn fwd_la_2_js() {
+    let pattern = r"^(?=.{8,})(?=.*[A-Z])(?=.*[a-z])(?=.*[0-9])(?=.*[A-Za-z0-9]).*$";
+    let hay = include_bytes!("../../data/haystacks/smallserver.txt");
+    let ops = EngineOptions::default().unicode(resharp::UnicodeMode::Ascii);
+    let re = Regex::with_options(pattern, ops).unwrap();
+    let _ = re.find_all(&hay[..50]).unwrap();
+}
+
+
+#[test]
 fn fwd_la_3() {
     let pattern = "<(?:\\/?(?!(?:div|p|br|span)>)\\w+|(?:(?!(?:span style=\"white-space:\\s?pre;?\">)|br\\s?\\/>))\\w+\\s[^>]+)>";
     let hay = include_bytes!("../../data/haystacks/smallserver.txt");
@@ -1770,4 +1809,17 @@ fn fwd_la_3() {
 }
 
 
-
+#[test]
+fn word_boundary_rare_literal_modes() {
+    use resharp::{EngineOptions, UnicodeMode};
+    let bytes = std::fs::read("/home/ian/f/myrepos/resharp-wasm/test/data/haystacks/rust-src-tools-3b0d4813.txt").unwrap();
+    for mode in [UnicodeMode::Ascii, UnicodeMode::Default, UnicodeMode::Javascript, UnicodeMode::Full] {
+        let re = Regex::with_options("\\bGIT_PARAMS\\b", EngineOptions::default().unicode(mode)).unwrap();
+        let _ = re.find_all(&bytes).unwrap();
+        let t = std::time::Instant::now();
+        let m = re.find_all(&bytes).unwrap();
+        let dt = t.elapsed();
+        let mbps = (bytes.len() as f64 / 1e6) / dt.as_secs_f64();
+        eprintln!("mode={:?} matches={} dt={:?} MB/s={:.1}", mode, m.len(), dt, mbps);
+    }
+}

@@ -12,7 +12,7 @@ use std::collections::{BTreeSet, VecDeque};
 use std::fmt::Debug;
 use std::fmt::Write;
 use std::hash::Hash;
-pub use unicode_classes::UnicodeClassCache;
+pub use unicode_classes::{neg_class, utf8_char, UnicodeClassCache};
 
 use crate::nulls::{NullState, Nullability, NullsBuilder, NullsId};
 pub mod nulls;
@@ -226,7 +226,7 @@ impl MetadataBuilder {
 
     fn flags_star(&self, body: MetadataId, body_id: NodeId) -> MetaFlags {
         let left = &self.array[body.0 as usize].flags;
-        let contains = left.and(MetaFlags::CONTAINS_LOOKAROUND.or(MetaFlags::CONTAINS_INTER));
+        let contains = self.get_contains(*left);
         // BOT* = EPS (empty string only), not infinite
         let inf = if body_id == NodeId::BOT {
             MetaFlags::ZERO
@@ -2274,6 +2274,42 @@ impl RegexBuilder {
             return Some(right);
         }
 
+        if left.is_inter(self) && right.is_inter(self) {
+            let mut lconj: Vec<NodeId> = Vec::new();
+            left.any_inter_component(self, |v| {
+                lconj.push(v);
+                false
+            });
+            let lconj_initial = lconj.len();
+            let mut common = NodeId::TS;
+            let mut r_rest = NodeId::TS;
+            let mut cur = right;
+            loop {
+                let (v, next) = if cur.kind(self) == Inter {
+                    (cur.left(self), Some(cur.right(self)))
+                } else {
+                    (cur, None)
+                };
+                if let Some(pos) = lconj.iter().position(|&x| x == v) {
+                    lconj.swap_remove(pos);
+                    common = self.mk_inter(v, common);
+                } else {
+                    r_rest = self.mk_inter(v, r_rest);
+                }
+                match next {
+                    Some(n) => cur = n,
+                    None => break,
+                }
+            }
+            if lconj.len() < lconj_initial {
+                let l_rest = lconj
+                    .iter()
+                    .fold(NodeId::TS, |acc, &v| self.mk_inter(v, acc));
+                let inner_union = self.mk_union(l_rest, r_rest);
+                return Some(self.mk_inter(common, inner_union));
+            }
+        }
+
         if left.is_pred(self) && right.is_pred(self) {
             let l = left.pred_tset(self);
             let r = right.pred_tset(self);
@@ -2508,29 +2544,6 @@ impl RegexBuilder {
                     return Some(self.mk_concat(left.left(self), new_right));
                 }
             }
-        }
-
-        if self.get_kind(right) == Kind::Union {
-            let mut result = NodeId::BOT;
-            self.iter_unions_b(
-                right,
-                &mut (|b, v| {
-                    let new_inter = b.mk_inter(v, left);
-                    result = b.mk_union(result, new_inter);
-                }),
-            );
-            return Some(result);
-        }
-        if self.get_kind(left) == Kind::Union {
-            let mut result = NodeId::BOT;
-            self.iter_unions_b(
-                left,
-                &mut (|b, v| {
-                    let new_inter = b.mk_inter(v, right);
-                    result = b.mk_union(result, new_inter);
-                }),
-            );
-            return Some(result);
         }
 
         if self.get_kind(right) == Kind::Compl && right.left(self) == left {

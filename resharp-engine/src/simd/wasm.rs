@@ -13,7 +13,6 @@ unsafe fn teddy_chunk<const N: usize>(
     masks_hi: &[v128; 3],
     nib: v128,
 ) -> v128 {
-    // N in {1,2,3} — branches below are const-folded.
     let load = |i: usize| v128_load(ptr.add(pos + offsets[i]) as *const v128);
     let lookup = |i: usize, c: v128| {
         v128_and(

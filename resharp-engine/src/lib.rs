@@ -40,6 +40,9 @@
 pub(crate) mod accel;
 pub(crate) mod engine;
 pub(crate) mod prefix;
+
+
+
 pub(crate) mod simd;
 
 #[doc(hidden)]
@@ -150,15 +153,19 @@ impl From<resharp_algebra::AlgebraError> for Error {
 /// Controls which Unicode character tables `\w` and `\d` use.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum UnicodeMode {
-    /// ASCII only: `\w` = `[a-zA-Z0-9_]`, `\d` = `[0-9]`.
+    /// `\w` = `[a-zA-Z0-9_]`, `\d` = `[0-9]`. `.` and
+    /// bracketed-class negation step byte-by-byte. Fastest
     Ascii,
     /// Default: covers major scripts up through U+07FF (Latin, Greek, Cyrillic,
     /// Hebrew, Arabic, ...). All encoded as 1- or 2-byte UTF-8 sequences.
     #[default]
-    Unicode,
+    Default,
     /// All Unicode word/digit characters, including CJK, historic scripts,
     /// and any code points requiring 3- or 4-byte UTF-8 sequences.
     Full,
+    /// ASCII `\w`/`\d`/`\s`, but `.`, `[^...]`, `\W`/`\D`/`\S` match one full
+    /// UTF-8 codepoint. Matches default JS `RegExp` behavior (no `u` flag).
+    Javascript,
 }
 
 /// Engine configuration, passed to [`Regex::with_options`].
@@ -188,7 +195,7 @@ impl Default for EngineOptions {
             dfa_threshold: 0,
             max_dfa_capacity: u16::MAX as usize,
             lookahead_context_max: 800,
-            unicode: UnicodeMode::Unicode,
+            unicode: UnicodeMode::Default,
             case_insensitive: false,
             dot_matches_new_line: false,
             ignore_whitespace: false,
@@ -370,6 +377,7 @@ impl Regex {
         let pflags = resharp_parser::PatternFlags {
             unicode: opts.unicode != UnicodeMode::Ascii,
             full_unicode: opts.unicode == UnicodeMode::Full,
+            ascii_perl_classes: opts.unicode == UnicodeMode::Javascript,
             case_insensitive: opts.case_insensitive,
             dot_matches_new_line: opts.dot_matches_new_line,
             ignore_whitespace: opts.ignore_whitespace,
@@ -454,10 +462,16 @@ impl Regex {
                 let lb = node.left(&b);
                 let lb_inner = b.get_lookbehind_inner(lb);
                 let lb_nonbegin = b.nonbegins(lb_inner);
-                let lb_stripped = b.strip_prefix_safe(lb_nonbegin);
-                let (_, lb_max) = b.get_min_max_length(lb_stripped);
+                let mut lb_stripped = lb_nonbegin;
+                loop {
+                    let after_strip = b.strip_prefix_safe(lb_stripped);
+                    let after_nb = b.nonbegins(after_strip);
+                    if after_nb == lb_stripped { break; }
+                    lb_stripped = after_nb;
+                }
+                let lb_fixed = b.get_fixed_length(lb_stripped).expect("AnchoredFwdLb requires fixed-length lb");
                 let begin_nullable = b.nullability(lb_inner).has(Nullability::BEGIN);
-                (begin_nullable, lb_max.min(4) as u8)
+                (begin_nullable, lb_fixed as u8)
             } else {
                 (false, 0)
             };
@@ -694,6 +708,161 @@ impl Regex {
             return self.find_all_fwd_bounded(input);
         }
         self.find_all_dfa(input)
+    }
+
+    #[allow(missing_docs)]
+    pub fn bfs_tails_dump(&self, max_depth: u32) -> String {
+        use resharp_algebra::{Kind, NodeId};
+        use std::collections::HashSet;
+        let inner = &mut *self.inner.lock().unwrap();
+        let b = &mut inner.b;
+        let ts = &mut inner.rev_ts;
+        let num_mt = ts.minterms.len() as u32;
+        let mut seed: HashSet<u16> = HashSet::new();
+        for mt in 0..num_mt {
+            let s = ts.begin_table[mt as usize];
+            if s > engine::DFA_DEAD { ts.create_state(b, s).ok(); seed.insert(s); }
+        }
+        let mut seen: HashSet<u16> = seed.clone();
+        let mut states_at_depth: Vec<Vec<u16>> = vec![seed.into_iter().collect()];
+        for _ in 1..=max_depth {
+            let mut next = Vec::new();
+            for &s in states_at_depth.last().unwrap() {
+                for mt in 0..num_mt {
+                    let ns = ts.lazy_transition(b, s, mt).unwrap_or(engine::DFA_DEAD);
+                    if ns > engine::DFA_DEAD && seen.insert(ns) { next.push(ns); }
+                }
+            }
+            if next.is_empty() { break; }
+            states_at_depth.push(next);
+        }
+        fn flatten_union(b: &resharp_algebra::RegexBuilder, n: NodeId, out: &mut Vec<NodeId>) {
+            if b.get_kind(n) == Kind::Union { flatten_union(b, n.left(b), out); flatten_union(b, n.right(b), out); }
+            else { out.push(n); }
+        }
+        fn strip_star(b: &resharp_algebra::RegexBuilder, mut n: NodeId) -> NodeId {
+            loop {
+                if b.get_kind(n) != Kind::Concat { return n; }
+                let lk = b.get_kind(n.left(b));
+                if lk == Kind::Star || lk == Kind::Compl { n = n.right(b); continue; }
+                return n;
+            }
+        }
+        let mut out = String::new();
+        for (d, states) in states_at_depth.iter().enumerate() {
+            for &s in states {
+                let node = ts.state_nodes[s as usize];
+                let mut branches = Vec::new();
+                flatten_union(b, node, &mut branches);
+                out.push_str(&format!("  depth={} state={} {} branches:\n", d, s, branches.len()));
+                for br in branches {
+                    let t = strip_star(b, br);
+                    out.push_str(&format!("    tail: {}\n", b.pp(t)));
+                }
+            }
+        }
+        out
+    }
+
+    #[allow(missing_docs)]
+    pub fn find_convergence_node(&self, max_depth: u32) -> Option<(String, u32)> {
+        let (node, depth) = self.find_convergence_node_id(max_depth)?;
+        let inner = &*self.inner.lock().unwrap();
+        Some((inner.b.pp(node), depth))
+    }
+
+    #[allow(missing_docs)]
+    pub fn find_convergence_node_id(&self, max_depth: u32) -> Option<(resharp_algebra::NodeId, u32)> {
+        use resharp_algebra::{Kind, NodeId};
+        use std::collections::{HashMap, HashSet};
+        let inner = &mut *self.inner.lock().unwrap();
+        let b = &mut inner.b;
+        let ts = &mut inner.rev_ts;
+        let num_mt = ts.minterms.len() as u32;
+        let mut seed: HashSet<u16> = HashSet::new();
+        for mt in 0..num_mt {
+            let s = ts.begin_table[mt as usize];
+            if s > engine::DFA_DEAD { ts.create_state(b, s).ok(); seed.insert(s); }
+        }
+        if seed.is_empty() { return None; }
+        let mut seen: HashSet<u16> = seed.clone();
+        let mut states_at_depth: Vec<Vec<u16>> = vec![seed.into_iter().collect()];
+        for _ in 1..=max_depth {
+            let mut next = Vec::new();
+            for &s in states_at_depth.last().unwrap() {
+                for mt in 0..num_mt {
+                    let ns = ts.lazy_transition(b, s, mt).unwrap_or(engine::DFA_DEAD);
+                    if ns > engine::DFA_DEAD && seen.insert(ns) {
+                        next.push(ns);
+                    }
+                }
+            }
+            if next.is_empty() { break; }
+            states_at_depth.push(next);
+        }
+
+        fn flatten_union(b: &resharp_algebra::RegexBuilder, n: NodeId, out: &mut Vec<NodeId>) {
+            if b.get_kind(n) == Kind::Union {
+                flatten_union(b, n.left(b), out);
+                flatten_union(b, n.right(b), out);
+            } else {
+                out.push(n);
+            }
+        }
+        fn strip_star_prefix(b: &resharp_algebra::RegexBuilder, mut n: NodeId) -> NodeId {
+            loop {
+                if b.get_kind(n) != Kind::Concat { return n; }
+                let lk = b.get_kind(n.left(b));
+                if lk == Kind::Star || lk == Kind::Compl { n = n.right(b); continue; }
+                return n;
+            }
+        }
+
+        let mut tails_per_state: HashMap<u16, HashSet<NodeId>> = HashMap::new();
+        for states in &states_at_depth {
+            for &s in states {
+                let node = ts.state_nodes[s as usize];
+                let mut branches = Vec::new();
+                flatten_union(b, node, &mut branches);
+                let mut tails: HashSet<NodeId> = HashSet::new();
+                for br in branches {
+                    tails.insert(strip_star_prefix(b, br));
+                }
+                tails_per_state.insert(s, tails);
+            }
+        }
+
+        fn has_leading_lb(b: &resharp_algebra::RegexBuilder, n: NodeId) -> bool {
+            if b.get_kind(n) != Kind::Concat { return false; }
+            matches!(b.get_kind(n.left(b)), Kind::Lookbehind | Kind::Compl)
+        }
+
+        let mut all_tails: HashSet<NodeId> = HashSet::new();
+        for ts_set in tails_per_state.values() {
+            for &t in ts_set {
+                if t == NodeId::BOT || t == NodeId::MISSING || t == NodeId::EPS { continue; }
+                all_tails.insert(t);
+            }
+        }
+
+        let max_d = states_at_depth.len() - 1;
+        let mut best: Option<(bool, u32, usize, NodeId)> = None;
+        for t in all_tails {
+            let mut peel: Option<u32> = None;
+            for p in 0..=max_d {
+                let ok = (p..=max_d).all(|d| states_at_depth[d].iter().all(|s| tails_per_state[&s].contains(&t)));
+                if ok { peel = Some(p as u32); break; }
+            }
+            let Some(p) = peel else { continue };
+            let clean = !has_leading_lb(b, t);
+            let len = b.pp(t).len();
+            let key = (!clean, p, len, t);
+            if best.as_ref().map_or(true, |cur| (cur.0, cur.1, cur.2, cur.3) > (key.0, key.1, key.2, key.3)) {
+                best = Some(key);
+            }
+        }
+        let (_dirty, p, _len, node) = best?;
+        Some((node, p))
     }
 
     #[cfg(feature = "diag")]
@@ -1206,7 +1375,6 @@ impl Regex {
                 search_start = candidate + 1;
             }
         }
-
         Ok(inner.matches.clone())
     }
 

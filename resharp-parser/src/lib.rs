@@ -35,6 +35,9 @@ pub struct PatternFlags {
     pub dot_matches_new_line: bool,
     /// allow whitespace and `#` comments in the pattern.
     pub ignore_whitespace: bool,
+    /// ASCII `\w`/`\d`/`\s` tables, but
+    /// negated perl classes (`\W`/`\D`/`\S`) and `.` match a full codepoint
+    pub ascii_perl_classes: bool,
 }
 
 // arbitrary safeguards, these will not prevent intentional DoS patterns
@@ -51,6 +54,7 @@ impl Default for PatternFlags {
             case_insensitive: false,
             dot_matches_new_line: false,
             ignore_whitespace: false,
+            ascii_perl_classes: false,
         }
     }
 }
@@ -204,6 +208,7 @@ pub struct ResharpParser<'s> {
     dot_all: Cell<bool>,
     global_unicode: bool,
     global_full_unicode: bool,
+    global_ascii_perl: bool,
     global_case_insensitive: bool,
     comments: RefCell<Vec<ast::Comment>>,
     stack_group: RefCell<Vec<GroupState>>,
@@ -339,8 +344,9 @@ impl<'s> ResharpParser<'s> {
             empty_min_range: false,
             ignore_whitespace: Cell::new(flags.ignore_whitespace),
             dot_all: Cell::new(flags.dot_matches_new_line),
-            global_unicode: flags.unicode || flags.full_unicode,
+            global_unicode: flags.unicode || flags.full_unicode || flags.ascii_perl_classes,
             global_full_unicode: flags.full_unicode,
+            global_ascii_perl: flags.ascii_perl_classes,
             global_case_insensitive: flags.case_insensitive,
             comments: RefCell::new(vec![]),
             stack_group: RefCell::new(vec![]),
@@ -1153,7 +1159,32 @@ impl<'s> ResharpParser<'s> {
         match w {
             Some((_, _, value)) => Ok(*value),
             None => {
-                let translated = if self.global_unicode {
+                let translated = if self.global_ascii_perl {
+                    let pos = match kind {
+                        regex_syntax::ast::ClassPerlKind::Word => {
+                            let az = tb.mk_range_u8(b'a', b'z');
+                            let big = tb.mk_range_u8(b'A', b'Z');
+                            let dig = tb.mk_range_u8(b'0', b'9');
+                            let us = tb.mk_u8(b'_');
+                            tb.mk_unions([az, big, dig, us].into_iter())
+                        }
+                        regex_syntax::ast::ClassPerlKind::Digit => tb.mk_range_u8(b'0', b'9'),
+                        regex_syntax::ast::ClassPerlKind::Space => {
+                            let sp = tb.mk_u8(b' ');
+                            let tab = tb.mk_u8(b'\t');
+                            let nl = tb.mk_u8(b'\n');
+                            let cr = tb.mk_u8(b'\r');
+                            let ff = tb.mk_u8(0x0C);
+                            let vt = tb.mk_u8(0x0B);
+                            tb.mk_unions([sp, tab, nl, cr, ff, vt].into_iter())
+                        }
+                    };
+                    if negated {
+                        resharp_algebra::neg_class(tb, pos)
+                    } else {
+                        pos
+                    }
+                } else if self.global_unicode {
                     match kind {
                         regex_syntax::ast::ClassPerlKind::Word => {
                             if self.global_full_unicode {
@@ -1404,7 +1435,7 @@ impl<'s> ResharpParser<'s> {
         let (word_id, not_word_id) = if self.global_full_unicode {
             self.unicode_classes.ensure_word_full(tb);
             (self.unicode_classes.word, self.unicode_classes.non_word)
-        } else if self.global_unicode {
+        } else if self.global_unicode && !self.global_ascii_perl {
             self.unicode_classes.ensure_word(tb);
             (self.unicode_classes.word, self.unicode_classes.non_word)
         } else {
@@ -1492,12 +1523,13 @@ impl<'s> ResharpParser<'s> {
             }
             Ast::Top(_) => Ok(NodeId::TOP),
             Ast::Dot(_) => {
-                if self.dot_all.get() {
-                    Ok(NodeId::TOP)
-                } else {
-                    let hirv = hir::Hir::dot(hir::Dot::AnyByteExceptLF);
-                    self.hir_to_node_id(&hirv, tb)
-                }
+                let hirv = match (self.global_ascii_perl, self.dot_all.get()) {
+                    (true, true) => hir::Hir::dot(hir::Dot::AnyChar),
+                    (true, false) => hir::Hir::dot(hir::Dot::AnyCharExceptLF),
+                    (false, true) => return Ok(NodeId::TOP),
+                    (false, false) => hir::Hir::dot(hir::Dot::AnyByteExceptLF),
+                };
+                self.hir_to_node_id(&hirv, tb)
             }
             Ast::Assertion(a) => match &a.kind {
                 ast::AssertionKind::StartText => Ok(NodeId::BEGIN),

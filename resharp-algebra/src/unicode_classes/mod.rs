@@ -7,7 +7,8 @@ pub use classes::{
     build_word_class_full,
 };
 
-pub(crate) fn utf8_char(b: &mut RegexBuilder) -> NodeId {
+/// Node matching any single UTF-8 codepoint.
+pub fn utf8_char(b: &mut RegexBuilder) -> NodeId {
     let ascii = b.mk_range_u8(0, 127);
     let cont = b.mk_range_u8(0x80, 0xBF);
     let c2 = b.mk_range_u8(0xC0, 0xDF);
@@ -19,7 +20,8 @@ pub(crate) fn utf8_char(b: &mut RegexBuilder) -> NodeId {
     b.mk_unions([ascii, c2s, e0s, f0s].into_iter())
 }
 
-fn neg_class(b: &mut RegexBuilder, positive: NodeId) -> NodeId {
+/// Complement of `positive` restricted to the UTF-8 codepoint universe.
+pub fn neg_class(b: &mut RegexBuilder, positive: NodeId) -> NodeId {
     let neg = b.mk_compl(positive);
     let uc = utf8_char(b);
     b.mk_inters([neg, uc].into_iter())
