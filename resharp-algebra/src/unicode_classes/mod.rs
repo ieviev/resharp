@@ -3,8 +3,8 @@ mod classes;
 use crate::{NodeId, RegexBuilder};
 
 pub use classes::{
-    build_digit_class, build_digit_class_full, build_space_class, build_word_class,
-    build_word_class_full,
+    build_digit_class, build_digit_class_full, build_space_class, build_space_class_full,
+    build_word_class, build_word_class_full,
 };
 
 /// Node matching any single UTF-8 codepoint.
@@ -82,6 +82,13 @@ impl UnicodeClassCache {
     pub fn ensure_space(&mut self, b: &mut RegexBuilder) {
         if self.space == NodeId::MISSING {
             self.space = build_space_class(b);
+            self.non_space = neg_class(b, self.space);
+        }
+    }
+
+    pub fn ensure_space_full(&mut self, b: &mut RegexBuilder) {
+        if self.space == NodeId::MISSING {
+            self.space = build_space_class_full(b);
             self.non_space = neg_class(b, self.space);
         }
     }

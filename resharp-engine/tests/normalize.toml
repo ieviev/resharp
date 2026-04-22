@@ -12,5 +12,9 @@ pattern = 'aa(?!a) *'
 pp = 'aa(?=~(a_*)\z){∅}❮ *❯'
 
 
+[[test]]
+pattern = '\s'
+pp = '[\t-\r ]'
+
 
 

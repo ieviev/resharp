@@ -91,26 +91,33 @@ Without `&\p{utf8}`, a complement pattern will match any byte string that doesn'
 |-----------|--------|----------------------|
 | `\w` | word chars up to 2-byte UTF-8 (U+07FF) | `\p{Letter}` \| `\p{Number}` \| `\_` |
 | `\d` | ASCII `[0-9]` only | `\p{Number}` |
-| `\s` | whitespace up to 2-byte UTF-8 (U+07FF) | `\p{White_Space}` |
-| `\W` | non-word (UTF-8 safe) | |
-| `\D` | non-digit (`[^0-9]`) | |
-| `\S` | non-whitespace (UTF-8 safe) | |
+| `\s` | ASCII `[\t-\r ]` | `\p{White_Space}` |
+| `\W` | non-word | |
+| `\D` | non-digit | |
+| `\S` | non-whitespace | |
 
-`\w`, `\s`, `\b` cover U+0000..U+07FF (ASCII, Latin Extended, Greek, Cyrillic, Hebrew, Arabic, through NKo). Scripts in 3+ byte UTF-8 (Devanagari, Thai, CJK, …) need `\p{Class}`.
+`\w` and `\b` cover U+0000..U+07FF (ASCII, Latin Extended, Greek, Cyrillic, Hebrew, Arabic, through NKo). Scripts in 3+ byte UTF-8 (Devanagari, Thai, CJK, …) need `\p{Class}`.
 
-`\d` is ASCII `[0-9]` only. Non-ASCII digits are rare and their inclusion hurts DFA size and prefix acceleration. Use `\p{Number}` for the full `Nd` category.
+`\d` and `\s` are ASCII-only. Non-ASCII digits and non-ASCII whitespace are rare and their inclusion hurts DFA size and prefix acceleration. Use `\p{Number}` / `\p{White_Space}` for the full Unicode sets.
 
 ### Rationale
 
-The goal is not strict conformance to the Unicode spec, it's to reduce unintended performance foot-guns where possible while still covering what real patterns actually use.
+The goal of the default configuration is not strict conformance to the Unicode spec, it's to reduce unintended performance foot-guns where possible while still covering what real patterns actually use. Full Unicode coverage is available via `UnicodeMode::Full` or explicit `\p{Class}` escapes.
+
+`UnicodeMode` has four settings:
+
+- `Ascii`: `\w`=`[a-zA-Z0-9_]`, `\d`=`[0-9]`, `.` and negated classes step byte-by-byte. Fastest.
+- `Default`: common Unicode. `\w` is same as `Full` but only up to 2-byte coverage of UTF-8 (U+0000..U+07FF, through NKo); `\d`=`[0-9]` and `\s`=`[\t-\r ]`.
+- `Full`: full Unicode spec. `\w`, `\d`, and `\s` cover the full Unicode word/digit/whitespace sets including 3- and 4-byte UTF-8 codepoints (CJK, historic scripts, etc.). Matches the full Unicode spec at the cost of larger build times.
+- `Javascript`: ASCII `\w`/`\d`/`\s`, but `.`, `[^...]`, `\W`/`\D`/`\S` match one full UTF-8 codepoint. Matches default JS `RegExp` behavior (no `u` flag); intended for WASM/JavaScript usage.
 
 Full Unicode `\w` covers ~140,000 codepoints across hundreds of byte ranges. Including all of that in `\w` makes pattern build time significantly worse (ms to seconds on large patterns); match time stays roughly the same.
 
-2-byte coverage (~1,600 codepoints: ASCII through NKo) handles most real `\w` uses at a fraction of the build cost. For wider coverage use `\p{Letter}` / `\p{Number}` explicitly. If you mean "non-whitespace token", `\S` is usually what you want: it's the complement of 6 codepoints and far cheaper.
+2-byte coverage (~1,600 codepoints: ASCII through NKo) handles most real `\w` uses at a fraction of the build cost. For wider coverage use either `Full` unicode mode or `\p{Letter}` / `\p{Number}` explicitly. If you mean "non-whitespace token", `\S` is usually what you want: it's the complement of 6 codepoints and far cheaper.
 
 `\b` uses the same 2-byte `\w`; characters beyond U+07FF are treated as non-word for boundary purposes.
 
-For `\d` the trade-off lands the other way. The only non-ASCII digits that fit in 2 bytes are Arabic-Indic (U+0660..U+0669), Extended Arabic-Indic (U+06F0..U+06F9), and NKo (U+07C0..U+07C9). These are essentially nonexistent in real corpora (even Arabic/Persian digital text overwhelmingly uses ASCII digits), but including them adds three extra 2-byte branches to every `\d`, which breaks single-byte SIMD prefix acceleration and enlarges the DFA for patterns like `\d+`, `\d{n}`, or `[\w\d]+`. Defaulting `\d` to ASCII pays off on the common case; users who need Unicode digits opt in via `\p{Number}`.
+For `\d`, the only non-ASCII digits that fit in 2 bytes are Arabic-Indic (U+0660..U+0669), Extended Arabic-Indic (U+06F0..U+06F9), and NKo (U+07C0..U+07C9). These are essentially nonexistent in real corpora (even Arabic/Persian digital text overwhelmingly uses ASCII digits), but including them adds three extra 2-byte branches to every `\d`, which breaks single-byte SIMD prefix acceleration and enlarges the DFA for patterns like `\d+`, `\d{n}`, or `[\w\d]+`.
 
 `\p{Class}` expands to the full Unicode range via `regex_syntax`, with no 2-byte limit. Any [Unicode general category or script name](https://www.unicode.org/reports/tr44/#General_Category_Values) works:
 
@@ -118,7 +125,7 @@ For `\d` the trade-off lands the other way. The only non-ASCII digits that fit i
 \p{Letter}           all Unicode letters (L)
 \p{Number}           all Unicode numbers (N)
 \p{White_Space}      all Unicode whitespace
-\p{Devanagari}       Devanagari script (U+0900..U+097F)
+\p{Devanagari}       Devanagari script
 \p{Greek}            Greek script
 \p{Han}              CJK Unified Ideographs
 \p{Uppercase}        uppercase letters
@@ -145,9 +152,9 @@ You can also use explicit ranges: `[\u{0900}-\u{097F}]`.
 | `[a-z]` | range: a through z |
 | `\d` | digit (ASCII `[0-9]`; use `\p{Number}` for full Unicode) |
 | `\D` | non-digit (`[^0-9]`) |
-| `\w` | word character (unicode; `[A-Za-z0-9_]` for ascii) |
+| `\w` | word character (2-byte Unicode by default; `[A-Za-z0-9_]` for ascii, full Unicode via `UnicodeMode::Full` or `\p{Letter}`) |
 | `\W` | non-word character |
-| `\s` | whitespace (unicode; `[\t\n\v\f\r ]` for ascii) |
+| `\s` | whitespace (ASCII `[\t\n\v\f\r ]`; use `\p{White_Space}` or `UnicodeMode::Full` for full Unicode) |
 | `\S` | non-whitespace |
 | `.` | any character except `\n` |
 

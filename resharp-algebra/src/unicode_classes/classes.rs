@@ -122,11 +122,35 @@ pub fn build_digit_class(b: &mut RegexBuilder) -> NodeId {
 }
 
 pub fn build_space_class(b: &mut RegexBuilder) -> NodeId {
+    // default \s to ascii [\t\n\v\f\r ], \p{White_Space} covers the full Unicode set
+    b.mk_ranges_u8(&[(0x09, 0x0D), (0x20, 0x20)])
+}
+
+pub fn build_space_class_full(b: &mut RegexBuilder) -> NodeId {
     let n0 = b.mk_ranges_u8(&[(0x09, 0x0D), (0x20, 0x20)]);
     let n1 = b.mk_range_u8(0xC2, 0xC2);
     let n2 = b.mk_ranges_u8(&[(0x85, 0x85), (0xA0, 0xA0)]);
     let n3 = b.mk_concat(n1, n2);
-    b.mk_union(n0, n3)
+    let n4 = b.mk_range_u8(0xE1, 0xE1);
+    let n5 = b.mk_range_u8(0x9A, 0x9A);
+    let n6 = b.mk_range_u8(0x80, 0x80);
+    let n7 = b.mk_concat(n5, n6);
+    let n8 = b.mk_concat(n4, n7);
+    let n9 = b.mk_range_u8(0xE2, 0xE2);
+    let n10 = b.mk_ranges_u8(&[(0x80, 0x8A), (0xA8, 0xA9), (0xAF, 0xAF)]);
+    let n11 = b.mk_concat(n6, n10);
+    let n12 = b.mk_range_u8(0x81, 0x81);
+    let n13 = b.mk_range_u8(0x9F, 0x9F);
+    let n14 = b.mk_concat(n12, n13);
+    let n15 = b.mk_union(n11, n14);
+    let n16 = b.mk_concat(n9, n15);
+    let n17 = b.mk_range_u8(0xE3, 0xE3);
+    let n18 = b.mk_concat(n6, n6);
+    let n19 = b.mk_concat(n17, n18);
+    let n20 = b.mk_union(n16, n19);
+    let n21 = b.mk_union(n8, n20);
+    let n22 = b.mk_union(n3, n21);
+    b.mk_union(n0, n22)
 }
 
 pub fn build_word_class_full(b: &mut RegexBuilder) -> NodeId {

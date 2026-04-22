@@ -131,15 +131,15 @@ fn emit_class(b: &RegexBuilder, node: NodeId, fn_name: &str, label: &str) {
 
 fn main() {
     let classes = [
-        (r"\w", "build_word_class", "\\w"),
-        (r"\d", "build_digit_class", "\\d"),
-        (r"\s", "build_space_class", "\\s"),
+        (r"\w", "build_word_class", "\\w", 2),
+        (r"\d", "build_digit_class", "\\d", 1),
+        (r"\s", "build_space_class", "\\s", 1),
     ];
 
-    for (pos_pat, pos_fn, pos_label) in &classes {
+    for (pos_pat, pos_fn, pos_label, max_len) in &classes {
         let mut b = RegexBuilder::new();
         let pos_ranges = class_ranges(pos_pat);
-        let pos_node = build_class_from_ranges(&mut b, &pos_ranges, 2);
+        let pos_node = build_class_from_ranges(&mut b, &pos_ranges, *max_len);
         eprintln!("{pos_label}={:?} nodes={}", pos_node, b.num_nodes());
 
         emit_class(&b, pos_node, pos_fn, pos_label);
@@ -149,6 +149,7 @@ fn main() {
     for (pat, fn_name, label) in &[
         (r"\w", "build_word_class_full", "\\w(full)"),
         (r"\d", "build_digit_class_full", "\\d(full)"),
+        (r"\s", "build_space_class_full", "\\s(full)"),
     ] {
         let mut b = RegexBuilder::new();
         let pos_ranges = class_ranges(pat);

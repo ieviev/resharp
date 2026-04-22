@@ -1217,7 +1217,11 @@ impl<'s> ResharpParser<'s> {
                             }
                         }
                         regex_syntax::ast::ClassPerlKind::Space => {
-                            self.unicode_classes.ensure_space(tb);
+                            if self.global_full_unicode {
+                                self.unicode_classes.ensure_space_full(tb);
+                            } else {
+                                self.unicode_classes.ensure_space(tb);
+                            }
                             if negated {
                                 self.unicode_classes.non_space
                             } else {

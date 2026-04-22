@@ -62,7 +62,7 @@ pattern = '(?m)^(?:\S+) \S+ \S+ \[(?:[^\]]+)\] "(?:\S+) (?:\S+) [^"]*" (?:\d{3})
 prefix_rev = ""
 prefix_fwd = '\n'
 potential_rev = "[\\-0-9];[ 0-9];[ 0-9];[ 0-9];[ 0-9];[ 0-9];[ \"0-9];[\\x00-\\xBF];[\\x00-\\xBF\\xC2-\\xDF];[\\x00-\\xEF];[\\x00-\\xF4];[\\x00-\\xF7];[\\x00-\\xF7];[\\x00-\\xF7];[\\x00-\\xF7];[\\x00-\\xF7]"
-potential_fwd = "_;_;_;_;_;_;_;_;_;_;_;_;_"
+potential_fwd = "_;_;_;_;_;_;_;_;_;_;_;_;_;_"
 
 [[test]]
 name = "simple_lb"
@@ -155,12 +155,12 @@ potential_rev = "k;c;u;H"
 [[test]]
 name = "potential_start_rev_lookahead_word"
 pattern = '(?<=\s)[A-Z][a-z]+(?=\s)'
-potential_rev = '[\t-\r \x85\xA0];[a-z\xC2];[A-Za-z];[\t-\r A-Za-z\x85\xA0]'
+potential_rev = '[\t-\r ];[a-z];[A-Za-z];[\t-\r A-Za-z]'
 
 [[test]]
 name = "potential_start_rev_alternation_with_lookahead"
 pattern = '(?<=\s)(Tom|Sawyer|Finn)(?=\s)'
-potential_rev = '[\t-\r \x85\xA0];[mnr\xC2];[em-or];[Teinoy];[\t-\r FTiwy\x85\xA0]'
+potential_rev = '[\t-\r ];[mnr];[eno];[Tiy];[\t-\r Fw]'
 
 [[test]]
 name = "potential_start_rev_char_class_plus"
