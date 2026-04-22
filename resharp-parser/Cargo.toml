@@ -17,4 +17,4 @@ test = false
 
 [dependencies]
 regex-syntax = "0.8.5"
-resharp-algebra = { version = "0.3.8", path = "../resharp-algebra" }
+resharp-algebra.workspace = true

@@ -10,4 +10,4 @@ crate-type = ["cdylib"]
 test = false
 
 [dependencies]
-resharp = { path = "../resharp-engine" }
+resharp.workspace = true

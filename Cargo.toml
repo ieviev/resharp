@@ -13,9 +13,14 @@ codegen-units = 1
 opt-level = 3
 
 [workspace.package]
-version = "0.3.12"
+version = "0.4.0"
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/ieviev/resharp"
 authors = ["Ian Erik Varatalu"]
 rust-version = "1.70"
+
+[workspace.dependencies]
+resharp-algebra = { version = "0.4.0", path = "resharp-algebra" }
+resharp-parser  = { version = "0.4.0", path = "resharp-parser" }
+resharp         = { version = "0.4.0", path = "resharp-engine" }
