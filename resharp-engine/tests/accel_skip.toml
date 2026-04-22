@@ -5,6 +5,35 @@ covers literals, classes, anchors, booleans, quantifiers, lookarounds,
 and long inputs where memchr-based skip is the hot path.
 '''
 
+[[test]]
+pattern = '[aeiou]'
+input = 'hello'
+matches = [[1, 2], [4, 5]]
+
+[[test]]
+pattern = '[0-9]+(?=[aA]\.?[mM]\.?)'
+input = '10am'
+matches = [[0, 2]]
+
+[[test]]
+pattern = '.*=.*'
+input = "first\nsecond=line\nthird"
+matches = [[6, 17]]
+
+[[test]]
+pattern = '.+x'
+input = 'abcx'
+matches = [[0, 4]]
+
+[[test]]
+pattern = '^exact$'
+input = 'exact'
+matches = [[0, 5]]
+
+[[test]]
+pattern = '.*Huck.*&~(.*F.*)'
+input = "The Adventures of Huckleberry Finn', published in 1885."
+matches = [[0, 30]]
 
 [[test]]
 pattern = 'world$'
@@ -22,16 +51,6 @@ input = '12345'
 matches = [[0, 5]]
 
 [[test]]
-pattern = '\d+(?=[aA]\.?[mM]\.?)'
-input = '10am'
-matches = [[0, 2]]
-
-[[test]]
-pattern = '.*Huck.*&~(.*F.*)'
-input = "The Adventures of Huckleberry Finn', published in 1885."
-matches = [[0, 30]]
-
-[[test]]
 pattern = '.*=.*'
 input = 'key=value'
 matches = [[0, 9]]
@@ -40,11 +59,6 @@ matches = [[0, 9]]
 pattern = '.*=.*'
 input = 'no equals here'
 matches = []
-
-[[test]]
-pattern = '.*=.*'
-input = "first\nsecond=line\nthird"
-matches = [[6, 17]]
 
 [[test]]
 pattern = '.*=.*'
@@ -135,11 +149,6 @@ input = 'bcdfg'
 matches = []
 
 [[test]]
-pattern = '[aeiou]'
-input = 'hello'
-matches = [[1, 2], [4, 5]]
-
-[[test]]
 pattern = '[^a-z]+'
 input = 'abc123ABC'
 matches = [[3, 9]]
@@ -153,11 +162,6 @@ matches = [[0, 5], [6, 11], [12, 15]]
 pattern = '^\d+$'
 input = '123a5'
 matches = []
-
-[[test]]
-pattern = '^exact$'
-input = 'exact'
-matches = [[0, 5]]
 
 [[test]]
 pattern = '^exact$'
@@ -196,10 +200,6 @@ pattern = '..g'
 input = 'dfdff dfggg gfgdfg gddfdf'
 matches = [[6, 9], [10, 13], [15, 18]]
 
-[[test]]
-pattern = '.+x'
-input = 'abcx'
-matches = [[0, 4]]
 
 [[test]]
 pattern = 'a.b'

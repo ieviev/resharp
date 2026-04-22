@@ -1,5 +1,10 @@
 description = "prefix set and potential_start computation tests"
 
+[[test]]
+name = "non_percent"
+pattern = '^[^%]+'
+prefix_rev = ""
+potential_rev = "[\\x00-\\$\\&-\\xBF]"
 
 [[test]]
 name = "value"
@@ -28,7 +33,7 @@ prefix_fwd = "b;b;a;a"
 [[test]]
 name = "num"
 pattern = '^\d+$'
-prefix_fwd = "\\n"
+prefix_fwd = "\\n;[0-9]"
 
 [[test]]
 name = "claude_user_frustration"
@@ -48,7 +53,7 @@ prefix_fwd = "a"
 [[test]]
 name = "datetime"
 pattern = '\d+(?=[aA]\.?[mM]\.?)'
-potential_rev = "[Mm];[\\.Aa];[0-9Aa\\x80-\\x89\\xA0-\\xA9\\xB0-\\xB9]"
+potential_rev = "[Mm];[\\.Aa];[0-9Aa]"
 prefix_rev = "[Mm]"
 
 [[test]]
@@ -56,7 +61,7 @@ name = "apache"
 pattern = '(?m)^(?:\S+) \S+ \S+ \[(?:[^\]]+)\] "(?:\S+) (?:\S+) [^"]*" (?:\d{3}) (?:\d+|-)'
 prefix_rev = ""
 prefix_fwd = '\n'
-potential_rev = "[\\-0-9\\x80-\\x89\\xA0-\\xA9\\xB0-\\xB9];[ 0-9\\x80-\\x89\\xA0-\\xA9\\xB0-\\xB9\\xD9\\xDB\\xDF];[ 0-9\\x80-\\x89\\xA0-\\xA9\\xB0-\\xB9\\xD9\\xDB\\xDF];[ 0-9\\x80-\\x89\\xA0-\\xA9\\xB0-\\xB9\\xD9\\xDB\\xDF];[ 0-9\\x80-\\x89\\xA0-\\xA9\\xB0-\\xB9\\xD9\\xDB\\xDF];[ 0-9\\x80-\\x89\\xA0-\\xA9\\xB0-\\xB9\\xD9\\xDB\\xDF];[ \"0-9\\x80-\\x89\\xA0-\\xA9\\xB0-\\xB9\\xD9\\xDB\\xDF];[\\x00-\\xBF\\xD9\\xDB\\xDF];[\\x00-\\xBF\\xC2-\\xDF];[\\x00-\\xEF];[\\x00-\\xF4];[\\x00-\\xF7];[\\x00-\\xF7];[\\x00-\\xF7];[\\x00-\\xF7]"
+potential_rev = "[\\-0-9];[ 0-9];[ 0-9];[ 0-9];[ 0-9];[ 0-9];[ \"0-9];[\\x00-\\xBF];[\\x00-\\xBF\\xC2-\\xDF];[\\x00-\\xEF];[\\x00-\\xF4];[\\x00-\\xF7];[\\x00-\\xF7];[\\x00-\\xF7];[\\x00-\\xF7];[\\x00-\\xF7]"
 potential_fwd = "_;_;_;_;_;_;_;_;_;_;_;_;_"
 
 [[test]]
@@ -187,3 +192,4 @@ name = "word_boundary_the"
 pattern = '\bthe\b'
 prefix_rev = ""
 potential_rev = "e;h;t"
+

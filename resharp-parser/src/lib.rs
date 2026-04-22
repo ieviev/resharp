@@ -1056,6 +1056,12 @@ impl<'s> ResharpParser<'s> {
             hir::HirKind::Class(class) => match class {
                 hir::Class::Unicode(class_unicode) => {
                     let ranges = class_unicode.ranges();
+                    if ranges.len() == 1
+                        && ranges[0].start() == '\u{0}'
+                        && ranges[0].end() == '\u{10FFFF}'
+                    {
+                        return Ok(tb.mk_range_u8(0, 255));
+                    }
                     let mut nodes = Vec::new();
                     for range in ranges {
                         for seq in Utf8Sequences::new(range.start(), range.end()) {
@@ -1612,7 +1618,10 @@ impl<'s> ResharpParser<'s> {
             }
             Ast::ClassPerl(c) => self.get_class(c.negated, c.kind.clone(), tb),
             Ast::ClassBracketed(c) => match &c.kind {
-                regex_syntax::ast::ClassSet::Item(_) => {
+                regex_syntax::ast::ClassSet::Item(item) => {
+                    if !c.negated && is_universal_perl_pair(item) {
+                        return Ok(NodeId::TOP);
+                    }
                     let tmp = regex_syntax::ast::ClassBracketed {
                         span: c.span,
                         negated: c.negated,
@@ -2759,6 +2768,26 @@ impl<'s> ResharpParser<'s> {
             kind,
             negated,
         }
+    }
+}
+
+/// `[\s\S]`, `[\w\W]`, `[\d\D]` etc into `_` canonicalization.
+/// should really be done as a u32 BDD but good enough for now
+fn is_universal_perl_pair(item: &regex_syntax::ast::ClassSetItem) -> bool {
+    use regex_syntax::ast::ClassSetItem;
+    let items = match item {
+        ClassSetItem::Union(u) => &u.items,
+        _ => return false,
+    };
+    if items.len() != 2 {
+        return false;
+    }
+    match (&items[0], &items[1]) {
+        (ClassSetItem::Perl(a), ClassSetItem::Perl(b)) => {
+            let is_all = a.kind == b.kind && a.negated != b.negated;
+            is_all
+        }
+        _ => false,
     }
 }
 

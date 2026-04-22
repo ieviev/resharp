@@ -6,6 +6,7 @@ pub use crate::simd::TSet;
 pub enum MintermSearchValue {
     Exact(crate::simd::RevSearchBytes),
     Range(crate::simd::RevSearchRanges),
+    All,
 }
 
 #[cfg(any(target_arch = "x86_64", target_arch = "aarch64", all(target_arch = "wasm32", target_feature = "simd128")))]
@@ -15,6 +16,7 @@ impl MintermSearchValue {
         match self {
             MintermSearchValue::Exact(s) => s.find_rev(haystack),
             MintermSearchValue::Range(s) => s.find_rev(haystack),
+            MintermSearchValue::All => Some(0),
         }
     }
 
@@ -23,6 +25,7 @@ impl MintermSearchValue {
         match self {
             MintermSearchValue::Exact(s) => s.find_fwd(haystack),
             MintermSearchValue::Range(s) => s.find_fwd(haystack),
+            MintermSearchValue::All => None,
         }
     }
 }

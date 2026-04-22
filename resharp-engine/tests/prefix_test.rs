@@ -1,4 +1,5 @@
 use resharp::{PrefixSets, RegexBuilder};
+use resharp_algebra::solver::TSetId;
 use std::path::Path;
 
 fn make_prefix_sets(pattern: &str) -> (RegexBuilder, PrefixSets) {
@@ -9,7 +10,7 @@ fn make_prefix_sets(pattern: &str) -> (RegexBuilder, PrefixSets) {
     (b, sets)
 }
 
-fn pp_sets(b: &RegexBuilder, sets: &[resharp::TSetId]) -> String {
+fn pp_sets(b: &RegexBuilder, sets: &[TSetId]) -> String {
     sets.iter()
         .map(|&s| b.solver_ref().pp(s))
         .collect::<Vec<_>>()

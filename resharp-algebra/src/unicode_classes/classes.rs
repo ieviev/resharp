@@ -117,19 +117,8 @@ pub fn build_word_class(b: &mut RegexBuilder) -> NodeId {
 }
 
 pub fn build_digit_class(b: &mut RegexBuilder) -> NodeId {
-    let n0 = b.mk_range_u8(0x30, 0x39);
-    let n1 = b.mk_range_u8(0xD9, 0xD9);
-    let n2 = b.mk_range_u8(0xA0, 0xA9);
-    let n3 = b.mk_concat(n1, n2);
-    let n4 = b.mk_range_u8(0xDB, 0xDB);
-    let n5 = b.mk_range_u8(0xB0, 0xB9);
-    let n6 = b.mk_concat(n4, n5);
-    let n7 = b.mk_range_u8(0xDF, 0xDF);
-    let n8 = b.mk_range_u8(0x80, 0x89);
-    let n9 = b.mk_concat(n7, n8);
-    let n10 = b.mk_union(n6, n9);
-    let n11 = b.mk_union(n3, n10);
-    b.mk_union(n0, n11)
+    // default \d to ascii [0-9], \p{Number} covers the full Unicode set of digits
+    b.mk_range_u8(0x30, 0x39)
 }
 
 pub fn build_space_class(b: &mut RegexBuilder) -> NodeId {

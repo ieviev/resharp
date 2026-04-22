@@ -154,7 +154,7 @@ pub fn transition_term(b: &mut RegexBuilder, der: TRegexId, set: TSetId) -> Node
     }
 }
 
-fn collect_tregex_leaves(b: &RegexBuilder, tregex: TRegexId, out: &mut Vec<NodeId>) {
+pub(crate) fn collect_tregex_leaves(b: &RegexBuilder, tregex: TRegexId, out: &mut Vec<NodeId>) {
     let mut stack = vec![tregex];
     let mut visited = HashSet::new();
     while let Some(id) = stack.pop() {
@@ -194,7 +194,6 @@ fn skip_is_profitable(bytes: &[u8]) -> bool {
     }
     false
 }
-
 pub struct LDFA {
     pub pruned: u16,
     pub prune_memo: FxHashMap<NodeId, NodeId>,
@@ -202,7 +201,7 @@ pub struct LDFA {
     pub center_table: Vec<u16>,
     pub effects_id: Vec<u16>,
     pub effects: Vec<Vec<NullState>>,
-    pub mt_num: u32,
+    pub center_effect_id: Vec<u16>,
     pub mt_log: u32,
     pub mt_lookup: [u8; 256],
     pub minterms: Vec<TSetId>,
@@ -244,30 +243,34 @@ impl LDFA {
         let mut node_to_state: HashMap<NodeId, u16> = HashMap::new();
         node_to_state.insert(NodeId::BOT, DFA_DEAD);
 
-        let mut effects_id: Vec<u16> = vec![0u16; 2]; // slots 0,1
+        let mut effects_id: Vec<u16> = vec![0u16; 2]; // slots 0,1 (MISSING, DEAD)
+        let mut center_effect_id: Vec<u16> = vec![EID_NONE as u16; 2];
         let mut effects: Vec<Vec<NullState>> = Vec::new();
 
         let mut prune_memo: FxHashMap<NodeId, NodeId> = FxHashMap::default();
 
         // state 2
-        let initial_sid = state_nodes.len() as u16;
-        state_nodes.push(initial);
-        node_to_state.insert(initial, initial_sid);
-        let initial_eff_id = b.get_nulls_id(initial);
-        effects_id.push(initial_eff_id.0 as u16);
+        let _ = register_state(
+            &mut state_nodes,
+            &mut node_to_state,
+            &mut effects_id,
+            &mut center_effect_id,
+            &mut effects,
+            b,
+            initial,
+        );
 
         // state 3
         let initial_pruned = b.prune_begin(initial);
-        let pruned_sid = if initial_pruned != initial {
-            let pruned_sid = state_nodes.len() as u16;
-            state_nodes.push(initial_pruned);
-            node_to_state.insert(initial_pruned, pruned_sid);
-            let pruned_eff_id = b.get_nulls_id(initial_pruned);
-            effects_id.push(pruned_eff_id.0 as u16);
-            pruned_sid
-        } else {
-            initial_sid
-        };
+        let pruned_sid = register_state(
+            &mut state_nodes,
+            &mut node_to_state,
+            &mut effects_id,
+            &mut center_effect_id,
+            &mut effects,
+            b,
+            initial_pruned,
+        );
 
         let der0 = b.der(initial, Nullability::BEGIN)?;
         let mut begin_table = vec![DFA_DEAD; minterms.len()];
@@ -282,6 +285,7 @@ impl LDFA {
                 &mut state_nodes,
                 &mut node_to_state,
                 &mut effects_id,
+                &mut center_effect_id,
                 &mut effects,
                 b,
                 t,
@@ -312,7 +316,7 @@ impl LDFA {
             center_table,
             effects_id,
             effects,
-            mt_num: num_minterms,
+            center_effect_id,
             mt_log,
             mt_lookup: u8_lookup,
             minterms,
@@ -337,6 +341,7 @@ impl LDFA {
             let new_len = self.effects_id.len().max(4) * 2;
             let new_len = new_len.max(cap);
             self.effects_id.resize(new_len, 0u16);
+            self.center_effect_id.resize(new_len, EID_NONE as u16);
         }
         let stride = 1usize << self.mt_log;
         let needed = cap * stride;
@@ -352,11 +357,12 @@ impl LDFA {
         }
     }
 
-    pub fn get_or_register(&mut self, b: &RegexBuilder, node: NodeId) -> u16 {
+    pub fn get_or_register(&mut self, b: &mut RegexBuilder, node: NodeId) -> u16 {
         register_state(
             &mut self.state_nodes,
             &mut self.node_to_state,
             &mut self.effects_id,
+            &mut self.center_effect_id,
             &mut self.effects,
             b,
             node,
@@ -547,19 +553,10 @@ impl LDFA {
             let delta = self.dfa_delta(state_id, mt_idx as u32);
             self.center_table[delta] = next_sid;
         }
-        self.try_build_skip(b, state_id as usize);
-        Ok(())
-    }
-
-    fn try_build_skip(&mut self, _b: &mut RegexBuilder, _state: usize) {
-        #[cfg(any(
-            target_arch = "x86_64",
-            target_arch = "aarch64",
-            all(target_arch = "wasm32", target_feature = "simd128")
-        ))]
         if crate::simd::has_simd() {
-            self.try_build_skip_simd(_b, _state);
+            self.try_build_skip_simd(b, state_id.into());
         }
+        Ok(())
     }
 
     #[cfg(any(
@@ -568,8 +565,7 @@ impl LDFA {
         all(target_arch = "wasm32", target_feature = "simd128")
     ))]
     fn try_build_skip_simd(&mut self, b: &mut RegexBuilder, state: usize) {
-        let num_mt = self.mt_num as usize;
-        if state >= self.skip_ids.len() || self.skip_ids[state] != 0 {
+        if self.skip_ids[state] != 0 {
             return;
         }
         let node = self.state_nodes[state];
@@ -580,24 +576,26 @@ impl LDFA {
             Ok(d) => d,
             Err(_) => return,
         };
-        let mut non_self_mts = Vec::new();
-        for mt_idx in 0..num_mt {
-            let mt = self.minterms[mt_idx];
-            let next_node = transition_term(b, sder, mt);
-            if next_node != node {
-                non_self_mts.push(mt_idx);
-            }
-        }
-        if non_self_mts.is_empty() {
+
+        let mut notany = TSetId::EMPTY;
+        let mut stack = vec![(sder, TSetId::FULL)];
+        b.iter_sat(
+            &mut stack,
+            &mut (|b, next, set| {
+                if next == node {
+                    notany = b.solver().or_id(notany, set)
+                }
+            }),
+        );
+        let any = b.solver().not_id(notany);
+
+        let bytes = b.solver().collect_bytes(any);
+        if bytes.len() == 256 {
             return;
         }
-        let mut bytes = Vec::new();
-        for &mt in &non_self_mts {
-            for (byte, &m) in self.mt_lookup.iter().enumerate() {
-                if m as usize == mt {
-                    bytes.push(byte as u8);
-                }
-            }
+        if bytes.is_empty() {
+            self.skip_ids[state] = self.get_or_create_skip_all();
+            return;
         }
         if bytes.len() <= 3 {
             self.skip_ids[state] = self.get_or_create_skip_exact(bytes);
@@ -626,6 +624,21 @@ impl LDFA {
             return None;
         }
         Some(self.get_or_create_skip_range(ranges))
+    }
+
+    #[cfg(any(
+        target_arch = "x86_64",
+        target_arch = "aarch64",
+        all(target_arch = "wasm32", target_feature = "simd128")
+    ))]
+    fn get_or_create_skip_all(&mut self) -> u8 {
+        for (i, s) in self.skip_searchers.iter().enumerate() {
+            if matches!(s, MintermSearchValue::All) {
+                return (i + 1) as u8;
+            }
+        }
+        self.skip_searchers.push(MintermSearchValue::All);
+        self.skip_searchers.len() as u8
     }
 
     #[cfg(any(
@@ -667,6 +680,77 @@ impl LDFA {
             crate::simd::RevSearchRanges::new(ranges),
         ));
         self.skip_searchers.len() as u8
+    }
+
+    #[inline(always)]
+    fn scan_tables(&self, data: &[u8]) -> ScanTables {
+        ScanTables {
+            center_table: self.center_table.as_ptr(),
+            effects: self.effects.as_ptr(),
+            center_effect_id: self.center_effect_id.as_ptr(),
+            data: data.as_ptr(),
+            minterms_lookup: self.mt_lookup.as_ptr(),
+            mt_log: self.mt_log,
+        }
+    }
+
+    #[inline(always)]
+    fn dispatch_scan_fwd(
+        &self,
+        tables: &ScanTables,
+        curr: u32,
+        pos: usize,
+        end: usize,
+        max_end: usize,
+    ) -> (u32, usize, usize, bool) {
+        if self.can_skip() {
+            scan_fwd::<true>(tables, self.effects_id.as_ptr(), &self.skip_ids,
+                &self.skip_searchers, curr, pos, end, max_end)
+        } else {
+            scan_fwd::<false>(tables, self.effects_id.as_ptr(), &[], &[],
+                curr, pos, end, max_end)
+        }
+    }
+
+    #[inline(always)]
+    fn dispatch_scan_fwd_verify(
+        &self,
+        tables: &ScanTables,
+        curr: u32,
+        pos: usize,
+        end: usize,
+        max_end: usize,
+    ) -> (u32, usize, usize, bool) {
+        if self.can_skip() {
+            scan_fwd_verify::<true>(tables, self.effects_id.as_ptr(), &self.skip_ids,
+                &self.skip_searchers, curr, pos, end, max_end)
+        } else {
+            scan_fwd_verify::<false>(tables, self.effects_id.as_ptr(), &[], &[],
+                curr, pos, end, max_end)
+        }
+    }
+
+    #[inline(always)]
+    fn dispatch_collect_rev<const EARLY_EXIT: bool, const INITIAL_SKIP: bool>(
+        &self,
+        tables: &ScanTables,
+        prefix_ptr: *const crate::accel::RevPrefixSearch,
+        curr: u32,
+        pos: usize,
+        data: &[u8],
+        nulls: &mut Vec<usize>,
+    ) -> (u32, usize, bool) {
+        if self.can_skip() {
+            collect_rev::<EARLY_EXIT, true, INITIAL_SKIP>(
+                tables, &self.skip_ids, &self.skip_searchers, prefix_ptr,
+                curr, pos, data, nulls, self.pruned as u32,
+            )
+        } else {
+            collect_rev::<EARLY_EXIT, false, false>(
+                tables, &[], &[], std::ptr::null(),
+                curr, pos, data, nulls, 0,
+            )
+        }
     }
 
     pub fn scan_fwd_slow(
@@ -715,31 +799,10 @@ impl LDFA {
             return Ok(self.resolve_max_end(max_end, has_empty, pos_begin));
         }
 
-        let use_skip = self.can_skip();
         loop {
-            let tables = ScanTables {
-                center_table: self.center_table.as_ptr(),
-                effects_id: self.effects_id.as_ptr(),
-                effects: self.effects.as_ptr(),
-                data: data.as_ptr(),
-                minterms_lookup: self.mt_lookup.as_ptr(),
-                mt_log: self.mt_log,
-            };
-
-            let (state, new_pos, new_max, cache_miss) = if use_skip {
-                scan_fwd::<true>(
-                    &tables,
-                    &self.skip_ids,
-                    &self.skip_searchers,
-                    curr,
-                    pos,
-                    end,
-                    max_end,
-                )
-            } else {
-                scan_fwd::<false>(&tables, &[], &[], curr, pos, end, max_end)
-            };
-
+            let tables = self.scan_tables(data);
+            let (state, new_pos, new_max, cache_miss) =
+                self.dispatch_scan_fwd(&tables, curr, pos, end, max_end);
             max_end = new_max;
 
             if !cache_miss {
@@ -813,8 +876,8 @@ impl LDFA {
         }
         let data_end = data.len();
 
-        let mut max_end = 0usize;
-        let mut use_skip = self.can_skip();
+        let mut next_start = 0usize;
+        let use_skip = self.can_skip();
         if cfg!(feature = "debug") {
             eprintln!(
                 "  [scan_fwd_all] can_skip={} searchers={} nulls={}",
@@ -824,122 +887,129 @@ impl LDFA {
             );
         }
 
-        for &begin_pos in nulls.iter().rev() {
+        let mut l_pos: usize;
+        let mut i = nulls.len();
+
+        if nulls[nulls.len() - 1] == 0 {
+            i = i - 1;
+            l_pos = 0;
+            let mut l_max_end = 0;
+
+            // manually take first step
+            let mt = self.mt_lookup[data[l_pos] as usize] as u32;
+            let mut l_state = self.begin_table[mt as usize] as _;
+            l_pos = 1;
+
+            loop {
+                let tables = self.scan_tables(data);
+                let (state, new_pos, new_max, cache_miss) =
+                    self.dispatch_scan_fwd(&tables, l_state, l_pos, data_end, l_max_end);
+                l_max_end = new_max;
+                if cache_miss {
+                    let (flush_state, flush_pos) = if new_pos >= data_end {
+                        (state as u32, new_pos)
+                    } else {
+                        let mt = self.mt_lookup[data[new_pos] as usize] as u32;
+                        let new_state = self.lazy_transition(b, state as u16, mt)? as u32;
+                        l_pos = new_pos + 1;
+                        l_state = new_state;
+                        if l_pos != data_end {
+                            continue;
+                        }
+                        (new_state, l_pos)
+                    };
+                    let effect = self.effects_id[flush_state as usize] as u32;
+                    l_max_end = collect_nulls_fwd_complex(
+                        self.effects.as_ptr(),
+                        effect,
+                        flush_pos,
+                        Nullability::END,
+                        l_max_end,
+                    );
+                }
+
+                matches.push(Match {
+                    start: 0,
+                    end: l_max_end,
+                });
+                next_start = l_max_end;
+                break;
+            }
+        }
+
+        while i != 0 {
+            i = i - 1;
+            l_pos = nulls[i];
+            if l_pos < next_start {
+                continue;
+            }
             if cfg!(feature = "debug") {
                 println!(
                     "  [scan_fwd_all] begin_pos={}, data_end={}",
-                    begin_pos, data_end
+                    l_pos, data_end
                 );
             }
-            if begin_pos < max_end {
-                continue;
-            }
-            if begin_pos == data_end {
+            if l_pos == data_end {
                 matches.push(Match {
-                    start: begin_pos,
-                    end: begin_pos,
+                    start: l_pos,
+                    end: l_pos,
                 });
-                continue;
+                break;
             }
 
-            let mut pos = begin_pos;
-
-            let pre_mask = if pos == 0 {
-                Nullability::BEGIN
-            } else {
-                Nullability::CENTER
-            };
-            collect_max_fwd(
-                &self.effects_id,
-                &self.effects,
-                DFA_INITIAL as u32,
-                pos,
-                pre_mask,
-                &mut max_end,
-            );
-
-            let mut curr = DFA_INITIAL as u32;
-            if pos == 0 {
-                let mt = self.mt_lookup[data[begin_pos] as usize];
-                curr = self.begin_table[mt as usize] as u32;
-                pos += 1;
-            }
-
-            collect_max_fwd(
-                &self.effects_id,
-                &self.effects,
-                curr,
-                pos,
-                if pos < data_end {
-                    Nullability::CENTER
-                } else {
-                    Nullability::END
-                },
-                &mut max_end,
-            );
-
+            let mut l_state = DFA_INITIAL as u32;
+            let mut l_max_end = 0;
             loop {
-                let tables = ScanTables {
-                    center_table: self.center_table.as_ptr(),
-                    effects_id: self.effects_id.as_ptr(),
-                    effects: self.effects.as_ptr(),
-                    data: data.as_ptr(),
-                    minterms_lookup: self.mt_lookup.as_ptr(),
-                    mt_log: self.mt_log,
-                };
-
-                let (state, new_pos, new_max, cache_miss) = if use_skip {
-                    scan_fwd::<true>(
-                        &tables,
-                        &self.skip_ids,
-                        &self.skip_searchers,
-                        curr,
-                        pos,
-                        data_end,
-                        max_end,
-                    )
-                } else {
-                    scan_fwd::<false>(&tables, &[], &[], curr, pos, data_end, max_end)
-                };
-                max_end = new_max;
-
-                if !cache_miss {
+                let tables = self.scan_tables(data);
+                let (state, new_pos, new_max, cache_miss) =
+                    self.dispatch_scan_fwd(&tables, l_state, l_pos, data_end, l_max_end);
+                l_max_end = new_max;
+                if cache_miss {
+                    debug_assert!(new_pos >= l_pos, "backwards");
+                    let mt = self.mt_lookup[data[new_pos] as usize] as u32;
+                    let next_state = self.lazy_transition(b, state as u16, mt)? as u32;
+                    if cfg!(feature = "debug") {
+                        println!(
+                            "[{} '{}'] {} -> {}",
+                            new_pos,
+                            data[new_pos] as char,
+                            state,
+                            b.pp(self.state_nodes[next_state as usize])
+                        );
+                    }
+                    l_pos = new_pos + 1;
+                    l_state = next_state;
+                    if l_pos != data_end {
+                        continue;
+                    }
+                    let effect = self.effects_id[l_state as usize] as u32;
+                    l_max_end = collect_nulls_fwd_complex(
+                        self.effects.as_ptr(),
+                        effect,
+                        l_pos,
+                        Nullability::END,
+                        l_max_end,
+                    );
+                    matches.push(Match {
+                        start: nulls[i],
+                        end: l_max_end,
+                    });
+                    next_start = l_max_end;
                     break;
                 }
-
-                let mt = self.mt_lookup[data[new_pos] as usize] as u32;
-                curr = self.lazy_transition(b, state as u16, mt)? as u32;
-                pos = new_pos + 1;
-                if curr <= DFA_DEAD as u32 {
-                    break;
-                }
-                use_skip = self.can_skip();
-
-                let mask = if pos >= data_end {
-                    Nullability::END
-                } else {
-                    Nullability::CENTER
-                };
-                collect_max_fwd(
-                    &self.effects_id,
-                    &self.effects,
-                    curr,
-                    pos,
-                    mask,
-                    &mut max_end,
+                debug_assert!(
+                    l_max_end >= nulls[i],
+                    "unexpected end {} > {}",
+                    l_max_end,
+                    nulls[i]
                 );
-
-                if pos >= data_end {
-                    break;
-                }
+                matches.push(Match {
+                    start: nulls[i],
+                    end: l_max_end,
+                });
+                next_start = l_max_end;
+                break;
             }
-            matches.push(Match {
-                start: begin_pos,
-                end: max_end,
-            });
-            if max_end == begin_pos {
-                max_end = max_end + 1
-            };
         }
 
         Ok(())
@@ -1042,13 +1112,59 @@ impl LDFA {
         let first_pos = nulls[nulls.len() - 1];
         let mut pos = first_pos;
 
-        while pos < data_end {
-            if cfg!(feature = "debug") {
-                eprintln!(
-                    "  [ordered] pos={} regs={:?} ni={} skip={} nulls={:?}",
-                    pos, regs, null_idx, skip_until, nulls
-                );
+        // respawn modes: walk nulls[null_idx..] and spawn from each.
+        //   0 = break on first live, ignore dead         (fast-path EOF)
+        //   1 = break on first live, emit dead as match  (fast-path DFA_DEAD)
+        //   2 = push all live (state-deduped), pile dead (post dead-flush)
+        fn respawn<const MODE: u8>(
+            eng: &mut LDFA,
+            b: &mut RegexBuilder,
+            nulls: &[usize],
+            null_idx: usize,
+            data: &[u8],
+            data_end: usize,
+            pos: usize,
+            regs: &mut Vec<(u16, usize, usize)>,
+            matches: &mut Vec<Match>,
+            dead: &mut Vec<(usize, usize)>,
+            skip_until: &mut usize,
+        ) -> Result<(), Error> {
+            for ni in null_idx..nulls.len() {
+                let np = nulls[ni];
+                if np < *skip_until {
+                    break;
+                }
+                if np >= pos || np + 1 > data_end {
+                    continue;
+                }
+                let Some((rs, reg_me)) = eng.spawn_from_null(b, data, data_end, np, pos)?
+                else {
+                    continue;
+                };
+                if rs > DFA_DEAD {
+                    if MODE == 2 {
+                        if !regs.iter().any(|r| r.0 == rs) {
+                            regs.push((rs, np, reg_me));
+                        }
+                    } else {
+                        regs.push((rs, np, reg_me));
+                        return Ok(());
+                    }
+                } else if reg_me > 0 {
+                    match MODE {
+                        1 => {
+                            matches.push(Match { start: np, end: reg_me });
+                            *skip_until = reg_me.max(np + 1);
+                        }
+                        2 => dead.push((np, reg_me)),
+                        _ => {}
+                    }
+                }
             }
+            Ok(())
+        }
+
+        while pos < data_end {
             if regs.is_empty() {
                 if null_idx == 0 {
                     break;
@@ -1084,16 +1200,16 @@ impl LDFA {
                 let (mut ldfa_state, reg_start, mut me) = (regs[0].0 as u32, regs[0].1, regs[0].2);
 
                 loop {
-                    let tables = ScanTables {
-                        center_table: self.center_table.as_ptr(),
-                        effects_id: self.effects_id.as_ptr(),
-                        effects: self.effects.as_ptr(),
-                        data: data.as_ptr(),
-                        minterms_lookup: self.mt_lookup.as_ptr(),
-                        mt_log: self.mt_log,
-                    };
-                    let (s, p, m, cache_miss) =
-                        scan_single_component(&tables, ldfa_state, pos, run_end, data_end, me);
+                    let tables = self.scan_tables(data);
+                    let (s, p, m, cache_miss) = scan_single_component(
+                        &tables,
+                        self.effects_id.as_ptr(),
+                        ldfa_state,
+                        pos,
+                        run_end,
+                        data_end,
+                        me,
+                    );
                     me = m;
                     if !cache_miss {
                         ldfa_state = s;
@@ -1135,23 +1251,8 @@ impl LDFA {
                         });
                         skip_until = if me > reg_start { me } else { reg_start + 1 };
                         regs.clear();
-                        for ni in null_idx..nulls.len() {
-                            let np = nulls[ni];
-                            if np < skip_until {
-                                break;
-                            }
-                            if np + 1 > data_end {
-                                continue;
-                            }
-                            if let Some((rs, reg_me)) =
-                                self.spawn_from_null(b, data, data_end, np, pos)?
-                            {
-                                if rs > DFA_DEAD {
-                                    regs.push((rs, np, reg_me));
-                                    break;
-                                }
-                            }
-                        }
+                        respawn::<0>(self, b, nulls, null_idx, data, data_end, pos,
+                            &mut regs, matches, &mut dead, &mut skip_until)?;
                     } else {
                         regs[0] = (ldfa_state as u16, reg_start, me);
                     }
@@ -1170,29 +1271,8 @@ impl LDFA {
                         skip_until = flush_dead(&mut dead, matches, skip_until, usize::MAX);
                     }
 
-                    for ni in null_idx..nulls.len() {
-                        let np = nulls[ni];
-                        if np < skip_until {
-                            break;
-                        }
-                        if np >= pos || np + 1 > data_end {
-                            continue;
-                        }
-                        if let Some((rs, reg_me)) =
-                            self.spawn_from_null(b, data, data_end, np, pos)?
-                        {
-                            if rs > DFA_DEAD {
-                                regs.push((rs, np, reg_me));
-                                break;
-                            } else if reg_me > 0 && np >= skip_until {
-                                matches.push(Match {
-                                    start: np,
-                                    end: reg_me,
-                                });
-                                skip_until = if reg_me > np { reg_me } else { np + 1 };
-                            }
-                        }
-                    }
+                    respawn::<1>(self, b, nulls, null_idx, data, data_end, pos,
+                        &mut regs, matches, &mut dead, &mut skip_until)?;
                 }
                 if regs.is_empty() {
                     pos += 1;
@@ -1250,9 +1330,11 @@ impl LDFA {
                 let dup = next_regs.iter().position(|r| r.0 == next_state);
                 if let Some(di) = dup {
                     if start < next_regs[di].1 {
-                        dead.push((next_regs[di].1, next_regs[di].2));
+                        if next_regs[di].2 > 0 {
+                            dead.push((next_regs[di].1, next_regs[di].2));
+                        }
                         next_regs[di] = (next_state, start, new_me);
-                    } else {
+                    } else if new_me > 0 {
                         dead.push((start, new_me));
                     }
                 } else {
@@ -1310,7 +1392,9 @@ impl LDFA {
                     );
 
                     if next_regs.iter().any(|r| r.0 == spawn_state) {
-                        dead.push((pos, spawn_me));
+                        if spawn_me > 0 && pos >= skip_until {
+                            dead.push((pos, spawn_me));
+                        }
                     } else {
                         next_regs.push((spawn_state, pos, spawn_me));
                     }
@@ -1329,31 +1413,14 @@ impl LDFA {
                             pos, min_active, skip_until, dead, regs
                         );
                     }
+                    let old_skip = skip_until;
                     skip_until = flush_dead(&mut dead, matches, skip_until, min_active);
-                    regs.retain(|r| r.1 >= skip_until);
-
-                    for ni in null_idx..nulls.len() {
-                        let np = nulls[ni];
-                        if np < skip_until {
-                            break;
-                        }
-                        if np >= pos || np + 1 > data_end {
-                            continue;
-                        }
-                        if let Some((rs, reg_me)) =
-                            self.spawn_from_null(b, data, data_end, np, pos)?
-                        {
-                            if rs <= DFA_DEAD {
-                                if reg_me > 0 && np >= skip_until {
-                                    dead.push((np, reg_me));
-                                }
-                                continue;
-                            }
-                            if !regs.iter().any(|r| r.0 == rs) {
-                                regs.push((rs, np, reg_me));
-                            }
-                        }
+                    if skip_until == old_skip {
+                        continue;
                     }
+                    regs.retain(|r| r.1 >= skip_until);
+                    respawn::<2>(self, b, nulls, null_idx, data, data_end, pos,
+                        &mut regs, matches, &mut dead, &mut skip_until)?;
                 }
             }
         }
@@ -1470,28 +1537,9 @@ impl LDFA {
         }
 
         loop {
-            let tables = ScanTables {
-                center_table: self.center_table.as_ptr(),
-                effects_id: self.effects_id.as_ptr(),
-                effects: self.effects.as_ptr(),
-                data: data.as_ptr(),
-                minterms_lookup: self.mt_lookup.as_ptr(),
-                mt_log: self.mt_log,
-            };
-
-            let (state_out, new_pos, new_max, cache_miss) = if self.can_skip() {
-                scan_fwd::<true>(
-                    &tables,
-                    &self.skip_ids,
-                    &self.skip_searchers,
-                    curr,
-                    pos,
-                    end,
-                    max_end,
-                )
-            } else {
-                scan_fwd::<false>(&tables, &[], &[], curr, pos, end, max_end)
-            };
+            let tables = self.scan_tables(data);
+            let (state_out, new_pos, new_max, cache_miss) =
+                self.dispatch_scan_fwd_verify(&tables, curr, pos, end, max_end);
             max_end = new_max;
 
             if !cache_miss {
@@ -1548,7 +1596,6 @@ impl LDFA {
         if curr <= DFA_DEAD as u32 {
             return Ok(NO_MATCH);
         }
-
 
         let mut min_start = NO_MATCH;
         let mask = if start_pos == begin {
@@ -1649,14 +1696,17 @@ impl LDFA {
     ) -> Result<(), Error> {
         #[cfg(feature = "debug")]
         {
-            eprintln!("  [rev0]: {}", b.pp(self.state_nodes[DFA_INITIAL as usize]));
+            // eprintln!("  [rev0]: {}", b.pp(self.state_nodes[DFA_INITIAL as usize]));
+            eprintln!(
+                "  [rev0]: {:.20}",
+                b.pp(self.state_nodes[DFA_INITIAL as usize])
+            );
         }
 
         let mut curr = self.begin_table[self.mt_lookup[data[start_pos] as usize] as usize] as u32;
         #[cfg(feature = "debug")]
         {
-            eprintln!("prefix_skip: {}", self.prefix_skip.is_some());
-            eprintln!("rev1: {}", b.pp(self.state_nodes[curr as usize]));
+            eprintln!("rev1: {:.30}", b.pp(self.state_nodes[curr as usize]));
         }
         if data.len() == 1 {
             return self.len_1_rev(curr, nulls);
@@ -1688,40 +1738,11 @@ impl LDFA {
         let mut pos = start_pos;
 
         loop {
-            let tables = ScanTables {
-                center_table: self.center_table.as_ptr(),
-                effects_id: self.effects_id.as_ptr(),
-                effects: self.effects.as_ptr(),
-                data: data.as_ptr(),
-                minterms_lookup: self.mt_lookup.as_ptr(),
-                mt_log: self.mt_log,
-            };
-
-            let (state, new_pos, cache_miss) = if self.can_skip() {
-                collect_rev::<EARLY_EXIT, true, false>(
-                    &tables,
-                    &self.skip_ids,
-                    &self.skip_searchers,
-                    std::ptr::null(),
-                    curr,
-                    pos,
-                    data,
-                    nulls,
-                    self.pruned as u32,
-                )
-            } else {
-                collect_rev::<EARLY_EXIT, false, false>(
-                    &tables,
-                    &[],
-                    &[],
-                    std::ptr::null(),
-                    curr,
-                    pos,
-                    data,
-                    nulls,
-                    0,
-                )
-            };
+            let tables = self.scan_tables(data);
+            let (state, new_pos, cache_miss) =
+                self.dispatch_collect_rev::<EARLY_EXIT, false>(
+                    &tables, std::ptr::null(), curr, pos, data, nulls,
+                );
 
             if EARLY_EXIT && !nulls.is_empty() {
                 return Ok(());
@@ -1734,6 +1755,12 @@ impl LDFA {
                         state, new_pos
                     );
                 }
+
+                let sid = state as u16;
+                let mt = self.mt_lookup[data[0] as usize] as u32;
+                let new_state = self.lazy_transition(b, sid, mt)?;
+                let effect = self.effects_id[new_state as usize] as u32;
+                collect_rev_complex(self.effects.as_ptr(), effect, 0, Nullability::END, nulls);
                 break;
             }
 
@@ -1757,7 +1784,7 @@ impl LDFA {
             if cfg!(feature = "debug") {
                 if self.effects_id[curr as usize] > 0 {
                     eprintln!(
-                        "  [effect] pos={} eid=1 push={}",
+                        "  [effect] pos={} eid=1 push={:.20}",
                         pos,
                         b.pp(self.state_nodes[curr as usize])
                     );
@@ -1792,47 +1819,16 @@ impl LDFA {
         }
 
         loop {
-            let tables = ScanTables {
-                center_table: self.center_table.as_ptr(),
-                effects_id: self.effects_id.as_ptr(),
-                effects: self.effects.as_ptr(),
-                data: data.as_ptr(),
-                minterms_lookup: self.mt_lookup.as_ptr(),
-                mt_log: self.mt_log,
-            };
-
-            let use_skip = self.can_skip();
-            let (state, new_pos, cache_miss) = if use_skip {
-                collect_rev::<EARLY_EXIT, true, true>(
-                    &tables,
-                    &self.skip_ids,
-                    &self.skip_searchers,
-                    prefix_ptr,
-                    curr,
-                    pos,
-                    data,
-                    nulls,
-                    self.pruned as u32,
-                )
-            } else {
-                collect_rev::<EARLY_EXIT, false, false>(
-                    &tables,
-                    &[],
-                    &[],
-                    std::ptr::null(),
-                    curr,
-                    pos,
-                    data,
-                    nulls,
-                    0,
-                )
-            };
+            let tables = self.scan_tables(data);
+            let (state, new_pos, cache_miss) =
+                self.dispatch_collect_rev::<EARLY_EXIT, true>(
+                    &tables, prefix_ptr, curr, pos, data, nulls,
+                );
 
             if EARLY_EXIT && !nulls.is_empty() {
                 return Ok(());
             }
 
-            
             if cache_miss {
                 let sid = state as u16;
                 self.create_state(b, sid)?;
@@ -1840,9 +1836,11 @@ impl LDFA {
                 pos = new_pos + 1;
                 continue;
             } else {
-                // println!("pos: {:?}", new_pos);
-                // panic!("{}", "ssd");
-                // collect_rev_complex(t.effects, prev_eid, 0, Nullability::END, nulls);
+                let sid = state as u16;
+                let mt = self.mt_lookup[data[0] as usize] as u32;
+                let new_state = self.lazy_transition(b, sid, mt)?;
+                let effect = self.effects_id[new_state as usize] as u32;
+                collect_rev_complex(self.effects.as_ptr(), effect, 0, Nullability::END, nulls);
                 break;
             }
         }
@@ -1861,17 +1859,19 @@ pub(crate) fn has_any_null(
     if eid == 0 {
         return false;
     }
-    if eid == 1 {
+    if eid == EID_ALWAYS0 {
         return mask.has(Nullability::ALWAYS);
+    }
+    if eid == EID_CENTER0 {
+        return mask.has(Nullability::CENTER);
     }
     effects[eid as usize].iter().any(|n| n.mask.has(mask))
 }
 
-// Pre-defined NullsId constants mirrored from resharp_algebra::nulls::NullsId.
-// ALWAYS0=1, CENTER0=2, BEGIN0=3, END0=4.
-// These are guaranteed by NullsBuilder::init() initialization order.
-const EID_ALWAYS0: u32 = 1;
-const EID_CENTER0: u32 = 2;
+// same as resharp-algebra/src/nulls.rs, just explicit
+const EID_NONE: u32 = 0;
+const EID_CENTER0: u32 = 1;
+const EID_ALWAYS0: u32 = 2;
 const EID_BEGIN0: u32 = 3;
 const EID_END0: u32 = 4;
 
@@ -1943,11 +1943,27 @@ fn collect_nulls(
 
 struct ScanTables {
     center_table: *const u16,
-    effects_id: *const u16,
+    center_effect_id: *const u16,
     effects: *const Vec<NullState>,
     data: *const u8,
     minterms_lookup: *const u8,
     mt_log: u32,
+}
+
+#[cold]
+#[inline(never)]
+fn collect_rev_center_simple(
+    effects: *const Vec<NullState>,
+    eid: u32,
+    pos: usize,
+    nulls: &mut Vec<usize>,
+) {
+    unsafe {
+        let v = &*effects.add(eid as usize);
+        for n in v {
+            nulls.push(pos + n.rel as usize);
+        }
+    }
 }
 
 #[cold]
@@ -2091,21 +2107,30 @@ fn collect_rev<const EARLY_EXIT: bool, const SKIP: bool, const INITIAL_SKIP: boo
     pruned_id: u32,
 ) -> (u32, usize, bool) {
     let center_table = t.center_table;
-    let effects_id = t.effects_id;
-    let effects = t.effects;
+    let center_effect_id = t.center_effect_id;
     let minterms_lookup = t.minterms_lookup;
     let mt_log = t.mt_log;
-    let mut prev_eid: u32 = 0;
-    'outer: while pos != 0 {
+    while pos > 1 {
         if SKIP {
             let sid = skip_ids[curr as usize];
             if sid != 0 {
                 if INITIAL_SKIP && curr == pruned_id {
                     // SAFETY: unreachable unless prefix_ptr is non-null
                     match unsafe { &*prefix_ptr }.find_rev(data, pos) {
-                        Some(new_pos) => {
-                            if pos != new_pos {
-                                pos = new_pos + 1;
+                        Some(skip_pos) => {
+                            if pos != skip_pos {
+                                pos = skip_pos + 1;
+                                let eid = unsafe { *center_effect_id.add(curr as usize) };
+                                if eid == EID_CENTER0 as _ {
+                                    nulls.push(pos + 1);
+                                } else if eid != EID_NONE as _ {
+                                    collect_rev_center_simple(
+                                        t.effects,
+                                        eid as u32,
+                                        pos + 1,
+                                        nulls,
+                                    );
+                                }
                             }
                         }
                         None => {
@@ -2113,129 +2138,58 @@ fn collect_rev<const EARLY_EXIT: bool, const SKIP: bool, const INITIAL_SKIP: boo
                             continue;
                         }
                     }
-                }
-                // flush deferred null before skip
-                if prev_eid != 0 {
-                    if prev_eid == EID_ALWAYS0 || prev_eid == EID_CENTER0 {
-                        nulls.push(pos);
-                        if EARLY_EXIT {
-                            return (curr, pos, false);
-                        }
-                    } else if prev_eid > EID_END0 {
-                        collect_rev_complex(effects, prev_eid, pos, Nullability::CENTER, nulls);
-                        if EARLY_EXIT && !nulls.is_empty() {
-                            return (curr, pos, false);
-                        }
-                    }
-                    // BEGIN0/END0: never fire at CENTER, skip
-                    prev_eid = 0;
-                }
-                let searcher = &skip_searchers[sid as usize - 1];
-                let old_pos = pos;
-                match searcher.find_rev(&data[..pos]) {
-                    Some(skip_pos) => pos = skip_pos + 1,
-                    None => pos = 1,
-                }
-                if cfg!(feature = "debug") {
-                    eprintln!("  [rev_skip] state={} skip {} -> {}", curr, old_pos, pos);
-                }
-                // nullable self-loop: batch-emit for skipped positions
-                unsafe {
-                    let eid = *effects_id.add(curr as usize) as u32;
-                    if eid != 0 && pos < old_pos {
-                        if EARLY_EXIT {
-                            if eid == 1 {
-                                nulls.push(old_pos - 1);
-                            } else {
-                                collect_rev_complex(
-                                    effects,
-                                    eid,
-                                    old_pos - 1,
-                                    Nullability::CENTER,
-                                    nulls,
-                                );
-                            }
-                            if !nulls.is_empty() {
-                                return (curr, pos, false);
-                            }
-                        } else {
-                            if eid == 1 {
-                                for p in (pos..old_pos).rev() {
-                                    nulls.push(p);
-                                }
-                            } else {
-                                for p in (pos..old_pos).rev() {
-                                    collect_rev_complex(
-                                        effects,
-                                        eid,
-                                        p,
-                                        Nullability::CENTER,
-                                        nulls,
-                                    );
+                } else {
+                    let searcher = &skip_searchers[sid as usize - 1];
+                    match searcher.find_rev(&data[..pos]) {
+                        Some(skip_pos) => {
+                            debug_assert!(pos != skip_pos);
+                            let eid = unsafe { *center_effect_id.add(curr as usize) };
+                            if eid == EID_CENTER0 as _ {
+                                nulls.extend((skip_pos + 1..pos).rev());
+                            } else if eid != EID_NONE as _ {
+                                for p in (skip_pos + 1..pos).rev() {
+                                    collect_rev_center_simple(t.effects, eid as u32, p, nulls);
                                 }
                             }
+                            pos = skip_pos + 1;
                         }
+                        None => pos = 1,
                     }
                 }
             }
         }
-        while pos != 0 {
-            pos -= 1;
-            unsafe {
-                let mt = *minterms_lookup.add(*data.as_ptr().add(pos) as usize) as u32;
-                if prev_eid != 0 {
-                    if prev_eid == EID_ALWAYS0 || prev_eid == EID_CENTER0 {
-                        nulls.push(pos + 1);
-                        if EARLY_EXIT {
-                            return (curr, pos, false);
-                        }
-                    } else if prev_eid > EID_END0 {
-                        if cfg!(feature = "debug") {
-                            eprintln!(
-                                "  [rev] state={} pos={} eid={} push_complex at {}",
-                                curr,
-                                pos,
-                                prev_eid,
-                                pos + 1
-                            );
-                        }
-                        collect_rev_complex(effects, prev_eid, pos + 1, Nullability::CENTER, nulls);
-                        if EARLY_EXIT && !nulls.is_empty() {
-                            return (curr, pos, false);
-                        }
-                    }
-                    // BEGIN0/END0: never fire at CENTER, skip
+        pos -= 1;
+        unsafe {
+            let mt = *minterms_lookup.add(*data.as_ptr().add(pos) as usize) as u32;
+            let next = *center_table.add((curr << mt_log | mt) as usize);
+            if next == DFA_MISSING {
+                return (curr, pos, true);
+            }
+            curr = next as u32;
+
+            let eid = *center_effect_id.add(curr as usize);
+            if eid == EID_CENTER0 as _ {
+                nulls.push(pos);
+                if EARLY_EXIT {
+                    return (curr, pos, false);
                 }
-                let next = *center_table.add((curr << mt_log | mt) as usize);
-                if next == DFA_MISSING {
-                    return (curr, pos, true);
+            } else if eid != EID_NONE as _ {
+                collect_rev_center_simple(t.effects, eid as u32, pos, nulls);
+                if EARLY_EXIT && !nulls.is_empty() {
+                    return (curr, pos, false);
                 }
-                curr = next as u32;
-                prev_eid = *effects_id.add(curr as usize) as u32;
             }
-            if SKIP && skip_ids[curr as usize] != 0 {
-                break;
-            }
-        }
-        if pos == 0 && prev_eid != 0 {
-            // At pos=0 (end of input in reverse) the mask is END.
-            // ALWAYS0/END0 fire at END; CENTER0/BEGIN0 do not.
-            if prev_eid == EID_ALWAYS0 || prev_eid == EID_END0 {
-                nulls.push(0);
-            } else if prev_eid > EID_END0 {
-                collect_rev_complex(effects, prev_eid, 0, Nullability::END, nulls);
-            }
-        }
-        if !SKIP {
-            break 'outer;
         }
     }
-    (curr, 0, false)
+
+    // eprintln!("nulls! {:?}",nulls);
+
+    (curr, 1, false)
 }
 
 #[cold]
 #[inline(never)]
-fn scan_fwd_complex(
+fn collect_nulls_fwd_complex(
     effects: *const Vec<NullState>,
     eid: u32,
     pos: usize,
@@ -2254,12 +2208,46 @@ fn scan_fwd_complex(
     result
 }
 
-/// Like scan_fwd_noskip but scans a single register until `end` (typically
-/// the next spawn position, not data_end). Uses Nullability::END only at
-/// data_end, not at `end`.
+#[cold]
+#[inline(never)]
+fn collect_nulls_fwd_center_simple(
+    center_effects: *const Vec<NullState>,
+    eid: u32,
+    pos: usize,
+    max_end: usize,
+) -> usize {
+    let mut result = max_end;
+    unsafe {
+        let v = &*center_effects.add(eid as usize);
+        for n in v {
+            result = result.max(pos - n.rel as usize);
+        }
+    }
+    result
+}
+
+#[inline(always)]
+unsafe fn fwd_center_update(
+    center_effect_id: *const u16,
+    center_effects: *const Vec<NullState>,
+    state: u32,
+    pos: usize,
+    max_end: usize,
+) -> usize {
+    let eid = *center_effect_id.add(state as usize);
+    if eid == EID_NONE as u16 {
+        max_end
+    } else if eid == EID_CENTER0 as u16 {
+        max_end.max(pos)
+    } else {
+        collect_nulls_fwd_center_simple(center_effects, eid as u32, pos, max_end)
+    }
+}
+
 #[inline(never)]
 fn scan_single_component(
     t: &ScanTables,
+    effects_id: *const u16,
     mut curr: u32,
     mut pos: usize,
     end: usize,
@@ -2267,21 +2255,19 @@ fn scan_single_component(
     mut max_end: usize,
 ) -> (u32, usize, usize, bool) {
     let center_table = t.center_table;
-    let effects_id = t.effects_id;
+    let center_effect_id = t.center_effect_id;
+    let center_effects = t.effects;
     let data = t.data;
     let minterms_lookup = t.minterms_lookup;
     let mt_log = t.mt_log;
-    let mut prev_eid: u32 = 0;
+    let mut prev_state: u32 = curr;
+    let mut has_prev = false;
     while pos < end {
         unsafe {
             let mt = *minterms_lookup.add(*data.add(pos) as usize) as u32;
-            if prev_eid != 0 {
-                if prev_eid == 1 {
-                    max_end = max_end.max(pos);
-                } else {
-                    max_end =
-                        scan_fwd_complex(t.effects, prev_eid, pos, Nullability::CENTER, max_end);
-                }
+            if has_prev {
+                max_end =
+                    fwd_center_update(center_effect_id, center_effects, prev_state, pos, max_end);
             }
             let delta = (curr << mt_log | mt) as usize;
             let next = *center_table.add(delta);
@@ -2292,30 +2278,36 @@ fn scan_single_component(
                 return (DFA_DEAD as u32, pos, max_end, false);
             }
             curr = next as u32;
-            prev_eid = *effects_id.add(curr as usize) as u32;
+            prev_state = curr;
+            has_prev = true;
         }
         pos += 1;
     }
-    if prev_eid != 0 {
-        let mask = if pos >= data_end {
-            Nullability::END
-        } else {
-            Nullability::CENTER
-        };
-        if prev_eid == 1 {
-            if mask.has(Nullability::ALWAYS) {
-                max_end = max_end.max(pos);
+    if has_prev {
+        if pos >= data_end {
+            unsafe {
+                let eid = *effects_id.add(prev_state as usize) as u32;
+                if eid == 1 {
+                    max_end = max_end.max(pos);
+                } else if eid != 0 {
+                    max_end =
+                        collect_nulls_fwd_complex(t.effects, eid, pos, Nullability::END, max_end);
+                }
             }
         } else {
-            max_end = scan_fwd_complex(t.effects, prev_eid, pos, mask, max_end);
+            unsafe {
+                max_end =
+                    fwd_center_update(center_effect_id, center_effects, prev_state, pos, max_end);
+            }
         }
     }
     (curr, pos, max_end, false)
 }
 
 #[inline(never)]
-fn scan_fwd<const SKIP: bool>(
+fn scan_fwd_verify<const SKIP: bool>(
     t: &ScanTables,
+    effects_id: *const u16,
     skip_ids: &[u8],
     skip_searchers: &[MintermSearchValue],
     mut curr: u32,
@@ -2324,8 +2316,9 @@ fn scan_fwd<const SKIP: bool>(
     mut max_end: usize,
 ) -> (u32, usize, usize, bool) {
     let center_table = t.center_table;
-    let effects_id = t.effects_id;
     let effects = t.effects;
+    let center_effect_id = t.center_effect_id;
+    let center_effects = t.effects;
     let data = t.data;
     let minterms_lookup = t.minterms_lookup;
     let mt_log = t.mt_log;
@@ -2345,41 +2338,33 @@ fn scan_fwd<const SKIP: bool>(
                     match searcher.find_fwd(haystack) {
                         Some(offset) => {
                             // nullable self-loop: only need max position for max_end
-                            unsafe {
-                                let eid = *effects_id.add(curr as usize) as u32;
-                                if eid != 0 && offset > 0 {
-                                    let skip_end_pos = pos + offset;
-                                    if eid == 1 {
-                                        max_end = max_end.max(skip_end_pos);
-                                    } else {
-                                        max_end = scan_fwd_complex(
-                                            effects,
-                                            eid,
-                                            skip_end_pos,
-                                            Nullability::CENTER,
-                                            max_end,
-                                        );
-                                    }
+                            if offset > 0 {
+                                unsafe {
+                                    max_end = fwd_center_update(
+                                        center_effect_id,
+                                        center_effects,
+                                        curr,
+                                        pos + offset,
+                                        max_end,
+                                    );
                                 }
                             }
                             pos += offset;
                         }
                         None => {
-                            // no non-self-loop byte: entire rest is self-loop
+                            // no non-self-loop byte: entire rest is self-loop (END boundary)
                             unsafe {
                                 let eid = *effects_id.add(curr as usize) as u32;
-                                if eid != 0 {
-                                    if eid == 1 {
-                                        max_end = max_end.max(end);
-                                    } else {
-                                        max_end = scan_fwd_complex(
-                                            effects,
-                                            eid,
-                                            end,
-                                            Nullability::END,
-                                            max_end,
-                                        );
-                                    }
+                                if eid == 1 {
+                                    max_end = max_end.max(end);
+                                } else if eid != 0 {
+                                    max_end = collect_nulls_fwd_complex(
+                                        effects,
+                                        eid,
+                                        end,
+                                        Nullability::END,
+                                        max_end,
+                                    );
                                 }
                             }
                             return (curr, end, max_end, false);
@@ -2389,17 +2374,19 @@ fn scan_fwd<const SKIP: bool>(
             }
         }
 
-        let mut prev_eid: u32 = 0;
+        let mut prev_state: u32 = curr;
+        let mut has_prev = false;
         while pos < end {
             unsafe {
                 let mt = *minterms_lookup.add(*data.add(pos) as usize) as u32;
-                if prev_eid != 0 {
-                    if prev_eid == 1 {
-                        max_end = max_end.max(pos);
-                    } else {
-                        max_end =
-                            scan_fwd_complex(effects, prev_eid, pos, Nullability::CENTER, max_end);
-                    }
+                if has_prev {
+                    max_end = fwd_center_update(
+                        center_effect_id,
+                        center_effects,
+                        prev_state,
+                        pos,
+                        max_end,
+                    );
                 }
                 let delta = (curr << mt_log | mt) as usize;
                 let next = *center_table.add(delta);
@@ -2410,31 +2397,53 @@ fn scan_fwd<const SKIP: bool>(
                     return (DFA_DEAD as u32, pos, max_end, false);
                 }
                 curr = next as u32;
-                prev_eid = *effects_id.add(curr as usize) as u32;
+                prev_state = curr;
+                has_prev = true;
             }
             pos += 1;
             if SKIP && skip_ids[curr as usize] != 0 {
-                // flush deferred prev_eid before returning to skip loop
-                if prev_eid != 0 {
-                    let mask = if pos >= end {
-                        Nullability::END
+                // flush deferred prev_state before returning to skip loop
+                if has_prev {
+                    if pos >= end {
+                        unsafe {
+                            let eid = *effects_id.add(prev_state as usize) as u32;
+                            if eid == 1 {
+                                max_end = max_end.max(pos);
+                            } else if eid != 0 {
+                                max_end = collect_nulls_fwd_complex(
+                                    effects,
+                                    eid,
+                                    pos,
+                                    Nullability::END,
+                                    max_end,
+                                );
+                            }
+                        }
                     } else {
-                        Nullability::CENTER
-                    };
-                    if prev_eid == 1 {
-                        max_end = max_end.max(pos);
-                    } else {
-                        max_end = scan_fwd_complex(effects, prev_eid, pos, mask, max_end);
+                        unsafe {
+                            max_end = fwd_center_update(
+                                center_effect_id,
+                                center_effects,
+                                prev_state,
+                                pos,
+                                max_end,
+                            );
+                        }
                     }
                 }
                 continue 'outer;
             }
         }
-        if prev_eid != 0 {
-            if prev_eid == 1 {
-                max_end = max_end.max(pos);
-            } else {
-                max_end = scan_fwd_complex(effects, prev_eid, pos, Nullability::END, max_end);
+        if has_prev {
+            // END boundary: use full effects for non-hot path.
+            unsafe {
+                let eid = *effects_id.add(prev_state as usize) as u32;
+                if eid == 1 {
+                    max_end = max_end.max(pos);
+                } else if eid != 0 {
+                    max_end =
+                        collect_nulls_fwd_complex(effects, eid, pos, Nullability::END, max_end);
+                }
             }
         }
         if !SKIP {
@@ -2444,12 +2453,104 @@ fn scan_fwd<const SKIP: bool>(
     (curr, pos, max_end, false)
 }
 
+#[inline(never)]
+fn scan_fwd<const SKIP: bool>(
+    t: &ScanTables,
+    effects_id: *const u16,
+    skip_ids: &[u8],
+    skip_searchers: &[MintermSearchValue],
+    mut l_state: u32,
+    mut l_pos: usize,
+    end: usize,
+    mut max_end: usize,
+) -> (u32, usize, usize, bool) {
+    let center_table = t.center_table;
+    let effects = t.effects;
+    let center_effect_id = t.center_effect_id;
+    let center_effects = t.effects;
+    let data = t.data;
+    let minterms_lookup = t.minterms_lookup;
+    let mt_log = t.mt_log;
+    unsafe {
+        while l_state != DFA_DEAD as u32 {
+            if SKIP {
+                #[cfg(any(
+                    target_arch = "x86_64",
+                    target_arch = "aarch64",
+                    all(target_arch = "wasm32", target_feature = "simd128")
+                ))]
+                {
+                    let sid = skip_ids[l_state as usize];
+                    if sid != 0 {
+                        let searcher = &skip_searchers[sid as usize - 1];
+                        let haystack = std::slice::from_raw_parts(data.add(l_pos), end - l_pos);
+                        match searcher.find_fwd(haystack) {
+                            Some(offset) => {
+                                if offset > 0 {
+                                    max_end = fwd_center_update(
+                                        center_effect_id,
+                                        center_effects,
+                                        l_state,
+                                        l_pos + offset,
+                                        max_end,
+                                    );
+                                }
+                                l_pos += offset;
+                            }
+                            None => {
+                                // no non-self-loop byte: entire rest is self-loop
+                                let eid = *effects_id.add(l_state as usize) as u32;
+                                if eid != 0 {
+                                    if eid == 1 {
+                                        max_end = max_end.max(end);
+                                    } else {
+                                        max_end = collect_nulls_fwd_complex(
+                                            effects,
+                                            eid,
+                                            end,
+                                            Nullability::END,
+                                            max_end,
+                                        );
+                                    }
+                                }
+                                return (l_state, end, max_end, false);
+                            }
+                        }
+                    }
+                }
+            }
+            max_end = fwd_center_update(center_effect_id, center_effects, l_state, l_pos, max_end);
+            let mt = *minterms_lookup.add(*data.add(l_pos) as usize) as u32;
+            let delta = (l_state << mt_log | mt) as usize;
+            let next = *center_table.add(delta) as u32;
+            if next == DFA_MISSING as u32 {
+                return (l_state, l_pos, max_end, true);
+            }
+            if next == DFA_DEAD as u32 {
+                return (DFA_DEAD as u32, l_pos, max_end, false);
+            }
+            // keeping for debugging
+            // eprintln!("[pos] {:?}; {}->{}", l_pos, l_state, next);
+            l_state = next;
+            l_pos += 1;
+            if l_pos == end {
+                let effect_id = *effects_id.add(l_state as usize) as u32;
+                max_end =
+                    collect_nulls_fwd_complex(effects, effect_id, l_pos, Nullability::END, max_end);
+                l_state = DFA_DEAD as _;
+            }
+        }
+    }
+    (l_state, l_pos, max_end, false)
+}
+
 fn register_state(
     state_nodes: &mut Vec<NodeId>,
     node_to_state: &mut HashMap<NodeId, u16>,
     effects_id: &mut Vec<u16>,
+    center_effect_id: &mut Vec<u16>,
     effects: &mut Vec<Vec<NullState>>,
-    b: &RegexBuilder,
+    b: &mut RegexBuilder,
     node: NodeId,
 ) -> u16 {
     if let Some(&sid) = node_to_state.get(&node) {
@@ -2459,11 +2560,16 @@ fn register_state(
     state_nodes.push(node);
     node_to_state.insert(node, sid);
     let eff_id = b.get_nulls_id(node);
+    let eid = b.center_nulls_id(eff_id);
     if sid as usize >= effects_id.len() {
         effects_id.resize(sid as usize + 1, 0u16);
     }
+    if sid as usize >= center_effect_id.len() {
+        center_effect_id.resize(sid as usize + 1, EID_NONE as u16);
+    }
     effects_id[sid as usize] = eff_id.0 as u16;
-    while effects.len() <= eff_id.0 as usize {
+    center_effect_id[sid as usize] = eid.0 as u16;
+    while effects.len() <= eff_id.0 as usize || effects.len() <= eid.0 as usize {
         effects.push(b.nulls_entry_vec(effects.len() as u32));
     }
     sid

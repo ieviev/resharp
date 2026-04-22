@@ -26,7 +26,7 @@ You combine all of these with `&` to get more complex patterns.
 
 ## Extensions
 
-### `_` -- universal wildcard
+### `_`: universal wildcard
 
 Matches any single byte including newlines. `_*` means "any string".
 
@@ -39,9 +39,9 @@ _{5,10} matches any byte string of 5-10 bytes
 _*cat_* any string containing "cat"
 ```
 
-Prefer `_` over `.*` with complement -- `~(.*xyz.*)` means "does not contain xyz on the same line", while `~(_*xyz_*)` means "does not contain xyz" unconditionally.
+Prefer `_*` over `.*` with complement. `~(.*xyz.*)` means "does not contain xyz on the same line", while `~(_*xyz_*)` means "does not contain xyz" unconditionally.
 
-### `&` -- intersection
+### `&`: intersection
 
 Both sides must match. The result is the intersection of two regular languages.
 
@@ -52,7 +52,7 @@ _*cat_*&_*dog_*&_{5,30}   ...and is 5-30 characters long
 
 Intersection has higher precedence than alternatives: `a|b&c` is parsed as `a|(b&c)`.
 
-### `~(...)` -- complement
+### `~(...)`: complement
 
 Matches everything the inner pattern does **not** match. Parentheses are required.
 
@@ -72,7 +72,7 @@ F.*&~(_*Finn)                       starts with F, doesn't end with "Finn"
 
 ### Complement and UTF-8
 
-RE# operates on raw bytes. Complement inverts at the byte level, so `~(pattern)` can match arbitrary byte sequences -- including invalid UTF-8. Intersect with `\p{utf8}` to stay in valid UTF-8 space:
+RE# operates on raw bytes. Complement inverts at the byte level, so `~(pattern)` can match arbitrary byte sequences, including invalid UTF-8. Intersect with `\p{utf8}` to stay in valid UTF-8 space:
 
 ```
 ~(_*abc_*)&\p{utf8}                 does not contain "abc", valid UTF-8 only
@@ -81,34 +81,36 @@ RE# operates on raw bytes. Complement inverts at the byte level, so `~(pattern)`
 
 Without `&\p{utf8}`, a complement pattern will match any byte string that doesn't match the inner pattern, including byte sequences that aren't valid UTF-8. This matters when your input is guaranteed UTF-8 and you want the engine to respect that.
 
-`\p{utf8}` matches `(ascii | [C0-DF][80-BF] | [E0-EF][80-BF]{2} | [F0-F7][80-BF]{3})*` -- the set of all valid UTF-8 byte strings. There's no special UTF-8 mode; the constraint falls out of intersection over byte-level automata. See the [blog post](https://iev.ee/blog/symbolic-derivatives-and-the-rust-rewrite-of-resharp/) for details.
+`\p{utf8}` matches `(ascii | [C0-DF][80-BF] | [E0-EF][80-BF]{2} | [F0-F7][80-BF]{3})*`, the set of all valid UTF-8 byte strings. There's no special UTF-8 mode; the constraint falls out of intersection over byte-level automata. See the [blog post](https://iev.ee/blog/symbolic-derivatives-and-the-rust-rewrite-of-resharp/) for details.
 
 > `\W`, `\D`, `\S` already intersect with valid UTF-8 internally, so they never match invalid byte sequences. The `&\p{utf8}` constraint is only needed when using `~(...)` complement directly.
 
 ## Unicode
 
-`\w`, `\d`, `\s` and `\b` are Unicode-aware by default, but **scoped to 2-byte UTF-8** sequences (U+0000..U+07FF): ASCII, Latin Extended, Greek, Cyrillic, Hebrew, Arabic, and other scripts through NKo.
-
-### Why not full Unicode `\w`?
-
-RE# lazily compiles automaton states on demand, but each new state requires deriving transitions for every character class in the pattern. Full Unicode `\w` covers ~140,000 codepoints across hundreds of disjoint byte ranges - deriving through that is expensive every time a new state is built. `\S`, by contrast, is the complement of just 6 whitespace codepoints. If you're using `\w` to mean "non-whitespace token character", `\S` is both more precise and orders of magnitude cheaper to derive.
-
-RE# defaults to 2-byte coverage (~1,600 codepoints) as a practical middle ground: it covers ASCII plus Latin, Greek, Cyrillic, Hebrew, Arabic, and other scripts through NKo - enough for most `\w` use cases without the derivation cost of full Unicode.
-
-Once states are compiled, match throughput is not significantly affected. But be prepared for milliseconds to seconds of compilation time for large patterns using full Unicode `\w` via `\p{Letter}` - the cost is entirely in building states, not in scanning input.
-
-`\b` uses this same 2-byte `\w` definition - characters outside that range are treated as non-word for boundary purposes.
-
-Scripts encoded as 3+ byte UTF-8 (U+0800+) - Devanagari, Thai, CJK, etc. - are not included in `\w`, `\d`, `\s`. For these, use `\p{Class}` which covers the full Unicode range:
-
 | Shorthand | Covers | Full-range alternative |
 |-----------|--------|----------------------|
-| `\w` | word chars up to U+07FF | `\p{Letter}` \| `\p{Number}` \| `\_` |
-| `\d` | digits up to U+07FF | `\p{Number}` |
-| `\s` | whitespace up to U+07FF | `\p{White_Space}` |
+| `\w` | word chars up to 2-byte UTF-8 (U+07FF) | `\p{Letter}` \| `\p{Number}` \| `\_` |
+| `\d` | ASCII `[0-9]` only | `\p{Number}` |
+| `\s` | whitespace up to 2-byte UTF-8 (U+07FF) | `\p{White_Space}` |
 | `\W` | non-word (UTF-8 safe) | |
-| `\D` | non-digit (UTF-8 safe) | |
+| `\D` | non-digit (`[^0-9]`) | |
 | `\S` | non-whitespace (UTF-8 safe) | |
+
+`\w`, `\s`, `\b` cover U+0000..U+07FF (ASCII, Latin Extended, Greek, Cyrillic, Hebrew, Arabic, through NKo). Scripts in 3+ byte UTF-8 (Devanagari, Thai, CJK, …) need `\p{Class}`.
+
+`\d` is ASCII `[0-9]` only. Non-ASCII digits are rare and their inclusion hurts DFA size and prefix acceleration. Use `\p{Number}` for the full `Nd` category.
+
+### Rationale
+
+The goal is not strict conformance to the Unicode spec, it's to reduce unintended performance foot-guns where possible while still covering what real patterns actually use.
+
+Full Unicode `\w` covers ~140,000 codepoints across hundreds of byte ranges. Including all of that in `\w` makes pattern build time significantly worse (ms to seconds on large patterns); match time stays roughly the same.
+
+2-byte coverage (~1,600 codepoints: ASCII through NKo) handles most real `\w` uses at a fraction of the build cost. For wider coverage use `\p{Letter}` / `\p{Number}` explicitly. If you mean "non-whitespace token", `\S` is usually what you want: it's the complement of 6 codepoints and far cheaper.
+
+`\b` uses the same 2-byte `\w`; characters beyond U+07FF are treated as non-word for boundary purposes.
+
+For `\d` the trade-off lands the other way. The only non-ASCII digits that fit in 2 bytes are Arabic-Indic (U+0660..U+0669), Extended Arabic-Indic (U+06F0..U+06F9), and NKo (U+07C0..U+07C9). These are essentially nonexistent in real corpora (even Arabic/Persian digital text overwhelmingly uses ASCII digits), but including them adds three extra 2-byte branches to every `\d`, which breaks single-byte SIMD prefix acceleration and enlarges the DFA for patterns like `\d+`, `\d{n}`, or `[\w\d]+`. Defaulting `\d` to ASCII pays off on the common case; users who need Unicode digits opt in via `\p{Number}`.
 
 `\p{Class}` expands to the full Unicode range via `regex_syntax`, with no 2-byte limit. Any [Unicode general category or script name](https://www.unicode.org/reports/tr44/#General_Category_Values) works:
 
@@ -141,8 +143,8 @@ You can also use explicit ranges: `[\u{0900}-\u{097F}]`.
 | `[abc]` | any of a, b, c |
 | `[^abc]` | any character except a, b, c |
 | `[a-z]` | range: a through z |
-| `\d` | digit (unicode; `[0-9]` for ascii) |
-| `\D` | non-digit |
+| `\d` | digit (ASCII `[0-9]`; use `\p{Number}` for full Unicode) |
+| `\D` | non-digit (`[^0-9]`) |
 | `\w` | word character (unicode; `[A-Za-z0-9_]` for ascii) |
 | `\W` | non-word character |
 | `\s` | whitespace (unicode; `[\t\n\v\f\r ]` for ascii) |
@@ -179,16 +181,19 @@ You can also use explicit ranges: `[\u{0900}-\u{097F}]`.
 | `(?<=...)` | positive lookbehind |
 | `(?<!...)` | negative lookbehind |
 
-Lookarounds are compiled directly into the automaton -- no backtracking.
+Lookarounds are compiled directly into the automaton: no backtracking.
 
-Lookarounds combine with intersection and complement:
+Lookarounds combine with intersection as expected:
 
 ```
 (?<=author).*&.*and.*   after "author", containing "and"
 (?<=\s)_*(?=\.)         preceded by whitespace, followed by "."
 ```
 
-**Restriction: no nested lookarounds.** RE# normalizes all lookarounds into the form `(?<=R1)R2(?=R3)`, where R1, R2, and R3 are regular expressions that themselves cannot contain lookbehinds. This is what allows RE# to encode lookaround information directly into DFA states and maintain linear-time matching.
+**Restrictions:**
+
+- No nested lookarounds. RE# normalizes every pattern into `(?<=R1)R2(?=R3)`, where R1, R2, R3 are plain regular expressions with no lookbehinds of their own. This is what lets RE# encode lookaround state directly into DFA states and stay linear-time.
+- No lookarounds inside complement (`~(...)`) or stars `*`
 
 ### Flags
 
@@ -204,3 +209,12 @@ Flags apply from the point they appear until the end of the enclosing group.
 ## Match semantics
 
 Matches are **leftmost-longest**. This differs from most regex engines which use leftmost-greedy (PCRE). Lazy quantifiers (`*?`, `+?`, `??`, `{n,m}?`) are not supported and will produce a parse error.
+
+Alternation order does not affect what gets matched; only length does. For `y|yes|n|no` against `yes please`:
+
+| Engine | Match |
+|--------|-------|
+| RE# (leftmost-longest) | `yes` |
+| PCRE / Rust `regex` (leftmost-greedy) | `y` |
+
+For predictable longest-match behavior, alternative order is irrelevant: `yes|y|no|n` and `y|yes|n|no` both match `yes` in RE#.

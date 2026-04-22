@@ -61,12 +61,6 @@ fn fixed_repeat_range() {
 }
 
 #[test]
-fn fixed_date() {
-    // \d matches Unicode digits (multibyte in UTF-8), so not fixed at byte level
-    assert_eq!(fixed_length(r"\d{4}-\d{2}-\d{2}"), None);
-}
-
-#[test]
 fn minmax_literal() {
     assert_eq!(min_max("abc"), (3, 3));
 }
@@ -209,11 +203,6 @@ fn bdfa_union_variable() {
 #[test]
 fn bdfa_aws_key() {
     assert!(!bdfa_eligible(r"(?:ASIA|AKIA|AROA|AIDA)[A-Z0-7]{16}"));
-}
-
-#[test]
-fn bdfa_date() {
-    assert!(bdfa_eligible(r"\d{4}-\d{2}-\d{2}"));
 }
 
 #[test]

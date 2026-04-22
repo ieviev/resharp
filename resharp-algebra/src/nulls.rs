@@ -82,8 +82,8 @@ type Nulls = BTreeSet<NullState>;
 pub struct NullsId(pub u32);
 impl NullsId {
     pub const EMPTY: NullsId = NullsId(0);
-    pub const ALWAYS0: NullsId = NullsId(1);
-    pub const CENTER0: NullsId = NullsId(2);
+    pub const CENTER0: NullsId = NullsId(1);
+    pub const ALWAYS0: NullsId = NullsId(2);
     pub const BEGIN0: NullsId = NullsId(3);
     pub const END0: NullsId = NullsId(4);
 }
@@ -124,10 +124,14 @@ impl NullsBuilder {
             created: FxHashMap::default(),
         };
         let _ = inst.init(BTreeSet::new());
-        let _ = inst.init1(NullState::new0(Nullability::ALWAYS));
-        let _ = inst.init1(NullState::new0(Nullability::CENTER));
-        let _ = inst.init1(NullState::new0(Nullability::BEGIN));
-        let _ = inst.init1(NullState::new0(Nullability::END));
+        let _center = inst.init1(NullState::new0(Nullability::CENTER));
+        let _always = inst.init1(NullState::new0(Nullability::ALWAYS));
+        let _begin = inst.init1(NullState::new0(Nullability::BEGIN));
+        let _end = inst.init1(NullState::new0(Nullability::END));
+        debug_assert!(_center == NullsId::CENTER0);
+        debug_assert!(_always == NullsId::ALWAYS0);
+        debug_assert!(_begin == NullsId::BEGIN0);
+        debug_assert!(_end == NullsId::END0);
         inst
     }
 

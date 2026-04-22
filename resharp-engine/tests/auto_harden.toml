@@ -1,0 +1,63 @@
+description = '''
+tests for auto-hardening heuristic
+'''
+
+[[test]]
+pattern = 'a|_*b'
+hardened = true
+
+[[test]]
+pattern = '^[\\s\\S]*\\.js$'
+hardened = false
+
+[[test]]
+pattern = '_*foo_*'
+hardened = false
+
+[[test]]
+pattern = '^([\|\s+\S+]+\s+\|\s*)$'
+hardened = true
+
+[[test]]
+pattern = 'x(a|_*b)'
+hardened = false
+
+[[test]]
+pattern = 'Sherlock Holmes'
+hardened = false
+
+[[test]]
+pattern = '.*b|a'
+hardened = false
+
+[[test]]
+pattern = 'Sherlock|Holmes|Watson'
+hardened = false
+
+[[test]]
+pattern = '^\s*(/)?([a-z]+)\s*(?::([\s\S]*))?$'
+hardened = false
+
+[[test]]
+pattern = '\n\s*\S[\s\S]*$'
+hardened = false
+
+[[test]]
+pattern = '_*Holmes'
+hardened = false
+
+[[test]]
+pattern = '\{_*\}'
+hardened = false
+
+[[test]]
+pattern = '\{[^{]*\}'
+hardened = false
+
+[[test]]
+pattern = '([\s\S]+) as ([\s\S]+)'
+hardened = false
+
+[[test]]
+pattern = '([\s\S]+)\.[\s\S]+'
+hardened = false

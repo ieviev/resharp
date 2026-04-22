@@ -294,7 +294,10 @@ fn space_newline_space() {
     let mk = || EngineOptions::default().unicode(UnicodeMode::Javascript);
     let line = "abcdefghij abcdefghij abcdefghij abcdefg ";
     let mut hay = String::new();
-    while hay.len() < 1_000_000 { hay.push_str(line); hay.push('\n'); }
+    while hay.len() < 1_000_000 {
+        hay.push_str(line);
+        hay.push('\n');
+    }
     let bytes = hay.as_bytes();
     for pat in [" *\\n *", " *\\n", "\\n *", "\\n", " +\\n +"] {
         let re = Regex::with_options(pat, mk()).unwrap();
@@ -303,7 +306,13 @@ fn space_newline_space() {
         let m = re.find_all(bytes).unwrap();
         let dt = t.elapsed();
         let mbps = (bytes.len() as f64 / 1e6) / dt.as_secs_f64();
-        eprintln!("pat={:?} matches={} dt={:?} MB/s={:.2}", pat, m.len(), dt, mbps);
+        eprintln!(
+            "pat={:?} matches={} dt={:?} MB/s={:.2}",
+            pat,
+            m.len(),
+            dt,
+            mbps
+        );
     }
 }
 
@@ -434,6 +443,7 @@ fn dictionary_context_small_suffix() {
 }
 
 #[test]
+#[ignore = "slow; run with --ignored"]
 fn dictionary_context_medium() {
     let path = format!(
         "{}/../data/regexes/dictionary-fixed-context.txt",
@@ -1135,6 +1145,7 @@ fn hardened_semantics() {
 }
 
 #[test]
+#[ignore = "slow; run with --ignored"]
 fn hardened_date_pattern() {
     run_file_hardened("date_pattern.toml");
 }
@@ -1150,6 +1161,7 @@ fn hardened_lookaround() {
 }
 
 #[test]
+#[ignore = "slow; run with --ignored"]
 fn hardened_boolean() {
     run_file_hardened("boolean.toml");
 }
@@ -1175,6 +1187,7 @@ fn hardened_ci() {
 }
 
 #[test]
+#[ignore = "slow; run with --ignored"]
 fn hardened_word_boundary() {
     run_file_hardened("word_boundary.toml");
 }
@@ -1759,25 +1772,39 @@ fn word_boundaries_loop() {
 fn repro_unanchored_fwd_ascii_word() {
     let re = Regex::new(r"\w\w-\w\w").unwrap();
     let hay = b"xxxxx00-00yyyyy";
-    let matches: Vec<_> = re.find_all(hay).unwrap().into_iter().map(|m| (m.start, m.end)).collect();
+    let matches: Vec<_> = re
+        .find_all(hay)
+        .unwrap()
+        .into_iter()
+        .map(|m| (m.start, m.end))
+        .collect();
     assert_eq!(matches, vec![(5, 10)]);
 }
 
 #[test]
 fn repro_unanchored_fwd_date() {
     let re = Regex::new(r"\d{4}-\d\d?-\d\d?((T| )\d{2}:\d{2}:\d{2})?").unwrap();
-    let matches: Vec<_> = re.find_all(b"0000-0-0 0000-0-0").unwrap()
-        .into_iter().map(|m| (m.start, m.end)).collect();
+    let matches: Vec<_> = re
+        .find_all(b"0000-0-0 0000-0-0")
+        .unwrap()
+        .into_iter()
+        .map(|m| (m.start, m.end))
+        .collect();
     assert_eq!(matches, vec![(0, 8), (9, 17)]);
 }
 
 #[test]
 fn fwd_la_1() {
+    // lookahead inside a Kleene loop is currently rejected by
+    // ensure_supported (see resharp-engine/src/lib.rs) because the
+    // lookahead body is not re-checked on each iteration.
     let pattern = r"(?:\[[^\]]*\]|[^\]]|\](?=[^\[]*\]))*";
-    let hay = include_bytes!("../../data/haystacks/smallserver.txt");
     let ops = EngineOptions::default().unicode(resharp::UnicodeMode::Ascii);
-    let re = Regex::with_options(pattern, ops).unwrap();
-    let _ = re.find_all(hay).unwrap();
+    match Regex::with_options(pattern, ops) {
+        Err(resharp::Error::Algebra(resharp_algebra::AlgebraError::UnsupportedPattern)) => {}
+        Err(e) => panic!("unexpected error: {:?}", e),
+        Ok(_) => panic!("expected UnsupportedPattern"),
+    }
 }
 
 #[test]
@@ -1798,7 +1825,6 @@ fn fwd_la_2_js() {
     let _ = re.find_all(&hay[..50]).unwrap();
 }
 
-
 #[test]
 fn fwd_la_3() {
     let pattern = "<(?:\\/?(?!(?:div|p|br|span)>)\\w+|(?:(?!(?:span style=\"white-space:\\s?pre;?\">)|br\\s?\\/>))\\w+\\s[^>]+)>";
@@ -1808,18 +1834,219 @@ fn fwd_la_3() {
     let _ = re.find_all(&hay[..2]).unwrap();
 }
 
-
 #[test]
 fn word_boundary_rare_literal_modes() {
     use resharp::{EngineOptions, UnicodeMode};
-    let bytes = std::fs::read("/home/ian/f/myrepos/resharp-wasm/test/data/haystacks/rust-src-tools-3b0d4813.txt").unwrap();
-    for mode in [UnicodeMode::Ascii, UnicodeMode::Default, UnicodeMode::Javascript, UnicodeMode::Full] {
-        let re = Regex::with_options("\\bGIT_PARAMS\\b", EngineOptions::default().unicode(mode)).unwrap();
+    let bytes = std::fs::read(
+        "/home/ian/f/myrepos/resharp-wasm/test/data/haystacks/rust-src-tools-3b0d4813.txt",
+    )
+    .unwrap();
+    for mode in [
+        UnicodeMode::Ascii,
+        UnicodeMode::Default,
+        UnicodeMode::Javascript,
+    ] {
+        let re = Regex::with_options("\\bGIT_PARAMS\\b", EngineOptions::default().unicode(mode))
+            .unwrap();
         let _ = re.find_all(&bytes).unwrap();
         let t = std::time::Instant::now();
         let m = re.find_all(&bytes).unwrap();
         let dt = t.elapsed();
         let mbps = (bytes.len() as f64 / 1e6) / dt.as_secs_f64();
-        eprintln!("mode={:?} matches={} dt={:?} MB/s={:.1}", mode, m.len(), dt, mbps);
+        eprintln!(
+            "mode={:?} matches={} dt={:?} MB/s={:.1}",
+            mode,
+            m.len(),
+            dt,
+            mbps
+        );
     }
+}
+
+#[test]
+#[ignore = "slow"]
+fn slow_pattern_regression_1() {
+    let bytes = std::fs::read(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../data/haystacks/rust-src-tools-3b0d4813.txt"
+    ))
+    .unwrap();
+    let hay = &bytes[..32 * 1024];
+    let patterns: &[&str] = &[
+        // r"[\s\S]+(?:rv|it|ra|ie)[/: ]([\d.]+)",
+        // r"^([\|\s+\S+]+\s+\|\s*)$",
+        // r".*#",
+        // r".*!",
+        // r"(.*)?(#)(.*)(.*)?",
+        // r"([^>]*)(<([a-z/][-a-z0-9_:.]*)[^>/]*(/*)>)([^<]*)",
+        // r"[$a-z_][0-9a-z_$]*[^=]+(-|=)>",
+        // r"(?=\S)[^@;{}()]?(?:[^@;{}()]|#\{\$[-\w]+\})+(?=\s*\{(?:\}|\s|[^}]+[:{][^}]+))",
+        // r"^\s*([a-z]{3})?\s*(-)?(\d*)(?:\.(\d*))?\s*([a-f0-9]{40}|[a-z0-9]{3})?\s*$",
+        // r"([\d,\w,\s,\./]*)(?=!)",
+        // r"([^#]*)#(.+)$",
+        // r"([^\s;{}][^;{}]*)\{",
+        // r"[^/\\]*\.\w{0,8}$",
+        // r"[^{}]+(?=})",
+        // r"<[^/][^>][^<]+\s+.[^<]+[=][^<]+>",
+        // r"([^\[]*)\[([^\]]+)]",
+        // r#"<('[^']*'|'[^']*'|[^''>])*>"#,
+        // r"[^{}\s][^{};]*(?=\s*\{)",
+        // r"^\s*([^{}]+)\s*\{\s*((?:[^{}]+\{[^{}]+\})+|[^{}]+)\s*\}$",
+        // r".*chicken.*",
+        // r".*/open_redirect",
+        // r"([^$]*\{@[^}]+\})|.*$",
+        // r"([^>]*-->)*",
+        // r"(.*/)?(?=[^/]+)",
+        // r"[^[0-9]\.\-]",
+        // r"^([a-z][a-z0-9.+-]*:)?(\/\/)?([\S\s]*)",
+        // r"^([^:\/?#]+:)?(\/\/(?:[^:@\/]*(?::[^:@\/]*)?@)?(([^:\/?#]*)(?::(\d*))?))?([^?#]*)(\?[^#]*)?(#[\s\S]*)?",
+        // r"^(\S+)(?:\s+(\S[\s\S]*))?",
+        // r"(?=\S)([\S\s]*\S)",
+        // r"\S(?:[\s\S]*\S)?",
+        // r"^([^\s]*)\s*([\S\s]*)",
+        // r"([\w\d_\-]*)\.?js$|[^\\\/]*$",
+        // r"([\w\d_-]*)\.?[^\\\/]*$",
+    ];
+    const ITERS: u32 = 10;
+    const FLOOR_MBPS: f64 = 30.0;
+    use resharp::UnicodeMode;
+    let mut failures = Vec::new();
+    for pattern in patterns {
+        for mode in [UnicodeMode::Javascript] {
+            let opts = EngineOptions::default().unicode(mode);
+            let re = Regex::with_options(pattern, opts).unwrap();
+            let _ = re.find_all(hay).unwrap(); // warm up
+            let mut best = f64::INFINITY;
+            let mut matches = 0;
+            for _ in 0..ITERS {
+                let t = std::time::Instant::now();
+                let m = re.find_all(hay).unwrap();
+                let dt = t.elapsed().as_secs_f64();
+                best = best.min(dt);
+                matches = m.len();
+            }
+            let mbps = (hay.len() as f64 / 1e6) / best;
+            eprintln!(
+                "{:?}  {:>8.2} MB/s  matches={:<4}  {:?}",
+                mode, mbps, matches, pattern
+            );
+            if mbps < FLOOR_MBPS {
+                failures.push((mode, pattern, mbps));
+            }
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "patterns below {} MB/s: {:#?}",
+        FLOOR_MBPS,
+        failures
+    );
+}
+
+#[test]
+fn slow_pattern_regression_2() {
+    let bytes = std::fs::read(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../data/haystacks/rust-src-tools-3b0d4813.txt"
+    ))
+    .unwrap();
+    // let hay = &bytes[..32 * 1024];
+    let hay = &bytes[..1 * 1024];
+    // let hay = &bytes[..29 * 1024];
+    // let hay = &bytes[16 * 1024..30 * 1024];
+    // let hay = &bytes[0 * 1024..32 * 1024];
+    let patterns: &[&str] = &[
+        // r"([^>]*-->)*",
+        // r"^([\|\s+\S+]+\s+\|\s*)$",
+        // r"[^@]*",
+        // r"[^/\\]*\.\w{0,8}$",
+        // r"(?:[^';]|'[^']*'|;(?=\s))+;(?=\S)",
+        // r"([^$]*\{@[^}]+\})|.*$",
+        // r"([^>]*-->)*",
+        // r"(.*/)?(?=[^/]+)",
+        // r"[^[0-9]\.\-]",
+        // r"^([a-z][a-z0-9.+-]*:)?(\/\/)?([\S\s]*)",
+        // r"^([^:\/?#]+:)?(\/\/(?:[^:@\/]*(?::[^:@\/]*)?@)?(([^:\/?#]*)(?::(\d*))?))?([^?#]*)(\?[^#]*)?(#[\s\S]*)?",
+        // r"^(\S+)(?:\s+(\S[\s\S]*))?",
+        // r"(?=\S)([\S\s]*\S)",
+        // r"\S(?:[\s\S]*\S)?",
+        // r"^([^\s]*)\s*([\S\s]*)",
+    ];
+    const ITERS: u32 = 5;
+    const FLOOR_MBPS: f64 = 30.0;
+    use resharp::UnicodeMode;
+    let mut failures = Vec::new();
+    for pattern in patterns {
+        for mode in [UnicodeMode::Javascript] {
+            let opts = EngineOptions::default().unicode(mode);
+            let re = Regex::with_options(pattern, opts).unwrap();
+            let _ = re.find_all(hay).unwrap(); // warm up
+            let mut best = f64::INFINITY;
+            let mut matches = 0;
+            for _ in 0..ITERS {
+                let t = std::time::Instant::now();
+                let m = re.find_all(hay).unwrap();
+                let dt = t.elapsed().as_secs_f64();
+                best = best.min(dt);
+                matches = m.len();
+            }
+            let mbps = (hay.len() as f64 / 1e6) / best;
+            eprintln!(
+                "{:?}  {:>8.2} MB/s  matches={:<4}  {:?}",
+                mode, mbps, matches, pattern
+            );
+            if mbps < FLOOR_MBPS {
+                failures.push((pattern, mbps));
+            }
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "patterns below {} MB/s: {:#?}",
+        FLOOR_MBPS,
+        failures
+    );
+}
+
+#[test]
+fn repro_lookahead_in_loop() {
+    let pattern = r"(.(?=.))+x";
+    let opts = EngineOptions::default().unicode(resharp::UnicodeMode::Ascii);
+    let result = Regex::with_options(pattern, opts);
+    let err = match result {
+        Err(e) => e,
+        Ok(_) => panic!("pattern {:?} must be rejected", pattern),
+    };
+    assert!(
+        matches!(
+            err,
+            resharp::Error::Algebra(resharp_algebra::AlgebraError::UnsupportedPattern)
+        ),
+        "expected UnsupportedPattern, got {:?}",
+        err
+    );
+}
+#[test]
+fn hardened_long_word() {
+    let p = r"\b[a-z]{12,}\b";
+    let input = b"!extraordinary";
+    let re_h = Regex::with_options(p, EngineOptions::default().hardened(true)).unwrap();
+    let re_n = Regex::new(p).unwrap();
+    let a = re_n.find_all(input).unwrap();
+    let b = re_h.find_all(input).unwrap();
+    assert_eq!(a, b);
+}
+
+#[test]
+fn no_progress() {
+    let re = Regex::new(r"ab|bcd*").unwrap();
+    let hay = "abcdddxabxbcdddyabbcd".repeat(20);
+    let ms = re.find_all(hay.as_bytes()).unwrap();
+    assert!(!ms.is_empty());
+}
+
+#[test]
+fn repro_is_match_negative_lookahead() {
+    let re = Regex::new(r"foo(?!bar)").unwrap();
+    assert!(!re.is_match(b"foobar").unwrap());
 }

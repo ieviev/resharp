@@ -234,7 +234,11 @@ impl PrefixSets {
     }
 
     /// Lower is rarer and more profitable for SIMD skip. `u64::MAX` for an empty sequence.
-    #[cfg(any(target_arch = "x86_64", target_arch = "aarch64", all(target_arch = "wasm32", target_feature = "simd128")))]
+    #[cfg(any(
+        target_arch = "x86_64",
+        target_arch = "aarch64",
+        all(target_arch = "wasm32", target_feature = "simd128")
+    ))]
     pub fn rarity(b: &mut RegexBuilder, sets: &[TSetId]) -> u64 {
         rarest_freq(b, sets)
     }
@@ -242,6 +246,13 @@ impl PrefixSets {
 
 const SKIP_FREQ_THRESHOLD: u32 = 75_000;
 const TEDDY_MAX_FREQ_SUM: u64 = 25_000;
+// sum of BYTE_FREQ[0..256] in the corpus
+const TOTAL_BYTE_FREQ: u64 = 252_052;
+// contributes no meaningful filtering (essentially a wildcard).
+const TEDDY_WEAK_POSITION_FREQ: u64 = 100_000;
+// when to use memchr instead of a full prefix
+const TEDDY_MEMCHR_MAX_FREQ: u64 = 2_500;
+const TEDDY_MEMCHR_MAX_FREQ_F: u64 = 1_500;
 const RARE_BYTE_FREQ_LIMIT: u16 = 25_000;
 
 pub(crate) fn skip_is_profitable(bytes: &[u8]) -> bool {
@@ -272,7 +283,11 @@ pub fn build_strict_literal_prefix(
     b: &mut RegexBuilder,
     node: NodeId,
 ) -> Result<Option<crate::accel::FwdPrefixSearch>, crate::Error> {
-    #[cfg(any(target_arch = "x86_64", target_arch = "aarch64", all(target_arch = "wasm32", target_feature = "simd128")))]
+    #[cfg(any(
+        target_arch = "x86_64",
+        target_arch = "aarch64",
+        all(target_arch = "wasm32", target_feature = "simd128")
+    ))]
     {
         let sets = calc_prefix_sets_inner(b, node, false)?;
         if sets.is_empty() {
@@ -289,7 +304,11 @@ pub fn build_strict_literal_prefix(
         }
         Ok(Some(crate::accel::FwdPrefixSearch::Literal(lit)))
     }
-    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64", all(target_arch = "wasm32", target_feature = "simd128"))))]
+    #[cfg(not(any(
+        target_arch = "x86_64",
+        target_arch = "aarch64",
+        all(target_arch = "wasm32", target_feature = "simd128")
+    )))]
     {
         let _ = (b, node);
         Ok(None)
@@ -311,7 +330,11 @@ pub fn build_fwd_prefix(
     build_fwd_prefix_simd(b, node)
 }
 
-#[cfg(any(target_arch = "x86_64", target_arch = "aarch64", all(target_arch = "wasm32", target_feature = "simd128")))]
+#[cfg(any(
+    target_arch = "x86_64",
+    target_arch = "aarch64",
+    all(target_arch = "wasm32", target_feature = "simd128")
+))]
 fn try_build_fwd_search(
     b: &mut RegexBuilder,
     sets: &[TSetId],
@@ -325,7 +348,11 @@ fn try_build_fwd_search(
 
 /// Core of `try_build_fwd_search`, operating on raw byte sets to avoid
 /// requiring a `RegexBuilder`.
-#[cfg(any(target_arch = "x86_64", target_arch = "aarch64", all(target_arch = "wasm32", target_feature = "simd128")))]
+#[cfg(any(
+    target_arch = "x86_64",
+    target_arch = "aarch64",
+    all(target_arch = "wasm32", target_feature = "simd128")
+))]
 fn try_build_fwd_search_raw(
     byte_sets_raw: &[Vec<u8>],
 ) -> Result<Option<crate::accel::FwdPrefixSearch>, crate::Error> {
@@ -385,6 +412,37 @@ fn try_build_fwd_search_raw(
     let rarest_freq_sum = freqs[0].1;
     let rarest_len = byte_sets_raw[rarest_idx].len();
 
+    let narrow_positions = byte_sets_raw
+        .iter()
+        .map(|bs| {
+            bs.iter()
+                .map(|&b| crate::simd::BYTE_FREQ[b as usize] as u64)
+                .sum::<u64>()
+        })
+        .filter(|&f| f <= TEDDY_WEAK_POSITION_FREQ)
+        .count();
+    let non_full_positions = byte_sets_raw.iter().filter(|bs| bs.len() < 256).count();
+    if byte_sets_raw.len() > 1 && non_full_positions <= 1 {
+        if cfg!(feature = "debug") {
+            eprintln!(
+                "  [fwd-prefix] reject: only {} discriminating position(s) in {}-byte prefix",
+                non_full_positions, byte_sets_raw.len()
+            );
+        }
+        return Ok(None);
+    }
+    let degenerate = byte_sets_raw.len() == 1;
+    if degenerate && rarest_freq_sum > TEDDY_MEMCHR_MAX_FREQ_F {
+        let _ = narrow_positions;
+        if cfg!(feature = "debug") {
+            eprintln!(
+                "  [fwd-prefix] teddy-degenerate, trying range: rarest_freq={} > {} (narrow_positions={})",
+                rarest_freq_sum, TEDDY_MEMCHR_MAX_FREQ_F, narrow_positions
+            );
+        }
+        return try_build_fwd_range_prefix(byte_sets_raw, rarest_idx).map(|r| r.0);
+    }
+
     if rarest_len > 16 {
         return try_build_fwd_range_prefix(byte_sets_raw, rarest_idx).map(|r| r.0);
     }
@@ -428,7 +486,11 @@ fn try_build_fwd_search_raw(
     )))
 }
 
-#[cfg(any(target_arch = "x86_64", target_arch = "aarch64", all(target_arch = "wasm32", target_feature = "simd128")))]
+#[cfg(any(
+    target_arch = "x86_64",
+    target_arch = "aarch64",
+    all(target_arch = "wasm32", target_feature = "simd128")
+))]
 fn rarest_freq(b: &mut RegexBuilder, sets: &[TSetId]) -> u64 {
     sets.iter()
         .map(|&s| {
@@ -442,7 +504,11 @@ fn rarest_freq(b: &mut RegexBuilder, sets: &[TSetId]) -> u64 {
         .unwrap_or(u64::MAX)
 }
 
-#[cfg(any(target_arch = "x86_64", target_arch = "aarch64", all(target_arch = "wasm32", target_feature = "simd128")))]
+#[cfg(any(
+    target_arch = "x86_64",
+    target_arch = "aarch64",
+    all(target_arch = "wasm32", target_feature = "simd128")
+))]
 fn build_fwd_prefix_from_sets(
     b: &mut RegexBuilder,
     full_sets: &[TSetId],
@@ -471,7 +537,11 @@ fn build_fwd_prefix_from_sets(
     Ok((None, false))
 }
 
-#[cfg(any(target_arch = "x86_64", target_arch = "aarch64", all(target_arch = "wasm32", target_feature = "simd128")))]
+#[cfg(any(
+    target_arch = "x86_64",
+    target_arch = "aarch64",
+    all(target_arch = "wasm32", target_feature = "simd128")
+))]
 fn build_fwd_prefix_simd(
     b: &mut RegexBuilder,
     node: NodeId,
@@ -484,20 +554,59 @@ fn build_fwd_prefix_simd(
 
 const MAX_RANGE_SETS: usize = 3;
 
-#[cfg(any(target_arch = "x86_64", target_arch = "aarch64", all(target_arch = "wasm32", target_feature = "simd128")))]
+#[cfg(any(
+    target_arch = "x86_64",
+    target_arch = "aarch64",
+    all(target_arch = "wasm32", target_feature = "simd128")
+))]
 fn try_build_fwd_range_prefix(
     byte_sets_raw: &[Vec<u8>],
     anchor_pos: usize,
 ) -> Result<(Option<crate::accel::FwdPrefixSearch>, bool), crate::Error> {
     let anchor_bytes = &byte_sets_raw[anchor_pos];
-    if !skip_is_profitable(anchor_bytes) {
+    let freq_sum: u32 = anchor_bytes
+        .iter()
+        .map(|&b| crate::simd::BYTE_FREQ[b as usize] as u32)
+        .sum();
+    if freq_sum >= SKIP_FREQ_THRESHOLD {
+        if cfg!(feature = "debug") {
+            eprintln!(
+                "  [fwd-prefix-range] reject: {} bytes, freq_sum={} >= {}",
+                anchor_bytes.len(),
+                freq_sum,
+                SKIP_FREQ_THRESHOLD
+            );
+        }
         return Ok((None, false));
     }
     let tset = crate::accel::TSet::from_bytes(anchor_bytes);
-    let ranges: Vec<(u8, u8)> = Solver::pp_collect_ranges(&tset).into_iter().collect();
-    if ranges.is_empty() || ranges.len() > MAX_RANGE_SETS {
+    let exact_ranges: Vec<(u8, u8)> = Solver::pp_collect_ranges(&tset).into_iter().collect();
+    if exact_ranges.is_empty() {
         return Ok((None, false));
     }
+    let ranges: Vec<(u8, u8)> = if exact_ranges.len() <= MAX_RANGE_SETS {
+        exact_ranges
+    } else {
+        let ascii_only: Vec<u8> = anchor_bytes.iter().copied().filter(|&b| b < 0x80).collect();
+        let has_high = anchor_bytes.iter().any(|&b| b >= 0x80);
+        if !has_high {
+            return Ok((None, false));
+        }
+        let ascii_tset = crate::accel::TSet::from_bytes(&ascii_only);
+        let mut coarse: Vec<(u8, u8)> = Solver::pp_collect_ranges(&ascii_tset).into_iter().collect();
+        coarse.push((0x80, 0xFF));
+        if coarse.len() > MAX_RANGE_SETS {
+            return Ok((None, false));
+        }
+        if cfg!(feature = "debug") {
+            eprintln!(
+                "  [fwd-prefix-range] coarsened {} ranges -> {} (high-byte fold)",
+                exact_ranges.len(),
+                coarse.len()
+            );
+        }
+        coarse
+    };
     let all_sets: Vec<crate::accel::TSet> = byte_sets_raw
         .iter()
         .map(|bytes| crate::accel::TSet::from_bytes(bytes))
@@ -518,7 +627,11 @@ fn try_build_fwd_range_prefix(
     ))
 }
 
-#[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64", all(target_arch = "wasm32", target_feature = "simd128"))))]
+#[cfg(not(any(
+    target_arch = "x86_64",
+    target_arch = "aarch64",
+    all(target_arch = "wasm32", target_feature = "simd128")
+)))]
 fn build_fwd_prefix_simd(
     _b: &mut RegexBuilder,
     _node: NodeId,
@@ -529,42 +642,79 @@ fn build_fwd_prefix_simd(
 /// Build a `RevPrefixSearch` from byte sets, or return `None` if the sets are
 /// too wide to be useful.  `len >= 2` required (single-byte case is handled by
 /// the DFA skip system).
-#[cfg(any(target_arch = "x86_64", target_arch = "aarch64", all(target_arch = "wasm32", target_feature = "simd128")))]
+#[cfg(any(
+    target_arch = "x86_64",
+    target_arch = "aarch64",
+    all(target_arch = "wasm32", target_feature = "simd128")
+))]
 pub(crate) fn build_rev_prefix_search(
     b: &mut RegexBuilder,
     sets: &[TSetId],
 ) -> Option<crate::accel::RevPrefixSearch> {
-    if sets.len() < 2 {
+    if sets.len() < 1 {
         return None;
     }
     let byte_sets_raw: Vec<Vec<u8>> = sets
         .iter()
         .map(|&set| b.solver().collect_bytes(set))
         .collect();
-    let num_simd = sets.len().min(3);
-    // Combined hit rate ≈ ∏(|set_i|) / 256^num_simd ≤ 12/256
-    // i.e. ∏(|set_i|) ≤ 12 × 256^(num_simd-1)
-    let combined: u64 = byte_sets_raw[..num_simd]
-        .iter()
-        .map(|bs| bs.len() as u64)
-        .product();
-    let threshold: u64 = 12 * 256u64.pow((num_simd as u32).saturating_sub(1));
-    if combined > threshold {
-        return None;
+    if cfg!(feature = "debug") {
+        eprintln!(
+            "  [rev-prefix] total={} sets={:?}",
+            byte_sets_raw.len(),
+            byte_sets_raw
+                .iter()
+                .map(|bs| if bs.len() <= 4 {
+                    format!("{:?}", bs)
+                } else {
+                    format!("[{}b]", bs.len())
+                })
+                .collect::<Vec<_>>()
+        );
     }
-    // Reject Teddy when the rarest position is too common: nearly every
-    // window will be a false positive, slowing the overall match below the
-    // cost of a plain DFA scan.
-    let rarest_freq_sum: u64 = byte_sets_raw[..num_simd]
+    let num_simd = sets.len().min(3);
+    let freq_sums: Vec<u64> = byte_sets_raw[..num_simd]
         .iter()
         .map(|bs| {
             bs.iter()
                 .map(|&b| crate::simd::BYTE_FREQ[b as usize] as u64)
                 .sum::<u64>()
         })
-        .min()
-        .unwrap_or(u64::MAX);
+        .collect();
+    let rarest_freq_sum = *freq_sums.iter().min().unwrap_or(&u64::MAX);
     if rarest_freq_sum > TEDDY_MAX_FREQ_SUM {
+        if cfg!(feature = "debug") {
+            eprintln!("  [rev-prefix] reject: max sum={}", rarest_freq_sum,);
+        }
+        return None;
+    }
+    let narrow = freq_sums
+        .iter()
+        .filter(|&&f| f <= TEDDY_WEAK_POSITION_FREQ)
+        .count();
+    if narrow < 2 && rarest_freq_sum > TEDDY_MEMCHR_MAX_FREQ {
+        if cfg!(feature = "debug") {
+            eprintln!(
+                "  [rev-prefix] reject: memchr-degenerate, rarest_freq={} > {} (narrow={})",
+                rarest_freq_sum, TEDDY_MEMCHR_MAX_FREQ, narrow
+            );
+        }
+        return None;
+    }
+    // Combined hit rate ≈ ∏(freq_i) / TOTAL_BYTE_FREQ^num_simd.  Threshold
+    // 12/256 ≈ 4.7%.
+    let combined_freq: u128 = freq_sums.iter().map(|&f| f as u128).product();
+    let threshold: u128 = 12 * (TOTAL_BYTE_FREQ as u128).pow(num_simd as u32) / 256;
+    if cfg!(feature = "debug") {
+        eprintln!(
+            "  [rev-prefix] freq_sums={:?} combined={} threshold={}",
+            freq_sums, combined_freq, threshold
+        );
+    }
+    if combined_freq > threshold {
+        if cfg!(feature = "debug") {
+            eprintln!("  [rev-prefix] reject: combined_freq > threshold");
+        }
         return None;
     }
     let all_sets: Vec<crate::accel::TSet> = byte_sets_raw
@@ -578,20 +728,7 @@ pub(crate) fn build_rev_prefix_search(
     ))
 }
 
-/// The acceleration strategy chosen once at build time.
-///
-/// Matching dispatches on this tag - no runtime selection in hot loops.
-///
-/// The rev-based variants (`AnchoredRev`, `PotentialStart`) are marker-only:
-/// the actual `RevPrefixSearch` lives in `LDFA::prefix_skip` so the LDFA can
-/// own and use it directly from `collect_rev_inner`.  The fwd-based variants
-/// own their `FwdPrefixSearch` here because the LDFA is not involved in the
-/// forward scanning path.
-///
-/// Precision order:
-/// - `AnchoredRev`, `AnchoredFwd`: no false positives.
-/// - `UnanchoredFwd`: fwd SIMD + leftward walk to find start.
-/// - `PotentialStart`: Teddy on rev DFA, may produce false-positive positions.
+/// Runtime prefix acceleration
 #[cfg_attr(debug_assertions, derive(Debug))]
 pub enum PrefixKind {
     /// `calc_prefix_sets` on the rev DFA succeeded.
@@ -621,7 +758,6 @@ pub enum PrefixKind {
     /// the full pattern - including the leading lookbehind - by initialising the
     /// full-pattern fwd DFA (`fwd_lb`) with the preceding byte as context.
     #[allow(dead_code)]
-    /// TODO: reenable after prefixes are refactored
     AnchoredFwdLb(crate::accel::FwdPrefixSearch),
 
     /// `calc_potential_start` prefix - Teddy-accelerated, may have false positives.
@@ -635,7 +771,7 @@ pub enum PrefixKind {
 impl PrefixKind {
     /// Return `true` if this variant uses the fwd scanning path.
     #[cfg(feature = "diag")]
-    pub fn is_fwd(&self) -> bool {
+    pub(crate) fn is_fwd(&self) -> bool {
         matches!(
             self,
             PrefixKind::AnchoredFwd(_)
@@ -644,14 +780,12 @@ impl PrefixKind {
         )
     }
 
-    /// Return `true` if this variant uses the rev scanning path.
     #[cfg(feature = "diag")]
-    pub fn is_rev(&self) -> bool {
+    pub(crate) fn is_rev(&self) -> bool {
         matches!(self, PrefixKind::AnchoredRev | PrefixKind::PotentialStart)
     }
 
-    /// Extract the fwd SIMD searcher if this is a forward-scanning prefix.
-    pub fn fwd_search(&self) -> Option<&crate::accel::FwdPrefixSearch> {
+    pub(crate) fn fwd_search(&self) -> Option<&crate::accel::FwdPrefixSearch> {
         match self {
             PrefixKind::AnchoredFwd(s)
             | PrefixKind::UnanchoredFwd(s)
@@ -662,7 +796,7 @@ impl PrefixKind {
 }
 
 /// Select the best prefix acceleration for a compiled pattern.
-pub fn select_prefix(
+pub(crate) fn select_prefix(
     b: &mut RegexBuilder,
     node: NodeId,
     rev_start: NodeId,
@@ -675,7 +809,11 @@ pub fn select_prefix(
     select_prefix_simd(b, node, rev_start, has_look, min_len)
 }
 
-#[cfg(any(target_arch = "x86_64", target_arch = "aarch64", all(target_arch = "wasm32", target_feature = "simd128")))]
+#[cfg(any(
+    target_arch = "x86_64",
+    target_arch = "aarch64",
+    all(target_arch = "wasm32", target_feature = "simd128")
+))]
 fn strip_leading_lookbehind(b: &RegexBuilder, mut node: NodeId) -> NodeId {
     use resharp_algebra::Kind;
     loop {
@@ -690,7 +828,11 @@ fn strip_leading_lookbehind(b: &RegexBuilder, mut node: NodeId) -> NodeId {
     node
 }
 
-#[cfg(any(target_arch = "x86_64", target_arch = "aarch64", all(target_arch = "wasm32", target_feature = "simd128")))]
+#[cfg(any(
+    target_arch = "x86_64",
+    target_arch = "aarch64",
+    all(target_arch = "wasm32", target_feature = "simd128")
+))]
 fn select_prefix_simd(
     b: &mut RegexBuilder,
     node: NodeId,
@@ -704,6 +846,21 @@ fn select_prefix_simd(
     }
     let sets = PrefixSets::compute(b, node, rev_start)?;
 
+    let fwd_rarity = PrefixSets::rarity(b, &sets.fwd_potential)
+        .min(PrefixSets::rarity(b, &sets.fwd_potential_stripped));
+    let rev_rarity = PrefixSets::rarity(b, &sets.rev_anchored)
+        .min(PrefixSets::rarity(b, &sets.rev_potential));
+    let rev_usable = b.get_nulls_id(rev_start) == NullsId::EMPTY
+        && (!sets.rev_anchored.is_empty() || !sets.rev_potential.is_empty());
+    // prefer rev whenever it is rarer than fwd
+    let fwd_better = fwd_rarity < rev_rarity;
+    if cfg!(feature = "debug") {
+        eprintln!(
+            "  [prefix-select] fwd_rarity={} rev_rarity={} rev_usable={} fwd_better={}",
+            fwd_rarity, rev_rarity, rev_usable, fwd_better
+        );
+    }
+
     if has_look {
         let body = strip_leading_lookbehind(b, node);
         if body != node && node.right(b) == body {
@@ -716,7 +873,9 @@ fn select_prefix_simd(
                 loop {
                     let after_strip = b.strip_prefix_safe(lb_stripped);
                     let after_nb = b.nonbegins(after_strip);
-                    if after_nb == lb_stripped { break; }
+                    if after_nb == lb_stripped {
+                        break;
+                    }
                     lb_stripped = after_nb;
                 }
                 let lb_fixed = b.get_fixed_length(lb_stripped);
@@ -724,18 +883,45 @@ fn select_prefix_simd(
                     let lb_body = b.mk_concat(lb_stripped, body);
                     let (fp, stripped) = build_fwd_prefix(b, lb_body)?;
                     if let (Some(fp), false) = (fp, stripped) {
-                        return Ok((Some(PrefixKind::AnchoredFwdLb(fp)), None));
+                        let _ = fp;
+                        if !(rev_usable && !fwd_better) {
+                            return Ok((Some(PrefixKind::AnchoredFwdLb(fp)), None));
+                        }
                     }
                 }
             }
         }
     }
 
+    // try to build a rev prefix searcher. returns None if rev isn't
+    // usable or neither set yields a searcher.
+    let try_rev = |b: &mut RegexBuilder| -> Option<(PrefixKind, crate::accel::RevPrefixSearch)> {
+        if !rev_usable {
+            return None;
+        }
+        if !sets.rev_anchored.is_empty() {
+            if let Some(s) = build_rev_prefix_search(b, &sets.rev_anchored) {
+                return Some((PrefixKind::AnchoredRev, s));
+            }
+        }
+        if !sets.rev_potential.is_empty() {
+            if let Some(s) = build_rev_prefix_search(b, &sets.rev_potential) {
+                return Some((PrefixKind::PotentialStart, s));
+            }
+        }
+        None
+    };
+
     if !has_look || !node.contains_lookbehind(b) {
         let (fp, stripped) =
             build_fwd_prefix_from_sets(b, &sets.fwd_potential, &sets.fwd_potential_stripped)?;
 
         if let Some(fp) = fp {
+            if !fwd_better {
+                if let Some((k, s)) = try_rev(b) {
+                    return Ok((Some(k), Some(s)));
+                }
+            }
             let kind = if stripped {
                 PrefixKind::UnanchoredFwd(fp)
             } else {
@@ -751,23 +937,17 @@ fn select_prefix_simd(
         }
     }
 
-    if b.get_nulls_id(rev_start) == NullsId::EMPTY {
-        if !sets.rev_anchored.is_empty() {
-            if let Some(search) = build_rev_prefix_search(b, &sets.rev_anchored) {
-                return Ok((Some(PrefixKind::AnchoredRev), Some(search)));
-            }
-        }
-        if !sets.rev_potential.is_empty() {
-            if let Some(search) = build_rev_prefix_search(b, &sets.rev_potential) {
-                return Ok((Some(PrefixKind::PotentialStart), Some(search)));
-            }
-        }
+    if let Some((k, s)) = try_rev(b) {
+        return Ok((Some(k), Some(s)));
     }
-
     Ok((None, None))
 }
 
-#[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64", all(target_arch = "wasm32", target_feature = "simd128"))))]
+#[cfg(not(any(
+    target_arch = "x86_64",
+    target_arch = "aarch64",
+    all(target_arch = "wasm32", target_feature = "simd128")
+)))]
 fn select_prefix_simd(
     _b: &mut RegexBuilder,
     _node: NodeId,
