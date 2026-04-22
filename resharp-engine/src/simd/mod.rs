@@ -382,8 +382,7 @@ impl RevPrefixSearch {
                 let mask_a = teddy_filter_rev::<N>(ptr, chunk_pos, &self.masks, nib);
                 let mask_b = teddy_filter_rev::<N>(ptr, chunk_pos - 32, &self.masks, nib);
                 if mask_a != 0 {
-                    if let Some(m) =
-                        Self::verify_rev_inline(ptr, chunk_pos, mask_a, sets_ptr, len)
+                    if let Some(m) = Self::verify_rev_inline(ptr, chunk_pos, mask_a, sets_ptr, len)
                     {
                         return Some(m);
                     }
@@ -692,9 +691,7 @@ impl FwdPrefixSearch {
                     }
                 }
                 if mask_b != 0 {
-                    if let Some(m) =
-                        Self::verify_inline(ptr, pos + 32, mask_b, sets_ptr, len, vo)
-                    {
+                    if let Some(m) = Self::verify_inline(ptr, pos + 32, mask_b, sets_ptr, len, vo) {
                         return Some(m);
                     }
                 }

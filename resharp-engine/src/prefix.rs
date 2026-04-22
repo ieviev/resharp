@@ -253,8 +253,7 @@ impl PrefixSets {
         if sets.is_empty() {
             return u64::MAX;
         }
-        let byte_sets: Vec<Vec<u8>> =
-            sets.iter().map(|&s| b.solver().collect_bytes(s)).collect();
+        let byte_sets: Vec<Vec<u8>> = sets.iter().map(|&s| b.solver().collect_bytes(s)).collect();
         let freqs: Vec<u64> = byte_sets
             .iter()
             .map(|bs| {
@@ -288,7 +287,10 @@ impl PrefixSets {
         let max_off = if is_rev { freqs.len() - num_simd } else { 0 };
         let mut best_prod = f64::INFINITY;
         for off in 0..=max_off {
-            let p: f64 = freqs[off..off + num_simd].iter().map(|&f| f as f64).product();
+            let p: f64 = freqs[off..off + num_simd]
+                .iter()
+                .map(|&f| f as f64)
+                .product();
             if p < best_prod {
                 best_prod = p;
             }
@@ -482,7 +484,8 @@ fn try_build_fwd_search_raw(
         if cfg!(feature = "debug") {
             eprintln!(
                 "  [fwd-prefix] reject: only {} discriminating position(s) in {}-byte prefix",
-                non_full_positions, byte_sets_raw.len()
+                non_full_positions,
+                byte_sets_raw.len()
             );
         }
         return Ok(None);
@@ -649,7 +652,8 @@ fn try_build_fwd_range_prefix(
             return Ok((None, false));
         }
         let ascii_tset = crate::accel::TSet::from_bytes(&ascii_only);
-        let mut coarse: Vec<(u8, u8)> = Solver::pp_collect_ranges(&ascii_tset).into_iter().collect();
+        let mut coarse: Vec<(u8, u8)> =
+            Solver::pp_collect_ranges(&ascii_tset).into_iter().collect();
         coarse.push((0x80, 0xFF));
         if coarse.len() > MAX_RANGE_SETS {
             return Ok((None, false));
@@ -925,10 +929,16 @@ fn select_prefix_simd(
     let sets = PrefixSets::compute(b, node, rev_start)?;
 
     // lower cost wins
-    let fwd_cost = PrefixSets::scan_cost(b, &sets.fwd_potential, false)
-        .min(PrefixSets::scan_cost(b, &sets.fwd_potential_stripped, false));
-    let rev_cost = PrefixSets::scan_cost(b, &sets.rev_anchored, true)
-        .min(PrefixSets::scan_cost(b, &sets.rev_potential, true));
+    let fwd_cost = PrefixSets::scan_cost(b, &sets.fwd_potential, false).min(PrefixSets::scan_cost(
+        b,
+        &sets.fwd_potential_stripped,
+        false,
+    ));
+    let rev_cost = PrefixSets::scan_cost(b, &sets.rev_anchored, true).min(PrefixSets::scan_cost(
+        b,
+        &sets.rev_potential,
+        true,
+    ));
     let rev_usable = b.get_nulls_id(rev_start) == NullsId::EMPTY
         && (!sets.rev_anchored.is_empty() || !sets.rev_potential.is_empty());
     let fwd_better = fwd_cost < rev_cost;

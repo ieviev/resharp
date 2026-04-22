@@ -238,11 +238,7 @@ unsafe fn scan_chunk_bytes<const N: usize>(chunk: v128, v: &[v128; 3]) -> v128 {
 }
 
 #[inline(always)]
-unsafe fn scan_chunk_ranges<const N: usize>(
-    chunk: v128,
-    lo: &[v128; 3],
-    hi: &[v128; 3],
-) -> v128 {
+unsafe fn scan_chunk_ranges<const N: usize>(chunk: v128, lo: &[v128; 3], hi: &[v128; 3]) -> v128 {
     let in0 = v128_and(u8x16_ge(chunk, lo[0]), u8x16_le(chunk, hi[0]));
     if N >= 3 {
         let in1 = v128_and(u8x16_ge(chunk, lo[1]), u8x16_le(chunk, hi[1]));
@@ -409,7 +405,12 @@ impl FwdRangeSearch {
     pub fn new(len: usize, anchor_pos: usize, ranges: Vec<(u8, u8)>, sets: Vec<TSet>) -> Self {
         debug_assert!(!ranges.is_empty() && ranges.len() <= 3);
         debug_assert!(anchor_pos < len);
-        Self { len, anchor_pos, ranges, sets }
+        Self {
+            len,
+            anchor_pos,
+            ranges,
+            sets,
+        }
     }
 
     pub fn len(&self) -> usize {
@@ -503,7 +504,10 @@ impl RevPrefixSearch {
         debug_assert_eq!(all_sets.len(), len);
         debug_assert_eq!(byte_sets_raw.len(), len);
         let num_simd = len.min(3);
-        let mut masks = Box::new(TeddyMasks { lo: [[0u8; 32]; 3], hi: [[0u8; 32]; 3] });
+        let mut masks = Box::new(TeddyMasks {
+            lo: [[0u8; 32]; 3],
+            hi: [[0u8; 32]; 3],
+        });
         for i in 0..num_simd {
             let mut lo = [0u8; 16];
             let mut hi = [0u8; 16];
@@ -516,7 +520,13 @@ impl RevPrefixSearch {
             masks.hi[i][..16].copy_from_slice(&hi);
             masks.hi[i][16..].copy_from_slice(&hi);
         }
-        Self { len, num_simd, masks, sets: all_sets, tail_offset }
+        Self {
+            len,
+            num_simd,
+            masks,
+            sets: all_sets,
+            tail_offset,
+        }
     }
 
     #[allow(dead_code)]
@@ -652,7 +662,10 @@ impl FwdPrefixSearch {
         debug_assert_eq!(byte_sets_raw.len(), len);
         let num_simd = len.min(3);
         let mut simd_offsets = [0usize; 3];
-        let mut masks = Box::new(TeddyMasks { lo: [[0u8; 32]; 3], hi: [[0u8; 32]; 3] });
+        let mut masks = Box::new(TeddyMasks {
+            lo: [[0u8; 32]; 3],
+            hi: [[0u8; 32]; 3],
+        });
         for i in 0..num_simd {
             let pos = freq_order[i];
             simd_offsets[i] = pos;
@@ -681,7 +694,14 @@ impl FwdPrefixSearch {
                 vi += 1;
             }
         }
-        Self { len, num_simd, simd_offsets, masks, sets: all_sets, verify_order }
+        Self {
+            len,
+            num_simd,
+            simd_offsets,
+            masks,
+            sets: all_sets,
+            verify_order,
+        }
     }
 
     pub fn find_fwd(&self, haystack: &[u8], start: usize) -> Option<usize> {

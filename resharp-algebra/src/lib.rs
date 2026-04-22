@@ -3873,7 +3873,6 @@ impl RegexBuilder {
 }
 
 impl RegexBuilder {
-    
     pub fn iter_sat(
         &mut self,
         stack: &mut Vec<(TRegexId, TSetId)>,
@@ -3908,7 +3907,7 @@ impl RegexBuilder {
             }
         }
     }
-    
+
     #[allow(dead_code)]
     pub(crate) fn extract_sat(&self, term_id: TRegexId) -> Vec<NodeId> {
         match self.get_tregex(term_id).clone() {

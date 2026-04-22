@@ -23,17 +23,9 @@ fn auto_harden_toml() {
         );
 
         if expected {
-            let hardened = Regex::with_options(
-                pattern,
-                EngineOptions::default().hardened(true),
-            )
-            .unwrap();
-            let inputs: &[&[u8]] = &[
-                b"",
-                b"aaaaaaaa",
-                b"abcdefg",
-                b"|  |\n| a |\n|  |",
-            ];
+            let hardened =
+                Regex::with_options(pattern, EngineOptions::default().hardened(true)).unwrap();
+            let inputs: &[&[u8]] = &[b"", b"aaaaaaaa", b"abcdefg", b"|  |\n| a |\n|  |"];
             for input in inputs {
                 assert_eq!(
                     re.find_all(input).unwrap(),

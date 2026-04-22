@@ -163,7 +163,15 @@ fn test_deriv_toml() {
             } else {
                 &tc.rev
             };
-            walk_bytes(&mut b, rev, &bytes, rev_pp, tc.rev_nulls.as_deref(), "rev", &tc.name);
+            walk_bytes(
+                &mut b,
+                rev,
+                &bytes,
+                rev_pp,
+                tc.rev_nulls.as_deref(),
+                "rev",
+                &tc.name,
+            );
         }
 
         if !tc.fwd.is_empty() || tc.fwd_nulls.is_some() {
@@ -181,7 +189,15 @@ fn test_deriv_toml() {
             } else {
                 &tc.fwd
             };
-            walk_bytes(&mut b, node, &bytes, fwd_pp, tc.fwd_nulls.as_deref(), "fwd", &tc.name);
+            walk_bytes(
+                &mut b,
+                node,
+                &bytes,
+                fwd_pp,
+                tc.fwd_nulls.as_deref(),
+                "fwd",
+                &tc.name,
+            );
         }
     }
 }

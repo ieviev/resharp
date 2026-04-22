@@ -11,11 +11,7 @@ fn huge_repetitions_are_rejected() {
         "a{2147483648,2147483648}",
         "([0-9]{1,9999}):([0-9]{1,9999})",
     ];
-    let accept = [
-        "a{500}",
-        "a{0,500}",
-        "a{1,499}",
-    ];
+    let accept = ["a{500}", "a{0,500}", "a{1,499}"];
     for p in reject {
         assert!(Regex::new(p).is_err(), "expected error for {p:?}");
     }
@@ -51,12 +47,7 @@ fn deeply_nested_repetitions_rejected() {
 
 #[test]
 fn mixed_alt_and_intersection_top_level_does_not_panic() {
-    let cases = [
-        "^&|&$",
-        r"\s|&nbsp;",
-        "&|x",
-        "&&|\\|\\|",
-    ];
+    let cases = ["^&|&$", r"\s|&nbsp;", "&|x", "&&|\\|\\|"];
     for p in cases {
         assert!(Regex::new(p).is_err(), "expected error for {p:?}");
     }
