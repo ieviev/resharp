@@ -3,7 +3,7 @@
 [![crates.io](https://img.shields.io/crates/v/resharp.svg)](https://crates.io/crates/resharp)
 [![docs.rs](https://docs.rs/resharp/badge.svg)](https://docs.rs/resharp)
 
-A high-performance, automata-based regex engine with first-class support for **intersection** and **complement** operations. RE#'s main strength is complex patterns - large lists of alternatives, lookarounds, and boolean combinations - where traditional engines degrade or fall back to slower paths.
+A high-performance, automata-based regex engine with first-class support for **intersection** and **complement** operations. RE#'s main strength is complex patterns (large lists of alternatives, lookarounds, and boolean combinations) where traditional engines degrade or fall back to slower paths.
 
 RE# compiles patterns into deterministic automata. All matching is non-backtracking with guaranteed linear-time execution. RE# extends standard regex syntax with intersection (`&`), complement (`~`), and a universal wildcard (`_`), enabling patterns that are impossible or impractical to express with standard regex.
 
@@ -54,7 +54,7 @@ RE# is designed around `is_match` and `find_all`. It doesn't provide `find` or `
 
 > **Leftmost-longest, not leftmost-greedy (PCRE).** `y|yes|n|no` on `"yes please"` matches `yes` in RE#, `y` in PCRE / `regex`. Alternation order doesn't matter.
 
-Matching returns `Result<Vec<Match>, Error>` - capacity or lookahead overflow will fail outright rather than silently degrade. `EngineOptions` controls precompilation threshold, capacity, and lookahead context:
+Matching returns `Result<Vec<Match>, Error>`. capacity or lookahead overflow will fail outright rather than silently degrade. `EngineOptions` controls precompilation threshold, capacity, and lookahead context:
 
 ```rust
 let opts = resharp::EngineOptions {
