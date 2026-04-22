@@ -316,38 +316,29 @@ pub struct RevPrefixSearch {
     num_simd: usize,
     masks: Box<TeddyMasks>,
     pub(crate) sets: Vec<TSet>,
+    tail_offset: usize,
 }
 
 #[cfg(target_arch = "x86_64")]
 impl RevPrefixSearch {
-    pub fn new(len: usize, byte_sets_raw: &[Vec<u8>], all_sets: Vec<TSet>) -> Self {
+    pub fn new(
+        len: usize,
+        byte_sets_raw: &[Vec<u8>],
+        all_sets: Vec<TSet>,
+        tail_offset: usize,
+    ) -> Self {
         debug_assert_eq!(all_sets.len(), len);
         debug_assert_eq!(byte_sets_raw.len(), len);
 
         let num_simd = len.min(3);
-        let mut masks = Box::new(TeddyMasks {
-            lo: [[0u8; 32]; 3],
-            hi: [[0u8; 32]; 3],
-        });
-
-        for i in 0..num_simd {
-            let mut lo = [0u8; 16];
-            let mut hi = [0u8; 16];
-            for &b in &byte_sets_raw[i] {
-                lo[(b & 0xF) as usize] |= 0x80;
-                hi[(b >> 4) as usize] |= 0x80;
-            }
-            masks.lo[i][..16].copy_from_slice(&lo);
-            masks.lo[i][16..].copy_from_slice(&lo);
-            masks.hi[i][..16].copy_from_slice(&hi);
-            masks.hi[i][16..].copy_from_slice(&hi);
-        }
+        let masks = TeddyMasks::build(byte_sets_raw, num_simd);
 
         Self {
             len,
             num_simd,
             masks,
             sets: all_sets,
+            tail_offset,
         }
     }
 
@@ -358,24 +349,24 @@ impl RevPrefixSearch {
     }
 
     pub fn find_rev(&self, haystack: &[u8], end: usize) -> Option<usize> {
-        unsafe { self.find_rev_avx2(haystack, end) }
+        let end = end.checked_sub(self.tail_offset)?;
+        let r = unsafe { self.find_rev_avx2(haystack, end) };
+        r.map(|p| p + self.tail_offset)
     }
 
     #[target_feature(enable = "avx2")]
     unsafe fn find_rev_avx2(&self, haystack: &[u8], end: usize) -> Option<usize> {
         match self.num_simd {
-            1 => self.teddy_rev_1(haystack, end),
-            2 => self.teddy_rev_2(haystack, end),
-            _ => self.teddy_rev_3(haystack, end),
+            1 => self.teddy_rev::<1>(haystack, end),
+            2 => self.teddy_rev::<2>(haystack, end),
+            _ => self.teddy_rev::<3>(haystack, end),
         }
     }
 
     #[target_feature(enable = "avx2")]
-    unsafe fn teddy_rev_1(&self, haystack: &[u8], end: usize) -> Option<usize> {
+    unsafe fn teddy_rev<const N: usize>(&self, haystack: &[u8], end: usize) -> Option<usize> {
         let ptr = haystack.as_ptr();
         let nib = _mm256_set1_epi8(0x0F);
-        let vlo0 = _mm256_load_si256(self.masks.lo[0].as_ptr() as *const __m256i);
-        let vhi0 = _mm256_load_si256(self.masks.hi[0].as_ptr() as *const __m256i);
         let sets_ptr = self.sets.as_ptr();
         let len = self.len;
         let min_pos = len - 1;
@@ -386,136 +377,13 @@ impl RevPrefixSearch {
 
         let mut chunk_pos = end - 31;
 
-        loop {
-            let c0 = _mm256_loadu_si256(ptr.add(chunk_pos) as *const __m256i);
-            let r0 = _mm256_and_si256(
-                _mm256_shuffle_epi8(vlo0, _mm256_and_si256(c0, nib)),
-                _mm256_shuffle_epi8(vhi0, _mm256_and_si256(_mm256_srli_epi16(c0, 4), nib)),
-            );
-            let mask = _mm256_movemask_epi8(r0) as u32;
-            if mask != 0 {
-                if let Some(m) = Self::verify_rev_inline(ptr, chunk_pos, mask, sets_ptr, len) {
-                    return Some(m);
-                }
-            }
-            if chunk_pos < 32 + min_pos {
-                break;
-            }
-            chunk_pos -= 32;
-        }
-        self.verify_tail(haystack, chunk_pos.saturating_sub(1).min(end))
-    }
-
-    #[target_feature(enable = "avx2")]
-    unsafe fn teddy_rev_2(&self, haystack: &[u8], end: usize) -> Option<usize> {
-        let ptr = haystack.as_ptr();
-        let nib = _mm256_set1_epi8(0x0F);
-        let vlo0 = _mm256_load_si256(self.masks.lo[0].as_ptr() as *const __m256i);
-        let vhi0 = _mm256_load_si256(self.masks.hi[0].as_ptr() as *const __m256i);
-        let vlo1 = _mm256_load_si256(self.masks.lo[1].as_ptr() as *const __m256i);
-        let vhi1 = _mm256_load_si256(self.masks.hi[1].as_ptr() as *const __m256i);
-        let sets_ptr = self.sets.as_ptr();
-        let len = self.len;
-        let min_pos = len - 1;
-
-        if end < 31 + min_pos {
-            return self.verify_tail(haystack, end);
-        }
-
-        let mut chunk_pos = end - 31;
-
-        loop {
-            let c0 = _mm256_loadu_si256(ptr.add(chunk_pos) as *const __m256i);
-            let c1 = _mm256_loadu_si256(ptr.add(chunk_pos - 1) as *const __m256i);
-            let r0 = _mm256_and_si256(
-                _mm256_shuffle_epi8(vlo0, _mm256_and_si256(c0, nib)),
-                _mm256_shuffle_epi8(vhi0, _mm256_and_si256(_mm256_srli_epi16(c0, 4), nib)),
-            );
-            let r1 = _mm256_and_si256(
-                _mm256_shuffle_epi8(vlo1, _mm256_and_si256(c1, nib)),
-                _mm256_shuffle_epi8(vhi1, _mm256_and_si256(_mm256_srli_epi16(c1, 4), nib)),
-            );
-            let combined = _mm256_and_si256(r0, r1);
-            let mask = _mm256_movemask_epi8(combined) as u32;
-            if mask != 0 {
-                if let Some(m) = Self::verify_rev_inline(ptr, chunk_pos, mask, sets_ptr, len) {
-                    return Some(m);
-                }
-            }
-            if chunk_pos < 32 + min_pos {
-                break;
-            }
-            chunk_pos -= 32;
-        }
-        self.verify_tail(haystack, chunk_pos.saturating_sub(1).min(end))
-    }
-
-    #[target_feature(enable = "avx2")]
-    unsafe fn teddy_rev_3(&self, haystack: &[u8], end: usize) -> Option<usize> {
-        let ptr = haystack.as_ptr();
-        let nib = _mm256_set1_epi8(0x0F);
-        let vlo0 = _mm256_load_si256(self.masks.lo[0].as_ptr() as *const __m256i);
-        let vhi0 = _mm256_load_si256(self.masks.hi[0].as_ptr() as *const __m256i);
-        let vlo1 = _mm256_load_si256(self.masks.lo[1].as_ptr() as *const __m256i);
-        let vhi1 = _mm256_load_si256(self.masks.hi[1].as_ptr() as *const __m256i);
-        let vlo2 = _mm256_load_si256(self.masks.lo[2].as_ptr() as *const __m256i);
-        let vhi2 = _mm256_load_si256(self.masks.hi[2].as_ptr() as *const __m256i);
-        let sets_ptr = self.sets.as_ptr();
-        let len = self.len;
-        let min_pos = len - 1;
-
-        if end < 31 + min_pos {
-            return self.verify_tail(haystack, end);
-        }
-
-        let mut chunk_pos = end - 31;
-
-        while chunk_pos >= 64 + min_pos {
-            let c0a = _mm256_loadu_si256(ptr.add(chunk_pos) as *const __m256i);
-            let c1a = _mm256_loadu_si256(ptr.add(chunk_pos - 1) as *const __m256i);
-            let c2a = _mm256_loadu_si256(ptr.add(chunk_pos - 2) as *const __m256i);
-            let ra = _mm256_and_si256(
-                _mm256_and_si256(
-                    _mm256_and_si256(
-                        _mm256_shuffle_epi8(vlo0, _mm256_and_si256(c0a, nib)),
-                        _mm256_shuffle_epi8(vhi0, _mm256_and_si256(_mm256_srli_epi16(c0a, 4), nib)),
-                    ),
-                    _mm256_and_si256(
-                        _mm256_shuffle_epi8(vlo1, _mm256_and_si256(c1a, nib)),
-                        _mm256_shuffle_epi8(vhi1, _mm256_and_si256(_mm256_srli_epi16(c1a, 4), nib)),
-                    ),
-                ),
-                _mm256_and_si256(
-                    _mm256_shuffle_epi8(vlo2, _mm256_and_si256(c2a, nib)),
-                    _mm256_shuffle_epi8(vhi2, _mm256_and_si256(_mm256_srli_epi16(c2a, 4), nib)),
-                ),
-            );
-
-            let c0b = _mm256_loadu_si256(ptr.add(chunk_pos - 32) as *const __m256i);
-            let c1b = _mm256_loadu_si256(ptr.add(chunk_pos - 33) as *const __m256i);
-            let c2b = _mm256_loadu_si256(ptr.add(chunk_pos - 34) as *const __m256i);
-            let rb = _mm256_and_si256(
-                _mm256_and_si256(
-                    _mm256_and_si256(
-                        _mm256_shuffle_epi8(vlo0, _mm256_and_si256(c0b, nib)),
-                        _mm256_shuffle_epi8(vhi0, _mm256_and_si256(_mm256_srli_epi16(c0b, 4), nib)),
-                    ),
-                    _mm256_and_si256(
-                        _mm256_shuffle_epi8(vlo1, _mm256_and_si256(c1b, nib)),
-                        _mm256_shuffle_epi8(vhi1, _mm256_and_si256(_mm256_srli_epi16(c1b, 4), nib)),
-                    ),
-                ),
-                _mm256_and_si256(
-                    _mm256_shuffle_epi8(vlo2, _mm256_and_si256(c2b, nib)),
-                    _mm256_shuffle_epi8(vhi2, _mm256_and_si256(_mm256_srli_epi16(c2b, 4), nib)),
-                ),
-            );
-
-            let mask_a = _mm256_movemask_epi8(ra) as u32;
-            let mask_b = _mm256_movemask_epi8(rb) as u32;
-            if (mask_a | mask_b) != 0 {
+        if N == 3 {
+            while chunk_pos >= 64 + min_pos {
+                let mask_a = teddy_filter_rev::<N>(ptr, chunk_pos, &self.masks, nib);
+                let mask_b = teddy_filter_rev::<N>(ptr, chunk_pos - 32, &self.masks, nib);
                 if mask_a != 0 {
-                    if let Some(m) = Self::verify_rev_inline(ptr, chunk_pos, mask_a, sets_ptr, len)
+                    if let Some(m) =
+                        Self::verify_rev_inline(ptr, chunk_pos, mask_a, sets_ptr, len)
                     {
                         return Some(m);
                     }
@@ -527,31 +395,12 @@ impl RevPrefixSearch {
                         return Some(m);
                     }
                 }
+                chunk_pos -= 64;
             }
-            chunk_pos -= 64;
         }
 
         loop {
-            let c0 = _mm256_loadu_si256(ptr.add(chunk_pos) as *const __m256i);
-            let c1 = _mm256_loadu_si256(ptr.add(chunk_pos - 1) as *const __m256i);
-            let c2 = _mm256_loadu_si256(ptr.add(chunk_pos - 2) as *const __m256i);
-            let combined = _mm256_and_si256(
-                _mm256_and_si256(
-                    _mm256_and_si256(
-                        _mm256_shuffle_epi8(vlo0, _mm256_and_si256(c0, nib)),
-                        _mm256_shuffle_epi8(vhi0, _mm256_and_si256(_mm256_srli_epi16(c0, 4), nib)),
-                    ),
-                    _mm256_and_si256(
-                        _mm256_shuffle_epi8(vlo1, _mm256_and_si256(c1, nib)),
-                        _mm256_shuffle_epi8(vhi1, _mm256_and_si256(_mm256_srli_epi16(c1, 4), nib)),
-                    ),
-                ),
-                _mm256_and_si256(
-                    _mm256_shuffle_epi8(vlo2, _mm256_and_si256(c2, nib)),
-                    _mm256_shuffle_epi8(vhi2, _mm256_and_si256(_mm256_srli_epi16(c2, 4), nib)),
-                ),
-            );
-            let mask = _mm256_movemask_epi8(combined) as u32;
+            let mask = teddy_filter_rev::<N>(ptr, chunk_pos, &self.masks, nib);
             if mask != 0 {
                 if let Some(m) = Self::verify_rev_inline(ptr, chunk_pos, mask, sets_ptr, len) {
                     return Some(m);
@@ -641,6 +490,109 @@ pub(crate) struct TeddyMasks {
     hi: [[u8; 32]; 3],
 }
 
+#[cfg(any(
+    target_arch = "x86_64",
+    target_arch = "aarch64",
+    all(target_arch = "wasm32", target_feature = "simd128"),
+))]
+impl TeddyMasks {
+    pub(crate) fn build(byte_sets_raw: &[Vec<u8>], num_simd: usize) -> Box<Self> {
+        let mut masks = Box::new(TeddyMasks {
+            lo: [[0u8; 32]; 3],
+            hi: [[0u8; 32]; 3],
+        });
+        for i in 0..num_simd {
+            let mut lo = [0u8; 16];
+            let mut hi = [0u8; 16];
+            for &b in &byte_sets_raw[i] {
+                lo[(b & 0xF) as usize] |= 0x80;
+                hi[(b >> 4) as usize] |= 0x80;
+            }
+            masks.lo[i][..16].copy_from_slice(&lo);
+            masks.lo[i][16..].copy_from_slice(&lo);
+            masks.hi[i][..16].copy_from_slice(&hi);
+            masks.hi[i][16..].copy_from_slice(&hi);
+        }
+        masks
+    }
+}
+
+#[cfg(target_arch = "x86_64")]
+#[inline(always)]
+unsafe fn teddy_filter_fwd<const N: usize>(
+    ptr: *const u8,
+    pos: usize,
+    masks: &TeddyMasks,
+    nib: __m256i,
+) -> u32 {
+    let vlo0 = _mm256_load_si256(masks.lo[0].as_ptr() as *const __m256i);
+    let vhi0 = _mm256_load_si256(masks.hi[0].as_ptr() as *const __m256i);
+    let c0 = _mm256_loadu_si256(ptr.add(pos) as *const __m256i);
+    let mut r = _mm256_and_si256(
+        _mm256_shuffle_epi8(vlo0, _mm256_and_si256(c0, nib)),
+        _mm256_shuffle_epi8(vhi0, _mm256_and_si256(_mm256_srli_epi16(c0, 4), nib)),
+    );
+    if N >= 2 {
+        let vlo1 = _mm256_load_si256(masks.lo[1].as_ptr() as *const __m256i);
+        let vhi1 = _mm256_load_si256(masks.hi[1].as_ptr() as *const __m256i);
+        let c1 = _mm256_loadu_si256(ptr.add(pos + 1) as *const __m256i);
+        let r1 = _mm256_and_si256(
+            _mm256_shuffle_epi8(vlo1, _mm256_and_si256(c1, nib)),
+            _mm256_shuffle_epi8(vhi1, _mm256_and_si256(_mm256_srli_epi16(c1, 4), nib)),
+        );
+        r = _mm256_and_si256(r, r1);
+    }
+    if N >= 3 {
+        let vlo2 = _mm256_load_si256(masks.lo[2].as_ptr() as *const __m256i);
+        let vhi2 = _mm256_load_si256(masks.hi[2].as_ptr() as *const __m256i);
+        let c2 = _mm256_loadu_si256(ptr.add(pos + 2) as *const __m256i);
+        let r2 = _mm256_and_si256(
+            _mm256_shuffle_epi8(vlo2, _mm256_and_si256(c2, nib)),
+            _mm256_shuffle_epi8(vhi2, _mm256_and_si256(_mm256_srli_epi16(c2, 4), nib)),
+        );
+        r = _mm256_and_si256(r, r2);
+    }
+    _mm256_movemask_epi8(r) as u32
+}
+
+#[cfg(target_arch = "x86_64")]
+#[inline(always)]
+unsafe fn teddy_filter_rev<const N: usize>(
+    ptr: *const u8,
+    pos: usize,
+    masks: &TeddyMasks,
+    nib: __m256i,
+) -> u32 {
+    let vlo0 = _mm256_load_si256(masks.lo[0].as_ptr() as *const __m256i);
+    let vhi0 = _mm256_load_si256(masks.hi[0].as_ptr() as *const __m256i);
+    let c0 = _mm256_loadu_si256(ptr.add(pos) as *const __m256i);
+    let mut r = _mm256_and_si256(
+        _mm256_shuffle_epi8(vlo0, _mm256_and_si256(c0, nib)),
+        _mm256_shuffle_epi8(vhi0, _mm256_and_si256(_mm256_srli_epi16(c0, 4), nib)),
+    );
+    if N >= 2 {
+        let vlo1 = _mm256_load_si256(masks.lo[1].as_ptr() as *const __m256i);
+        let vhi1 = _mm256_load_si256(masks.hi[1].as_ptr() as *const __m256i);
+        let c1 = _mm256_loadu_si256(ptr.add(pos - 1) as *const __m256i);
+        let r1 = _mm256_and_si256(
+            _mm256_shuffle_epi8(vlo1, _mm256_and_si256(c1, nib)),
+            _mm256_shuffle_epi8(vhi1, _mm256_and_si256(_mm256_srli_epi16(c1, 4), nib)),
+        );
+        r = _mm256_and_si256(r, r1);
+    }
+    if N >= 3 {
+        let vlo2 = _mm256_load_si256(masks.lo[2].as_ptr() as *const __m256i);
+        let vhi2 = _mm256_load_si256(masks.hi[2].as_ptr() as *const __m256i);
+        let c2 = _mm256_loadu_si256(ptr.add(pos - 2) as *const __m256i);
+        let r2 = _mm256_and_si256(
+            _mm256_shuffle_epi8(vlo2, _mm256_and_si256(c2, nib)),
+            _mm256_shuffle_epi8(vhi2, _mm256_and_si256(_mm256_srli_epi16(c2, 4), nib)),
+        );
+        r = _mm256_and_si256(r, r2);
+    }
+    _mm256_movemask_epi8(r) as u32
+}
+
 #[cfg(target_arch = "x86_64")]
 impl FwdPrefixSearch {
     pub fn len(&self) -> usize {
@@ -657,23 +609,7 @@ impl FwdPrefixSearch {
         debug_assert_eq!(byte_sets_raw.len(), len);
 
         let num_simd = len.min(3);
-        let mut masks = Box::new(TeddyMasks {
-            lo: [[0u8; 32]; 3],
-            hi: [[0u8; 32]; 3],
-        });
-
-        for i in 0..num_simd {
-            let mut lo = [0u8; 16];
-            let mut hi = [0u8; 16];
-            for &b in &byte_sets_raw[i] {
-                lo[(b & 0xF) as usize] |= 0x80;
-                hi[(b >> 4) as usize] |= 0x80;
-            }
-            masks.lo[i][..16].copy_from_slice(&lo);
-            masks.lo[i][16..].copy_from_slice(&lo);
-            masks.hi[i][..16].copy_from_slice(&hi);
-            masks.hi[i][16..].copy_from_slice(&hi);
-        }
+        let masks = TeddyMasks::build(byte_sets_raw, num_simd);
 
         // build verify order: non-SIMD positions first (rarest first),
         // then SIMD positions last (already pre-filtered by SIMD)
@@ -729,195 +665,47 @@ impl FwdPrefixSearch {
     #[target_feature(enable = "avx2")]
     unsafe fn find_fwd_avx2(&self, haystack: &[u8], start: usize) -> Option<usize> {
         match self.num_simd {
-            1 => self.teddy_1(haystack, start),
-            2 => self.teddy_2(haystack, start),
-            _ => self.teddy_3(haystack, start),
+            1 => self.teddy::<1>(haystack, start),
+            2 => self.teddy::<2>(haystack, start),
+            _ => self.teddy::<3>(haystack, start),
         }
     }
 
     #[target_feature(enable = "avx2")]
-    unsafe fn teddy_1(&self, haystack: &[u8], start: usize) -> Option<usize> {
+    unsafe fn teddy<const N: usize>(&self, haystack: &[u8], start: usize) -> Option<usize> {
         let ptr = haystack.as_ptr();
         let nib = _mm256_set1_epi8(0x0F);
-        let vlo0 = _mm256_load_si256(self.masks.lo[0].as_ptr() as *const __m256i);
-        let vhi0 = _mm256_load_si256(self.masks.hi[0].as_ptr() as *const __m256i);
         let sets_ptr = self.sets.as_ptr();
         let len = self.len;
+        let vo = self.verify_order.as_ptr();
 
         let simd_end = haystack.len().saturating_sub(31 + self.len - 1);
         let mut pos = start;
 
-        while pos < simd_end {
-            let c0 = _mm256_loadu_si256(ptr.add(pos) as *const __m256i);
-            let r0 = _mm256_and_si256(
-                _mm256_shuffle_epi8(vlo0, _mm256_and_si256(c0, nib)),
-                _mm256_shuffle_epi8(vhi0, _mm256_and_si256(_mm256_srli_epi16(c0, 4), nib)),
-            );
-            let mask = _mm256_movemask_epi8(r0) as u32;
-            if mask != 0 {
-                if let Some(m) =
-                    Self::verify_inline(ptr, pos, mask, sets_ptr, len, self.verify_order.as_ptr())
-                {
-                    return Some(m);
-                }
-            }
-            pos += 32;
-        }
-        self.verify_tail_fwd(haystack, pos)
-    }
-
-    #[target_feature(enable = "avx2")]
-    unsafe fn teddy_2(&self, haystack: &[u8], start: usize) -> Option<usize> {
-        let ptr = haystack.as_ptr();
-        let nib = _mm256_set1_epi8(0x0F);
-        let vlo0 = _mm256_load_si256(self.masks.lo[0].as_ptr() as *const __m256i);
-        let vhi0 = _mm256_load_si256(self.masks.hi[0].as_ptr() as *const __m256i);
-        let vlo1 = _mm256_load_si256(self.masks.lo[1].as_ptr() as *const __m256i);
-        let vhi1 = _mm256_load_si256(self.masks.hi[1].as_ptr() as *const __m256i);
-        let sets_ptr = self.sets.as_ptr();
-        let len = self.len;
-
-        let simd_end = haystack.len().saturating_sub(31 + self.len - 1);
-        let mut pos = start;
-
-        while pos < simd_end {
-            let c0 = _mm256_loadu_si256(ptr.add(pos) as *const __m256i);
-            let c1 = _mm256_loadu_si256(ptr.add(pos + 1) as *const __m256i);
-            let r0 = _mm256_and_si256(
-                _mm256_shuffle_epi8(vlo0, _mm256_and_si256(c0, nib)),
-                _mm256_shuffle_epi8(vhi0, _mm256_and_si256(_mm256_srli_epi16(c0, 4), nib)),
-            );
-            let r1 = _mm256_and_si256(
-                _mm256_shuffle_epi8(vlo1, _mm256_and_si256(c1, nib)),
-                _mm256_shuffle_epi8(vhi1, _mm256_and_si256(_mm256_srli_epi16(c1, 4), nib)),
-            );
-            let combined = _mm256_and_si256(r0, r1);
-            let mask = _mm256_movemask_epi8(combined) as u32;
-            if mask != 0 {
-                if let Some(m) =
-                    Self::verify_inline(ptr, pos, mask, sets_ptr, len, self.verify_order.as_ptr())
-                {
-                    return Some(m);
-                }
-            }
-            pos += 32;
-        }
-        self.verify_tail_fwd(haystack, pos)
-    }
-
-    #[target_feature(enable = "avx2")]
-    unsafe fn teddy_3(&self, haystack: &[u8], start: usize) -> Option<usize> {
-        let ptr = haystack.as_ptr();
-        let nib = _mm256_set1_epi8(0x0F);
-        let vlo0 = _mm256_load_si256(self.masks.lo[0].as_ptr() as *const __m256i);
-        let vhi0 = _mm256_load_si256(self.masks.hi[0].as_ptr() as *const __m256i);
-        let vlo1 = _mm256_load_si256(self.masks.lo[1].as_ptr() as *const __m256i);
-        let vhi1 = _mm256_load_si256(self.masks.hi[1].as_ptr() as *const __m256i);
-        let vlo2 = _mm256_load_si256(self.masks.lo[2].as_ptr() as *const __m256i);
-        let vhi2 = _mm256_load_si256(self.masks.hi[2].as_ptr() as *const __m256i);
-
-        let simd_end = haystack.len().saturating_sub(31 + self.len - 1);
-        let sets_ptr = self.sets.as_ptr();
-        let len = self.len;
-        let mut pos = start;
-
-        while pos + 32 < simd_end {
-            let c0a = _mm256_loadu_si256(ptr.add(pos) as *const __m256i);
-            let c1a = _mm256_loadu_si256(ptr.add(pos + 1) as *const __m256i);
-            let c2a = _mm256_loadu_si256(ptr.add(pos + 2) as *const __m256i);
-            let ra = _mm256_and_si256(
-                _mm256_and_si256(
-                    _mm256_and_si256(
-                        _mm256_shuffle_epi8(vlo0, _mm256_and_si256(c0a, nib)),
-                        _mm256_shuffle_epi8(vhi0, _mm256_and_si256(_mm256_srli_epi16(c0a, 4), nib)),
-                    ),
-                    _mm256_and_si256(
-                        _mm256_shuffle_epi8(vlo1, _mm256_and_si256(c1a, nib)),
-                        _mm256_shuffle_epi8(vhi1, _mm256_and_si256(_mm256_srli_epi16(c1a, 4), nib)),
-                    ),
-                ),
-                _mm256_and_si256(
-                    _mm256_shuffle_epi8(vlo2, _mm256_and_si256(c2a, nib)),
-                    _mm256_shuffle_epi8(vhi2, _mm256_and_si256(_mm256_srli_epi16(c2a, 4), nib)),
-                ),
-            );
-
-            let c0b = _mm256_loadu_si256(ptr.add(pos + 32) as *const __m256i);
-            let c1b = _mm256_loadu_si256(ptr.add(pos + 33) as *const __m256i);
-            let c2b = _mm256_loadu_si256(ptr.add(pos + 34) as *const __m256i);
-            let rb = _mm256_and_si256(
-                _mm256_and_si256(
-                    _mm256_and_si256(
-                        _mm256_shuffle_epi8(vlo0, _mm256_and_si256(c0b, nib)),
-                        _mm256_shuffle_epi8(vhi0, _mm256_and_si256(_mm256_srli_epi16(c0b, 4), nib)),
-                    ),
-                    _mm256_and_si256(
-                        _mm256_shuffle_epi8(vlo1, _mm256_and_si256(c1b, nib)),
-                        _mm256_shuffle_epi8(vhi1, _mm256_and_si256(_mm256_srli_epi16(c1b, 4), nib)),
-                    ),
-                ),
-                _mm256_and_si256(
-                    _mm256_shuffle_epi8(vlo2, _mm256_and_si256(c2b, nib)),
-                    _mm256_shuffle_epi8(vhi2, _mm256_and_si256(_mm256_srli_epi16(c2b, 4), nib)),
-                ),
-            );
-
-            let mask_a = _mm256_movemask_epi8(ra) as u32;
-            let mask_b = _mm256_movemask_epi8(rb) as u32;
-            if (mask_a | mask_b) != 0 {
+        if N == 3 {
+            while pos + 32 < simd_end {
+                let mask_a = teddy_filter_fwd::<N>(ptr, pos, &self.masks, nib);
+                let mask_b = teddy_filter_fwd::<N>(ptr, pos + 32, &self.masks, nib);
                 if mask_a != 0 {
-                    if let Some(m) = Self::verify_inline(
-                        ptr,
-                        pos,
-                        mask_a,
-                        sets_ptr,
-                        len,
-                        self.verify_order.as_ptr(),
-                    ) {
+                    if let Some(m) = Self::verify_inline(ptr, pos, mask_a, sets_ptr, len, vo) {
                         return Some(m);
                     }
                 }
                 if mask_b != 0 {
-                    if let Some(m) = Self::verify_inline(
-                        ptr,
-                        pos + 32,
-                        mask_b,
-                        sets_ptr,
-                        len,
-                        self.verify_order.as_ptr(),
-                    ) {
+                    if let Some(m) =
+                        Self::verify_inline(ptr, pos + 32, mask_b, sets_ptr, len, vo)
+                    {
                         return Some(m);
                     }
                 }
+                pos += 64;
             }
-            pos += 64;
         }
 
         while pos < simd_end {
-            let c0 = _mm256_loadu_si256(ptr.add(pos) as *const __m256i);
-            let c1 = _mm256_loadu_si256(ptr.add(pos + 1) as *const __m256i);
-            let c2 = _mm256_loadu_si256(ptr.add(pos + 2) as *const __m256i);
-            let combined = _mm256_and_si256(
-                _mm256_and_si256(
-                    _mm256_and_si256(
-                        _mm256_shuffle_epi8(vlo0, _mm256_and_si256(c0, nib)),
-                        _mm256_shuffle_epi8(vhi0, _mm256_and_si256(_mm256_srli_epi16(c0, 4), nib)),
-                    ),
-                    _mm256_and_si256(
-                        _mm256_shuffle_epi8(vlo1, _mm256_and_si256(c1, nib)),
-                        _mm256_shuffle_epi8(vhi1, _mm256_and_si256(_mm256_srli_epi16(c1, 4), nib)),
-                    ),
-                ),
-                _mm256_and_si256(
-                    _mm256_shuffle_epi8(vlo2, _mm256_and_si256(c2, nib)),
-                    _mm256_shuffle_epi8(vhi2, _mm256_and_si256(_mm256_srli_epi16(c2, 4), nib)),
-                ),
-            );
-            let mask = _mm256_movemask_epi8(combined) as u32;
+            let mask = teddy_filter_fwd::<N>(ptr, pos, &self.masks, nib);
             if mask != 0 {
-                if let Some(m) =
-                    Self::verify_inline(ptr, pos, mask, sets_ptr, len, self.verify_order.as_ptr())
-                {
+                if let Some(m) = Self::verify_inline(ptr, pos, mask, sets_ptr, len, vo) {
                     return Some(m);
                 }
             }

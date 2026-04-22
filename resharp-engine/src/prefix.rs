@@ -242,6 +242,62 @@ impl PrefixSets {
     pub fn rarity(b: &mut RegexBuilder, sets: &[TSetId]) -> u64 {
         rarest_freq(b, sets)
     }
+
+    /// Estimated cost of scanning with this prefix (lower = faster)
+    #[cfg(any(
+        target_arch = "x86_64",
+        target_arch = "aarch64",
+        all(target_arch = "wasm32", target_feature = "simd128")
+    ))]
+    pub fn scan_cost(b: &mut RegexBuilder, sets: &[TSetId], is_rev: bool) -> u64 {
+        if sets.is_empty() {
+            return u64::MAX;
+        }
+        let byte_sets: Vec<Vec<u8>> =
+            sets.iter().map(|&s| b.solver().collect_bytes(s)).collect();
+        let freqs: Vec<u64> = byte_sets
+            .iter()
+            .map(|bs| {
+                bs.iter()
+                    .map(|&b| crate::simd::BYTE_FREQ[b as usize] as u64)
+                    .sum()
+            })
+            .collect();
+        let num_simd = freqs.len().min(3);
+        if num_simd == 0 {
+            return u64::MAX;
+        }
+        let total = TOTAL_BYTE_FREQ as f64;
+
+        if !is_rev {
+            let lit_len = byte_sets.iter().take_while(|bs| bs.len() == 1).count();
+            if lit_len >= 3 {
+                let rare_f = byte_sets[..lit_len]
+                    .iter()
+                    .map(|bs| crate::simd::BYTE_FREQ[bs[0] as usize] as u64)
+                    .min()
+                    .unwrap() as f64;
+                if lit_len == byte_sets.len() || rare_f < RARE_BYTE_FREQ_LIMIT as f64 {
+                    let cost = 0.1_f64 + (rare_f / total) * 20.0;
+                    return (cost * 1e9) as u64;
+                }
+            }
+        }
+
+        // teddy path: pick the window this backend actually uses
+        let max_off = if is_rev { freqs.len() - num_simd } else { 0 };
+        let mut best_prod = f64::INFINITY;
+        for off in 0..=max_off {
+            let p: f64 = freqs[off..off + num_simd].iter().map(|&f| f as f64).product();
+            if p < best_prod {
+                best_prod = p;
+            }
+        }
+        let fire = best_prod / total.powi(num_simd as i32);
+        // teddy kernel: ~3 loads + shuffles per 32 B
+        let cost = 0.3_f64 + fire * 200.0;
+        (cost * 1e9) as u64
+    }
 }
 
 const SKIP_FREQ_THRESHOLD: u32 = 75_000;
@@ -673,7 +729,8 @@ pub(crate) fn build_rev_prefix_search(
         );
     }
     let num_simd = sets.len().min(3);
-    let freq_sums: Vec<u64> = byte_sets_raw[..num_simd]
+    // per-position freq for every position in the full rev prefix
+    let pos_freq: Vec<u64> = byte_sets_raw
         .iter()
         .map(|bs| {
             bs.iter()
@@ -681,6 +738,25 @@ pub(crate) fn build_rev_prefix_search(
                 .sum::<u64>()
         })
         .collect();
+    let mut tail_offset = 0usize;
+    let mut best_prod = u128::MAX;
+    for off in 0..=byte_sets_raw.len() - num_simd {
+        let prod: u128 = pos_freq[off..off + num_simd]
+            .iter()
+            .map(|&f| f as u128)
+            .product();
+        if prod < best_prod {
+            best_prod = prod;
+            tail_offset = off;
+        }
+    }
+    let freq_sums: Vec<u64> = pos_freq[tail_offset..tail_offset + num_simd].to_vec();
+    if cfg!(feature = "debug") {
+        eprintln!(
+            "  [rev-prefix] tail_offset={} window_freqs={:?}",
+            tail_offset, freq_sums
+        );
+    }
     let rarest_freq_sum = *freq_sums.iter().min().unwrap_or(&u64::MAX);
     if rarest_freq_sum > TEDDY_MAX_FREQ_SUM {
         if cfg!(feature = "debug") {
@@ -717,14 +793,16 @@ pub(crate) fn build_rev_prefix_search(
         }
         return None;
     }
-    let all_sets: Vec<crate::accel::TSet> = byte_sets_raw
+    let window = &byte_sets_raw[tail_offset..tail_offset + num_simd];
+    let all_sets: Vec<crate::accel::TSet> = window
         .iter()
         .map(|bytes| crate::accel::TSet::from_bytes(bytes))
         .collect();
     Some(crate::accel::RevPrefixSearch::new(
-        sets.len(),
-        &byte_sets_raw,
+        num_simd,
+        window,
         all_sets,
+        tail_offset,
     ))
 }
 
@@ -846,18 +924,18 @@ fn select_prefix_simd(
     }
     let sets = PrefixSets::compute(b, node, rev_start)?;
 
-    let fwd_rarity = PrefixSets::rarity(b, &sets.fwd_potential)
-        .min(PrefixSets::rarity(b, &sets.fwd_potential_stripped));
-    let rev_rarity = PrefixSets::rarity(b, &sets.rev_anchored)
-        .min(PrefixSets::rarity(b, &sets.rev_potential));
+    // lower cost wins
+    let fwd_cost = PrefixSets::scan_cost(b, &sets.fwd_potential, false)
+        .min(PrefixSets::scan_cost(b, &sets.fwd_potential_stripped, false));
+    let rev_cost = PrefixSets::scan_cost(b, &sets.rev_anchored, true)
+        .min(PrefixSets::scan_cost(b, &sets.rev_potential, true));
     let rev_usable = b.get_nulls_id(rev_start) == NullsId::EMPTY
         && (!sets.rev_anchored.is_empty() || !sets.rev_potential.is_empty());
-    // prefer rev whenever it is rarer than fwd
-    let fwd_better = fwd_rarity < rev_rarity;
+    let fwd_better = fwd_cost < rev_cost;
     if cfg!(feature = "debug") {
         eprintln!(
-            "  [prefix-select] fwd_rarity={} rev_rarity={} rev_usable={} fwd_better={}",
-            fwd_rarity, rev_rarity, rev_usable, fwd_better
+            "  [prefix-select] fwd_cost={} rev_cost={} rev_usable={} fwd_better={}",
+            fwd_cost, rev_cost, rev_usable, fwd_better
         );
     }
 

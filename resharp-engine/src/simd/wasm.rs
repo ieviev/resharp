@@ -490,10 +490,16 @@ pub struct RevPrefixSearch {
     num_simd: usize,
     masks: Box<TeddyMasks>,
     pub(crate) sets: Vec<TSet>,
+    tail_offset: usize,
 }
 
 impl RevPrefixSearch {
-    pub fn new(len: usize, byte_sets_raw: &[Vec<u8>], all_sets: Vec<TSet>) -> Self {
+    pub fn new(
+        len: usize,
+        byte_sets_raw: &[Vec<u8>],
+        all_sets: Vec<TSet>,
+        tail_offset: usize,
+    ) -> Self {
         debug_assert_eq!(all_sets.len(), len);
         debug_assert_eq!(byte_sets_raw.len(), len);
         let num_simd = len.min(3);
@@ -510,7 +516,7 @@ impl RevPrefixSearch {
             masks.hi[i][..16].copy_from_slice(&hi);
             masks.hi[i][16..].copy_from_slice(&hi);
         }
-        Self { len, num_simd, masks, sets: all_sets }
+        Self { len, num_simd, masks, sets: all_sets, tail_offset }
     }
 
     #[allow(dead_code)]
@@ -519,13 +525,15 @@ impl RevPrefixSearch {
     }
 
     pub fn find_rev(&self, haystack: &[u8], end: usize) -> Option<usize> {
-        unsafe {
+        let end = end.checked_sub(self.tail_offset)?;
+        let r = unsafe {
             match self.num_simd {
                 1 => self.teddy_rev::<1>(haystack, end),
                 2 => self.teddy_rev::<2>(haystack, end),
                 _ => self.teddy_rev::<3>(haystack, end),
             }
-        }
+        };
+        r.map(|p| p + self.tail_offset)
     }
 
     unsafe fn teddy_rev<const N: usize>(&self, haystack: &[u8], end: usize) -> Option<usize> {

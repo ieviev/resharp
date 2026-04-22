@@ -326,7 +326,9 @@ fn auto_harden(b: &mut RegexBuilder, start: NodeId, has_anchors: bool) -> bool {
     if opener == TSetId::EMPTY || !b.solver().is_full_id(opener) {
         return false;
     }
-    let Some(graph) = build_partial_graph(b, start, NODE_BUDGET) else { return false };
+    let Some(graph) = build_partial_graph(b, start, NODE_BUDGET) else {
+        return false;
+    };
     let always = resharp_algebra::nulls::Nullability::ALWAYS;
     for (i, &n) in graph.nodes.iter().enumerate() {
         if i == 0 {
@@ -348,15 +350,11 @@ fn auto_harden(b: &mut RegexBuilder, start: NodeId, has_anchors: bool) -> bool {
             return false;
         }
     }
-    if !has_anchors
-        && graph.edges[0].len() == 1
-        && b.solver().is_full_id(graph.edges[0][0].set)
-    {
+    if !has_anchors && graph.edges[0].len() == 1 && b.solver().is_full_id(graph.edges[0][0].set) {
         return false;
     }
     for scc in tarjan_sccs(&graph) {
-        let non_trivial =
-            scc.len() > 1 || graph.edges[scc[0]].iter().any(|e| e.dst == scc[0]);
+        let non_trivial = scc.len() > 1 || graph.edges[scc[0]].iter().any(|e| e.dst == scc[0]);
         if !non_trivial {
             continue;
         }
@@ -592,9 +590,7 @@ impl Regex {
         opts: EngineOptions,
         pattern_len: usize,
     ) -> Result<Regex, Error> {
-        // Guard against pathological AST sizes (deep recursion in reverse /
-        // der / normalize would otherwise stack-overflow on debug builds,
-        // which default to a 2 MiB thread stack under `cargo test`).
+        // Guard against pathological AST sizes
         const NODE_LIMIT: usize = 200_000;
         if b.tree_size(node, NODE_LIMIT) >= NODE_LIMIT {
             return Err(Error::PatternTooLarge);
@@ -662,6 +658,7 @@ impl Regex {
 
         let mut rev = engine::LDFA::new(&mut b, ts_rev_start, max_cap)?;
         rev.prefix_skip = rev_skip;
+        rev.ensure_pruned_skip();
 
         let (fwd_lb_begin_nullable, lb_check_bytes) =
             if matches!(selected, Some(prefix::PrefixKind::AnchoredFwdLb(_))) {

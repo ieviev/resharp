@@ -631,6 +631,15 @@ impl LDFA {
         target_arch = "aarch64",
         all(target_arch = "wasm32", target_feature = "simd128")
     ))]
+    pub(crate) fn ensure_pruned_skip(&mut self) {
+        if self.prefix_skip.is_some() {
+            let p = self.pruned as usize;
+            if p < self.skip_ids.len() && self.skip_ids[p] == 0 {
+                self.skip_ids[p] = self.get_or_create_skip_all();
+            }
+        }
+    }
+
     fn get_or_create_skip_all(&mut self) -> u8 {
         for (i, s) in self.skip_searchers.iter().enumerate() {
             if matches!(s, MintermSearchValue::All) {
@@ -704,11 +713,27 @@ impl LDFA {
         max_end: usize,
     ) -> (u32, usize, usize, bool) {
         if self.can_skip() {
-            scan_fwd::<true>(tables, self.effects_id.as_ptr(), &self.skip_ids,
-                &self.skip_searchers, curr, pos, end, max_end)
+            scan_fwd::<true>(
+                tables,
+                self.effects_id.as_ptr(),
+                &self.skip_ids,
+                &self.skip_searchers,
+                curr,
+                pos,
+                end,
+                max_end,
+            )
         } else {
-            scan_fwd::<false>(tables, self.effects_id.as_ptr(), &[], &[],
-                curr, pos, end, max_end)
+            scan_fwd::<false>(
+                tables,
+                self.effects_id.as_ptr(),
+                &[],
+                &[],
+                curr,
+                pos,
+                end,
+                max_end,
+            )
         }
     }
 
@@ -722,11 +747,27 @@ impl LDFA {
         max_end: usize,
     ) -> (u32, usize, usize, bool) {
         if self.can_skip() {
-            scan_fwd_verify::<true>(tables, self.effects_id.as_ptr(), &self.skip_ids,
-                &self.skip_searchers, curr, pos, end, max_end)
+            scan_fwd_verify::<true>(
+                tables,
+                self.effects_id.as_ptr(),
+                &self.skip_ids,
+                &self.skip_searchers,
+                curr,
+                pos,
+                end,
+                max_end,
+            )
         } else {
-            scan_fwd_verify::<false>(tables, self.effects_id.as_ptr(), &[], &[],
-                curr, pos, end, max_end)
+            scan_fwd_verify::<false>(
+                tables,
+                self.effects_id.as_ptr(),
+                &[],
+                &[],
+                curr,
+                pos,
+                end,
+                max_end,
+            )
         }
     }
 
@@ -742,13 +783,27 @@ impl LDFA {
     ) -> (u32, usize, bool) {
         if self.can_skip() {
             collect_rev::<EARLY_EXIT, true, INITIAL_SKIP>(
-                tables, &self.skip_ids, &self.skip_searchers, prefix_ptr,
-                curr, pos, data, nulls, self.pruned as u32,
+                tables,
+                &self.skip_ids,
+                &self.skip_searchers,
+                prefix_ptr,
+                curr,
+                pos,
+                data,
+                nulls,
+                self.pruned as u32,
             )
         } else {
             collect_rev::<EARLY_EXIT, false, false>(
-                tables, &[], &[], std::ptr::null(),
-                curr, pos, data, nulls, 0,
+                tables,
+                &[],
+                &[],
+                std::ptr::null(),
+                curr,
+                pos,
+                data,
+                nulls,
+                0,
             )
         }
     }
@@ -1137,8 +1192,7 @@ impl LDFA {
                 if np >= pos || np + 1 > data_end {
                     continue;
                 }
-                let Some((rs, reg_me)) = eng.spawn_from_null(b, data, data_end, np, pos)?
-                else {
+                let Some((rs, reg_me)) = eng.spawn_from_null(b, data, data_end, np, pos)? else {
                     continue;
                 };
                 if rs > DFA_DEAD {
@@ -1153,7 +1207,10 @@ impl LDFA {
                 } else if reg_me > 0 {
                     match MODE {
                         1 => {
-                            matches.push(Match { start: np, end: reg_me });
+                            matches.push(Match {
+                                start: np,
+                                end: reg_me,
+                            });
                             *skip_until = reg_me.max(np + 1);
                         }
                         2 => dead.push((np, reg_me)),
@@ -1251,8 +1308,19 @@ impl LDFA {
                         });
                         skip_until = if me > reg_start { me } else { reg_start + 1 };
                         regs.clear();
-                        respawn::<0>(self, b, nulls, null_idx, data, data_end, pos,
-                            &mut regs, matches, &mut dead, &mut skip_until)?;
+                        respawn::<0>(
+                            self,
+                            b,
+                            nulls,
+                            null_idx,
+                            data,
+                            data_end,
+                            pos,
+                            &mut regs,
+                            matches,
+                            &mut dead,
+                            &mut skip_until,
+                        )?;
                     } else {
                         regs[0] = (ldfa_state as u16, reg_start, me);
                     }
@@ -1271,8 +1339,19 @@ impl LDFA {
                         skip_until = flush_dead(&mut dead, matches, skip_until, usize::MAX);
                     }
 
-                    respawn::<1>(self, b, nulls, null_idx, data, data_end, pos,
-                        &mut regs, matches, &mut dead, &mut skip_until)?;
+                    respawn::<1>(
+                        self,
+                        b,
+                        nulls,
+                        null_idx,
+                        data,
+                        data_end,
+                        pos,
+                        &mut regs,
+                        matches,
+                        &mut dead,
+                        &mut skip_until,
+                    )?;
                 }
                 if regs.is_empty() {
                     pos += 1;
@@ -1419,8 +1498,19 @@ impl LDFA {
                         continue;
                     }
                     regs.retain(|r| r.1 >= skip_until);
-                    respawn::<2>(self, b, nulls, null_idx, data, data_end, pos,
-                        &mut regs, matches, &mut dead, &mut skip_until)?;
+                    respawn::<2>(
+                        self,
+                        b,
+                        nulls,
+                        null_idx,
+                        data,
+                        data_end,
+                        pos,
+                        &mut regs,
+                        matches,
+                        &mut dead,
+                        &mut skip_until,
+                    )?;
                 }
             }
         }
@@ -1739,10 +1829,14 @@ impl LDFA {
 
         loop {
             let tables = self.scan_tables(data);
-            let (state, new_pos, cache_miss) =
-                self.dispatch_collect_rev::<EARLY_EXIT, false>(
-                    &tables, std::ptr::null(), curr, pos, data, nulls,
-                );
+            let (state, new_pos, cache_miss) = self.dispatch_collect_rev::<EARLY_EXIT, false>(
+                &tables,
+                std::ptr::null(),
+                curr,
+                pos,
+                data,
+                nulls,
+            );
 
             if EARLY_EXIT && !nulls.is_empty() {
                 return Ok(());
@@ -1820,10 +1914,9 @@ impl LDFA {
 
         loop {
             let tables = self.scan_tables(data);
-            let (state, new_pos, cache_miss) =
-                self.dispatch_collect_rev::<EARLY_EXIT, true>(
-                    &tables, prefix_ptr, curr, pos, data, nulls,
-                );
+            let (state, new_pos, cache_miss) = self.dispatch_collect_rev::<EARLY_EXIT, true>(
+                &tables, prefix_ptr, curr, pos, data, nulls,
+            );
 
             if EARLY_EXIT && !nulls.is_empty() {
                 return Ok(());
