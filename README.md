@@ -95,8 +95,8 @@ Throughput comparison with `regex` and `fancy-regex`, compiled with `--release`.
 
 **Notes:**
 
-- **Sparse matches (~15 in 900KB)**: roughly tied. Everyone spends most of their time scanning past non-matching bytes using SIMD prefix search; the DFA strategy barely matters.
-- **Dense matches (~2678 in 944KB)**: the other engines degrade sharply because they must run more of the state machine. RE# holds at 535 MiB/s vs 58 MiB/s for `regex` on x86.
+- **Sparse matches (~15 in 900KB)**: roughly tied. Everyone spends most of their time scanning past non-matching bytes in a tiny purpose-built automaton, the DFA size does not matter at all!
+- **Dense matches (~2678 in 944KB)**: the other engines degrade sharply because they must construct more of the lazy state machine. RE# holds at 535 MiB/s vs 58 MiB/s for `regex` on x86.
 - **`(?i)` case-insensitive**: `regex` falls back to a slower engine and drops to 0.01 MiB/s. RE# folds case into the DFA and keeps full speed.
 - **Lookarounds**: RE# compiles them directly into the automaton. `regex` doesn't support them (except anchors); `fancy-regex` backtracks, which can be orders of magnitude slower.
 - **Match semantics differ**: `regex` is leftmost-greedy (PCRE), RE# is leftmost-longest, so results can differ on ambiguous patterns.
