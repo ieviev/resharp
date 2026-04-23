@@ -261,7 +261,8 @@ impl LDFA {
         );
 
         // state 3
-        let initial_pruned = b.prune_begin(initial);
+        let initial_pruned = b.prune_begin_eps(initial);
+        
         let pruned_sid = register_state(
             &mut state_nodes,
             &mut node_to_state,

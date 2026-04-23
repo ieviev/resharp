@@ -2050,3 +2050,16 @@ fn repro_is_match_negative_lookahead() {
     let re = Regex::new(r"foo(?!bar)").unwrap();
     assert!(!re.is_match(b"foobar").unwrap());
 }
+
+#[test]
+fn whenever_js_prefix() {
+    let p = r"^(?:WHENEVER\b)";
+    let re = Regex::with_options(
+        p,
+        EngineOptions::default().unicode(resharp::UnicodeMode::Javascript),
+    )
+    .unwrap();
+    let hay = b"WHENEVER you look at this pattern";
+    let ms = re.find_all(hay).unwrap();
+    println!("matches: {:?}", ms);
+}

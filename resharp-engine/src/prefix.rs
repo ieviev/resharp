@@ -30,6 +30,14 @@ pub(crate) fn collect_derivative_targets(
     }
 }
 
+#[cfg(feature = "debug")]
+fn pp_sets(b: &RegexBuilder, sets: &[TSetId]) -> String {
+    sets.iter()
+        .map(|&s| b.solver_ref().pp(s))
+        .collect::<Vec<_>>()
+        .join(";")
+}
+
 pub(crate) fn calc_prefix_sets_inner(
     b: &mut RegexBuilder,
     start: NodeId,
@@ -842,11 +850,7 @@ pub enum PrefixKind {
     #[allow(dead_code)]
     AnchoredFwdLb(crate::accel::FwdPrefixSearch),
 
-    /// `calc_potential_start` prefix - Teddy-accelerated, may have false positives.
-    ///
-    /// The rev DFA walk after each candidate position must verify nullability.
-    /// Positions where the DFA does not become nullable are silently skipped.
-    /// The `RevPrefixSearch` lives in `LDFA::prefix_skip`.
+    /// Reverse potential start, may have false positives, but no false negatives.
     PotentialStart,
 }
 
@@ -928,6 +932,31 @@ fn select_prefix_simd(
     }
     let sets = PrefixSets::compute(b, node, rev_start)?;
 
+    #[cfg(feature = "debug")]
+    {
+        println!(
+            "  [sets] rev anc {:?}, cost: {:?} ",
+            pp_sets(b, &sets.rev_anchored),
+            PrefixSets::scan_cost(b, &sets.rev_anchored, true)
+        );
+        println!(
+            "  [sets] rev pot {:?}, cost: {:?} ",
+            pp_sets(b, &sets.rev_potential),
+            PrefixSets::scan_cost(b, &sets.rev_potential, true)
+        );
+
+        println!(
+            "  [sets] fwd pot {:?} cost: {:?}",
+            pp_sets(b, &sets.fwd_potential),
+            PrefixSets::scan_cost(b, &sets.fwd_potential, false)
+        );
+        println!(
+            "  [sets] fwd str {:?} cost: {:?}",
+            pp_sets(b, &sets.fwd_potential_stripped),
+            PrefixSets::scan_cost(b, &sets.fwd_potential, false)
+        );
+    }
+
     // lower cost wins
     let fwd_cost = PrefixSets::scan_cost(b, &sets.fwd_potential, false).min(PrefixSets::scan_cost(
         b,
@@ -942,12 +971,6 @@ fn select_prefix_simd(
     let rev_usable = b.get_nulls_id(rev_start) == NullsId::EMPTY
         && (!sets.rev_anchored.is_empty() || !sets.rev_potential.is_empty());
     let fwd_better = fwd_cost < rev_cost;
-    if cfg!(feature = "debug") {
-        eprintln!(
-            "  [prefix-select] fwd_cost={} rev_cost={} rev_usable={} fwd_better={}",
-            fwd_cost, rev_cost, rev_usable, fwd_better
-        );
-    }
 
     if has_look {
         let body = strip_leading_lookbehind(b, node);

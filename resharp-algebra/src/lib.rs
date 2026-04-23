@@ -433,6 +433,11 @@ impl NodeId {
     }
 
     #[inline]
+    fn is_begin(self) -> bool {
+        self == NodeId::BEGIN
+    }
+
+    #[inline]
     fn is_union(self, b: &RegexBuilder) -> bool {
         b.get_kind(self) == Kind::Union
     }
@@ -471,6 +476,11 @@ impl NodeId {
             }
         }
         false
+    }
+
+    #[inline]
+    fn is_ts(self) -> bool {
+        NodeId::TS == self
     }
 
     #[inline]
@@ -2013,9 +2023,76 @@ impl RegexBuilder {
             _ => node_id,
         }
     }
+    pub fn prune_begin_eps(&mut self, node_id: NodeId) -> NodeId {
+        match self.get_kind(node_id) {
+            Kind::Begin => NodeId::BOT,
+            Kind::Concat => {
+                let l = node_id.left(self);
+                let r = node_id.right(self);
+                if r.is_concat(self) {
+                    let r_left = r.left(self);
+                    if l.is_ts() && r_left.is_begin() {
+                        return self.prune_begin_eps(r.right(self));
+                    }
+                }
+                let head = self.prune_begin_eps(l);
+                let tail = self.prune_begin_eps(r);
+                self.mk_concat(head, tail)
+            }
+            Kind::Lookbehind => {
+                if !node_id.right(self).is_missing() {
+                    return node_id;
+                }
+                let head = self.prune_begin_eps(node_id.left(self));
+                head
+            }
+            Kind::Union => {
+                let left = self.prune_begin_eps(node_id.left(self));
+                let right = self.prune_begin_eps(node_id.right(self));
+                self.mk_union(left, right)
+            }
+            _ => node_id,
+        }
+    }
 
     pub fn normalize_rev(&mut self, node_id: NodeId) -> Result<NodeId, AlgebraError> {
-        if !self.contains_look(node_id) {
+        if !self.contains_look(node_id) && !self.contains_anchors(node_id) {
+            return Ok(node_id);
+        }
+        let result = match self.get_kind(node_id) {
+            Kind::Concat => {
+                let left = self.normalize_rev(node_id.left(self))?;
+                let right = self.normalize_rev(node_id.right(self))?;
+                self.mk_concat(left, right)
+            }
+            Kind::Inter => {
+                let left = self.normalize_rev(node_id.left(self))?;
+                let right = self.normalize_rev(node_id.right(self))?;
+                self.mk_inter(left, right)
+            }
+            Kind::Union => {
+                let left = self.normalize_rev(node_id.left(self))?;
+                let right = self.normalize_rev(node_id.right(self))?;
+                self.mk_union(left, right)
+            }
+            Kind::Lookbehind => {
+                let left = self.normalize_rev(node_id.left(self))?;
+                let right = self.normalize_rev(node_id.right(self).missing_to_eps())?;
+                let lbody_ts = self.mk_concat(NodeId::TS, left);
+                let ltail_ts = self.mk_concat(NodeId::TS, right);
+                let as_inter = self.mk_inter(lbody_ts, ltail_ts);
+                as_inter
+            }
+            Kind::Lookahead if !self.get_lookahead_tail(node_id).is_missing() => {
+                return Err(AlgebraError::UnsupportedPattern)
+            }
+            _ => node_id,
+        };
+        Ok(result)
+    }
+
+    pub fn normalize_rev_prune(&mut self, node_id: NodeId) -> Result<NodeId, AlgebraError> {
+        if !self.contains_look(node_id) && !self.contains_anchors(node_id) {
             return Ok(node_id);
         }
         let result = match self.get_kind(node_id) {
