@@ -11,10 +11,38 @@ pp = '❮a(?=~(b_*)\z){∅}❮.*❯❯(?<=(\A|[^a]))b'
 pattern = 'aa(?!a) *'
 pp = 'aa(?=~(a_*)\z){∅}❮ *❯'
 
-
 [[test]]
 pattern = '\s'
 pp = '[\t-\r ]'
+
+[[test]]
+name = 'anchor_line_star'
+pattern = '^abc.*$'
+pp = '(?<=_*(\A|\n))abc.*(?=(\z|\n)_*)'
+ts_rev = '_*cba(?=(\z|\n)_*)'
+
+[[test]]
+name = 'anchor_line_literal'
+pattern = '^abc$'
+pp = '(?<=_*(\A|\n))abc(?=(\z|\n)_*)'
+ts_rev = '_*(\A|\n)cba(?=(\z|\n)_*)'
+
+[[test]]
+name = 'anchor_line_digit_star'
+pattern = '^\d+$'
+pp = '(?<=_*(\A|\n))[0-9]+(?=(\z|\n)_*)'
+ts_rev = '_*(\A|\n)[0-9]*[0-9](?=(\z|\n)_*)'
+
+[[test]]
+name = 'anchor_line_star_leading'
+pattern = '^.*abc$'
+pp = '(?<=_*(\A|\n)).*abc(?=(\z|\n)_*)'
+ts_rev = '_*(\A|\n)cba.*(?=(\z|\n)_*)'
+
+[[test]]
+name = 'neg_la'
+pattern = '(?!a).'
+pp = '[^\na]'
 
 
 

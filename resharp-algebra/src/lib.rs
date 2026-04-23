@@ -424,6 +424,11 @@ impl NodeId {
     }
 
     #[inline]
+    pub(crate) fn is_compl(self, b: &RegexBuilder) -> bool {
+        b.get_kind(self) == Kind::Compl
+    }
+
+    #[inline]
     pub(crate) fn is_plus(self, b: &RegexBuilder) -> bool {
         if self.is_concat(b) {
             let r = self.right(b);
@@ -435,6 +440,11 @@ impl NodeId {
     #[inline]
     fn is_begin(self) -> bool {
         self == NodeId::BEGIN
+    }
+
+    #[inline]
+    fn is_end(self) -> bool {
+        self == NodeId::END
     }
 
     #[inline]
@@ -2271,6 +2281,27 @@ impl RegexBuilder {
         futures
     }
 
+    /// used to determine len of lookahead
+    fn strip_ts_max_len(&self, node: NodeId) -> Option<u32> {
+        let mut cur = node;
+        let mut total: u32 = 0;
+        loop {
+            if !cur.is_concat(self) {
+                return None;
+            }
+            let r = cur.right(self);
+            let (_, lmax) = self.get_min_max_length(cur.left(self));
+            if lmax == u32::MAX {
+                return None;
+            }
+            total = total.saturating_add(lmax);
+            if r == NodeId::TS {
+                return Some(total);
+            }
+            cur = r;
+        }
+    }
+
     fn attempt_rw_concat_2(&mut self, head: NodeId, tail: NodeId) -> Option<NodeId> {
         if cfg!(feature = "norewrite") {
             return None;
@@ -2289,15 +2320,24 @@ impl RegexBuilder {
         if head.is_lookahead(self) {
             let la_tail = self.get_lookahead_tail(head);
             let new_la_tail = self.mk_concat(la_tail.missing_to_eps(), tail);
+            let la_body = self.get_lookahead_inner(head);
+            if la_body.is_concat(self)
+                && la_body.right(self).is_end()
+                && la_body.left(self).is_compl(self)
+            {
+                let not_p_ts = la_body.left(self); // ~(P·_*)
+                if let Some(p_max) = self.strip_ts_max_len(not_p_ts.left(self)) {
+                    let (tail_min, _) = self.get_min_max_length(new_la_tail);
+                    if p_max <= tail_min {
+                        return Some(self.mk_inter(not_p_ts, new_la_tail));
+                    }
+                }
+            }
+
             if new_la_tail.is_center_nullable(self) {
-                let la_new = self.mk_lookahead_internal(
-                    self.get_lookahead_inner(head),
-                    new_la_tail,
-                    u32::MAX,
-                );
+                let la_new = self.mk_lookahead_internal(la_body, new_la_tail, u32::MAX);
                 return Some(la_new);
             }
-            let la_body = self.get_lookahead_inner(head);
             let la_rel = self.get_lookahead_rel(head);
             let la_rel = if new_la_tail.is_kind(self, Kind::Lookahead) {
                 let tail_rel = self.get_lookahead_rel(new_la_tail);
@@ -2312,11 +2352,6 @@ impl RegexBuilder {
         if head.is_kind(self, Kind::End) && tail == NodeId::TS {
             return Some(head);
         }
-
-        // breaks:rev
-        // if head == NodeId::TS && tail == NodeId::END {
-        //     return Some(head);
-        // }
 
         if head == NodeId::TS && self.nullability(tail) == Nullability::ALWAYS {
             return Some(NodeId::TS);
@@ -2629,6 +2664,23 @@ impl RegexBuilder {
             return Some(rewrite);
         }
 
+        for (a, b) in [(left, right), (right, left)] {
+            if a.is_pred(self) && b.is_compl(self) {
+                let cbody = b.left(self);
+                if cbody.is_concat(self)
+                    && cbody.right(self) == NodeId::TS
+                    && cbody.left(self).is_pred(self)
+                {
+                    let q = a.pred_tset(self);
+                    let p = cbody.left(self).pred_tset(self);
+                    let solver = self.solver();
+                    let notp = solver.not_id(p);
+                    let anded = solver.and_id(q, notp);
+                    return Some(self.mk_pred(anded));
+                }
+            }
+        }
+
         if left.is_concat(self) && right.is_concat(self) {
             if left.left(self) == right.left(self) {
                 if left.left(self).is_pred(self) {
@@ -2638,11 +2690,11 @@ impl RegexBuilder {
             }
         }
 
-        if self.get_kind(right) == Kind::Compl && right.left(self) == left {
+        if right.is_compl(self) && right.left(self) == left {
             return Some(NodeId::BOT);
         }
 
-        if left.kind(self) == Kind::Compl && right.kind(self) == Kind::Compl {
+        if left.is_compl(self) && right.is_compl(self) {
             let bodies = self.mk_union(left.left(self), right.left(self));
             return Some(self.mk_compl(bodies));
         }
@@ -3684,45 +3736,47 @@ impl RegexBuilder {
                     .fold(NodeId::BOT, |acc, &p| self.mk_union(p, acc))
             }
             Kind::Concat => {
-                let l = node_id.left(self);
-                let r = node_id.right(self);
-                let l_new = self.simplify_rev_initial_rec(l, memo);
-                let r_new = self.simplify_rev_initial_rec(r, memo);
-                let rebuilt = if l_new == l && r_new == r {
-                    node_id
+                let l = self.simplify_rev_initial_rec(node_id.left(self), memo);
+                let r = self.simplify_rev_initial_rec(node_id.right(self), memo);
+                if l != NodeId::TS {
+                    return self.mk_concat(l, r);
+                }
+                let (head, tail) = if self.get_kind(r) == Kind::Concat {
+                    (r.left(self), r.right(self))
                 } else {
-                    self.mk_concat(l_new, r_new)
+                    (r, NodeId::EPS)
                 };
-                if self.get_kind(rebuilt) != Kind::Concat {
-                    return rebuilt;
-                }
-                let cl = rebuilt.left(self);
-                let cr = rebuilt.right(self);
-                if cl != NodeId::TS {
-                    return rebuilt;
-                }
-                let (head, tail) = if self.get_kind(cr) == Kind::Concat {
-                    (cr.left(self), cr.right(self))
-                } else {
-                    (cr, NodeId::EPS)
-                };
-                if self.nullability(tail) != Nullability::ALWAYS {
-                    return rebuilt;
-                }
                 if self.get_kind(head) != Kind::Union {
-                    return rebuilt;
+                    return self.mk_concat(l, r);
                 }
-                let mut has_begin = false;
-                self.iter_unions_b(head, &mut |_, v| {
-                    if v == NodeId::BEGIN {
-                        has_begin = true;
+                if !head.left(self).is_begin() {
+                    return self.mk_concat(l, r);
+                }
+                if self.nullability(tail) == Nullability::ALWAYS {
+                    return NodeId::TS;
+                }
+                let y = head.right(self);
+                if !y.is_pred(self) {
+                    return self.mk_concat(l, r);
+                }
+                if self.get_kind(tail) == Kind::Concat {
+                    let tl = tail.left(self);
+                    let tr = tail.right(self);
+                    let y_tset = y.pred_tset(self);
+                    let covers_all = if tl == NodeId::TS {
+                        true
+                    } else if let Some(x_pred) = tl.is_pred_star(self) {
+                        let x_ts = x_pred.pred_tset(self);
+                        let combined = self.solver().or_id(x_ts, y_tset);
+                        self.solver().is_full_id(combined)
+                    } else {
+                        false
+                    };
+                    if covers_all {
+                        return self.mk_concat(NodeId::TS, tr);
                     }
-                });
-                if has_begin {
-                    NodeId::TS
-                } else {
-                    rebuilt
                 }
+                self.mk_concat(l, r)
             }
             _ => node_id,
         };

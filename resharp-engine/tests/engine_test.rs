@@ -1533,6 +1533,7 @@ fn run_file_internal(filename: &str) {
             } else {
                 b.mk_concat(resharp_algebra::NodeId::TS, rev_start)
             };
+            let ts_rev_start = b.simplify_rev_initial(ts_rev_start);
             let got_ts_rev = b.pp(ts_rev_start);
             assert_eq!(
                 got_ts_rev, *expected_ts_rev,
