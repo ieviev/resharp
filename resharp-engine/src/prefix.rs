@@ -972,6 +972,9 @@ fn select_prefix_simd(
         && (!sets.rev_anchored.is_empty() || !sets.rev_potential.is_empty());
     let fwd_better = fwd_cost < rev_cost;
 
+    let fwd_anchored_much_better =
+        PrefixSets::scan_cost(b, &sets.fwd_anchored, false).saturating_mul(2) <= rev_cost;
+
     if has_look {
         let body = strip_leading_lookbehind(b, node);
         if body != node && node.right(b) == body {
@@ -995,7 +998,7 @@ fn select_prefix_simd(
                     let (fp, stripped) = build_fwd_prefix(b, lb_body)?;
                     if let (Some(fp), false) = (fp, stripped) {
                         let _ = fp;
-                        if !(rev_usable && !fwd_better) {
+                        if !rev_usable || fwd_anchored_much_better {
                             return Ok((Some(PrefixKind::AnchoredFwdLb(fp)), None));
                         }
                     }
