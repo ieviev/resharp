@@ -1,0 +1,147 @@
+description = '''
+javascript unicode mode tests. all tests run with UnicodeMode::Javascript.
+'''
+
+[[test]]
+name = "whenever_js_prefix"
+pattern = '^(?:WHENEVER\b)'
+input = "WHENEVER you look at this pattern"
+matches = [[0, 8]]
+
+[[test]]
+name = "trailing_la_dot_alt_eol"
+pattern = '.(?=a|$)'
+input = "xa xb x\nxc x"
+matches = [[0, 1], [6, 7], [11, 12]]
+
+[[test]]
+name = "trailing_la_word_alt_eol"
+pattern = '\w(?=a|$)'
+input = "xa xb x\nxc x"
+matches = [[0, 1], [6, 7], [11, 12]]
+
+[[test]]
+name = "alt_prefix_emu_dfn_mixed"
+pattern = 'EMU-(?!CLAUSE|XREF|ANNEX|INTRO)|DFN'
+input = "DFN foo EMU-XX bar EMU-CLAUSE baz DFN qux"
+matches = [[0, 3], [8, 12], [34, 37]]
+
+[[test]]
+name = "trailing_star_branch_saturating"
+pattern = '(\S+)(?:\s+([\s\S]+))?'
+input = "abc def ghi"
+matches = [[0, 11]]
+
+[[test]]
+name = "trailing_star_branch_eps_with_trailing_ws"
+pattern = '(\S+)(?:\s+([\s\S]+))?'
+input = "abc "
+matches = [[0, 3]]
+
+[[test]]
+name = "trailing_star_branch_eps_no_ws"
+pattern = '(\S+)(?:\s+([\s\S]+))?'
+input = "abc"
+matches = [[0, 3]]
+
+[[test]]
+name = "trailing_star_branch_trailing_tab"
+pattern = '(\S+)(?:\s+([\s\S]+))?'
+input = "ab\t"
+matches = [[0, 2]]
+
+[[test]]
+name = "trailing_star_branch_leading_ws"
+pattern = '(\S+)(?:\s+([\s\S]+))?'
+input = "   abc def"
+matches = [[3, 10]]
+
+[[test]]
+name = "trailing_star_branch_empty"
+pattern = '(\S+)(?:\s+([\s\S]+))?'
+input = ""
+matches = []
+
+[[test]]
+name = "trailing_dollar_with_dollar_match"
+pattern = '[\s\(\/][\S\s]+$'
+input = "abc (def ghi"
+matches = [[3, 12]]
+
+[[test]]
+name = "trailing_dollar_with_dollar_nomatch"
+pattern = '[\s\(\/][\S\s]+$'
+input = "abcdef"
+matches = []
+
+[[test]]
+name = "trailing_dollar_without_dollar_match"
+pattern = '[\s\(\/][\S\s]+'
+input = "abc (def ghi"
+matches = [[3, 12]]
+
+[[test]]
+name = "trailing_dollar_with_dollar_short"
+pattern = '[\s\(\/][\S\s]+$'
+input = "abc def"
+matches = [[3, 7]]
+
+[[test]]
+name = "trailing_star_fastpath_lb_stripped_neg_la"
+pattern = '^(?!a).[\s\S]*'
+input = "ab"
+matches = []
+
+[[test]]
+name = "lb_stripped_complex_no_match_with_trailing"
+pattern = '^((?!\_\S+=)[^\s]+)\s?([\S\s]*)$'
+input = "_FOO=1 trailing"
+matches = []
+
+[[test]]
+name = "lb_stripped_complex_no_match"
+pattern = '^((?!\_\S+=)[^\s]+)\s?([\S\s]*)$'
+input = "_FOO=1"
+matches = []
+
+[[test]]
+name = "lb_stripped_complex_single_byte"
+pattern = '^((?!\_\S+=)[^\s]+)\s?([\S\s]*)$'
+input = "a"
+matches = [[0, 1]]
+
+[[test]]
+name = "lb_stripped_complex_three_bytes"
+pattern = '^((?!\_\S+=)[^\s]+)\s?([\S\s]*)$'
+input = "abc"
+matches = [[0, 3]]
+
+[[test]]
+name = "anchored_fwd_lb_simple_match"
+pattern = '^(?!\_\S+=)\S+'
+input = "abc"
+matches = [[0, 3]]
+
+[[test]]
+name = "anchored_fwd_lb_simple_no_match"
+pattern = '^(?!\_\S+=)\S+'
+input = "_FOO=1"
+matches = []
+
+[[test]]
+name = "breaking_change_no_match"
+pattern = 'BREAKING CHANGE:([\s\S]*)'
+input = "hello world"
+matches = []
+
+[[test]]
+name = "breaking_change_with_prefix"
+pattern = 'BREAKING CHANGE:([\s\S]*)'
+input = "foo BREAKING CHANGE: drops API"
+matches = [[4, 30]]
+
+[[test]]
+name = "breaking_change_two_occurrences"
+pattern = 'BREAKING CHANGE:([\s\S]*)'
+input = "BREAKING CHANGE: a\nBREAKING CHANGE: b"
+matches = [[0, 37]]

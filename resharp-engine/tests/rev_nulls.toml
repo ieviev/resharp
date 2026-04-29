@@ -1,6 +1,88 @@
+description = '''
+collect_rev_nulls_debug regression tests. rev_nulls = exact list of null
+positions (descending) returned by Regex::collect_rev_nulls_debug(input).
+'''
 
 [[test]]
 name = "digits"
 pattern = '1(?=[012])\d'
 input = "11"
-rev_nulls = ["?", "{{7, 0}}"]
+rev_nulls = [0]
+
+[[test]]
+name = "sorted_space_class_space"
+pattern = ' [A-Z][a-z]+ '
+input = " Hello World Foo "
+rev_nulls = [12, 6, 0]
+
+[[test]]
+name = "sorted_class_no_anchors"
+pattern = '[A-Z][a-z]+'
+input = " Hello World Foo "
+rev_nulls = [13, 7, 1]
+
+[[test]]
+name = "readme_lookahead_lookbehind"
+pattern = '(?<=\s)[A-Z][a-z]+(?=\s)'
+input = " Hello World Foo "
+rev_nulls = [13, 7, 1]
+
+[[test]]
+name = "lookahead_simple"
+pattern = 'a(?=b)'
+input = "_ab_ab_"
+rev_nulls = [4, 1]
+
+[[test]]
+name = "dotstar_lookahead_aaa_short"
+pattern = '.*(?=aaa)'
+input = "baaa"
+rev_nulls = [1, 0]
+
+[[test]]
+name = "dotstar_lookahead_aaa_long"
+pattern = '.*(?=aaa)'
+input = "bbbbbbbbbbaaa"
+rev_nulls = [10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0, 0]
+
+[[test]]
+name = "dotstar_lookahead_chained_short"
+pattern = '.*(?=.*bbb)(?=.*ccc)'
+input = "aaa bbb ccc"
+rev_nulls = [4, 3, 2, 1, 0, 0]
+
+[[test]]
+name = "dotstar_lookahead_chained_long"
+pattern = '.*(?=.*bbb)(?=.*ccc)'
+input = "aaaaaaaaaa bbb aaaaaaaaaa ccc"
+rev_nulls = [11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0, 0]
+
+[[test]]
+name = "lookahead_word_boundary"
+pattern = 'a+\b(?=.*---)'
+input = "aaa ---"
+rev_nulls = [2, 1, 0]
+
+[[test]]
+name = "lookbehind_lookahead_combined"
+pattern = '(?<=a.*).(?=.*c)'
+input = "a__c"
+rev_nulls = [2, 1]
+
+[[test]]
+name = "lookahead_class_repetition"
+pattern = '[a-z]+(?=[A-Z])'
+input = "abcDefGhi"
+rev_nulls = [5, 4, 2, 1, 0]
+
+[[test]]
+name = "lookahead_time_pattern"
+pattern = '\d+(?=[aApP]\.?[mM]\.?)'
+input = "10pm"
+rev_nulls = [1, 0]
+
+[[test]]
+name = "dotstar_inner_literal_multiline"
+pattern = '.*=.*'
+input = "first\nsecond=line\nthird"
+rev_nulls = [12, 11, 10, 9, 8, 7, 6]

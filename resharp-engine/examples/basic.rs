@@ -70,48 +70,4 @@ fn main() {
     let re = Regex::new(r"(?<!\d)[a-z]+").unwrap();
     println!("\nwords not after digit:");
     show(&re, b"3abc def 7ghi jkl");
-
-    // large alternation: dictionary of 25 long words
-    // resharp handles this via symbolic derivatives; backtracking engines
-    // degrade exponentially on patterns this size
-    let words = [
-        "acknowledgement",
-        "accomplishments",
-        "characteristics",
-        "confidentiality",
-        "congratulations",
-        "disproportionate",
-        "electromagnetic",
-        "experimentation",
-        "extraordinarily",
-        "fundamentalists",
-        "implementations",
-        "inconsistencies",
-        "instrumentation",
-        "interchangeable",
-        "internationally",
-        "misunderstanding",
-        "professionalism",
-        "representatives",
-        "responsibilities",
-        "straightforward",
-        "telecommunications",
-        "troubleshooting",
-        "unconstitutional",
-        "understandingly",
-        "unquestioningly",
-    ];
-    let pattern = words.join("|");
-    let re = Regex::new(&pattern).unwrap();
-    let input = b"the representatives discussed telecommunications \
-                  and responsibilities at the internationally recognized \
-                  conference on professionalism";
-    println!("\ndictionary search (25 words):");
-    show(&re, input);
-
-    // dictionary + context window (.{0,20} on each side) to show what is around the matches
-    let ctx = format!(".{{0,20}}({}).{{0,20}}", words.join("|"));
-    let re = Regex::new(&ctx).unwrap();
-    println!("\ndictionary + context window:");
-    show(&re, input);
 }

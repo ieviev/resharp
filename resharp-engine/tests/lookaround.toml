@@ -4,6 +4,12 @@ matches = [[start, end]] in utf8 bytes (half-open intervals).
 '''
 
 [[test]]
+name = "neg_lookbehind_b"
+pattern = "(?<!a)"
+input = "b"
+matches = [[0, 0], [1, 1]]
+
+[[test]]
 name = "lookahead_conditional_digit"
 pattern = '1(?=[012])\d'
 input = "11"
@@ -350,12 +356,6 @@ expect_error = true
 reason = "unsupported: pure negative lookbehind"
 
 [[test]]
-name = "neg_lookbehind_b"
-pattern = "(?<!a)"
-input = "b"
-matches = [[0, 0], [1, 1]]
-
-[[test]]
 name = "neg_lookbehind_digit_a"
 pattern = '(?<!\d)a'
 input = " a"
@@ -429,7 +429,6 @@ pattern = 'ab(?=cd)|ef(?=gh)'
 input = "abcd efgh"
 matches = [[0, 2], [5, 7]]
 
-# derivatives of (?<=\s)[A-Z][a-z]+(?=\s) and related patterns
 
 [[test]]
 name = "readme_lookahead_single_word"
@@ -491,7 +490,6 @@ pattern = '(?<=\s)[A-Z][a-z]+(?=\s)'
 input = "\nHello\n"
 matches = [[1, 6]]
 
-# lookahead derivative: longer body forces more derivative steps
 
 [[test]]
 name = "lookahead_der_long_body"
@@ -523,7 +521,6 @@ pattern = '\d+(?=[a-z])'
 input = "123abc456def"
 matches = [[0, 3], [6, 9]]
 
-# derivative steps through nested/chained lookaheads
 
 [[test]]
 name = "lookahead_der_chained_three"
@@ -537,7 +534,6 @@ pattern = '\w+(?=.*x)(?=.*y)(?=.*z)'
 input = "abc xy"
 matches = []
 
-# derivative of lookahead with alternation in body
 
 [[test]]
 name = "lookahead_der_alt_body"
@@ -588,3 +584,21 @@ name = "wb_digit_at_start"
 pattern = '\b4\d+\b'
 input = "4123 rest"
 matches = [[0, 4]]
+
+[[test]]
+name = "fas_dotstar_la_foo_dotstar"
+pattern = '[\s\S]+(?=foo)[\s\S]+'
+input = "abc foo def"
+matches = [[0, 11]]
+
+[[test]]
+name = "fas_dotstar_la_aaa"
+pattern = '.*(?=aaa)'
+input = "baaa"
+matches = [[0, 1], [1, 1]]
+
+[[test]]
+name = "fas_dotstar_lb_x_foo_dotstar"
+pattern = '[\s\S]+(?<=x)foo[\s\S]+'
+input = "axfoo def"
+matches = [[0, 9]]

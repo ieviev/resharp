@@ -1,4 +1,4 @@
-use resharp::{EngineOptions, Regex};
+use resharp::{Regex, RegexOptions};
 use std::path::Path;
 
 #[test]
@@ -24,7 +24,7 @@ fn auto_harden_toml() {
 
         if expected {
             let hardened =
-                Regex::with_options(pattern, EngineOptions::default().hardened(true)).unwrap();
+                Regex::with_options(pattern, RegexOptions::default().hardened(true)).unwrap();
             let inputs: &[&[u8]] = &[b"", b"aaaaaaaa", b"abcdefg", b"|  |\n| a |\n|  |"];
             for input in inputs {
                 assert_eq!(

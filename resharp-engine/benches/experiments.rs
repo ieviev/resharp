@@ -31,7 +31,7 @@ fn bench_dictionary_vs_aho(c: &mut Criterion) {
     });
 
     let re_hardened =
-        resharp::Regex::with_options(&pattern, resharp::EngineOptions::default().hardened(true))
+        resharp::Regex::with_options(&pattern, resharp::RegexOptions::default().hardened(true))
             .unwrap();
     re_hardened.find_all(input).ok();
     group.bench_function("resharp-hardened", |b| {
@@ -45,7 +45,7 @@ fn bench_hardened_pathological(c: &mut Criterion) {
     let pattern = r".*[^A-Z]|[A-Z]";
     let re_default = resharp::Regex::new(pattern).unwrap();
     let re_hardened =
-        resharp::Regex::with_options(pattern, resharp::EngineOptions::default().hardened(true))
+        resharp::Regex::with_options(pattern, resharp::RegexOptions::default().hardened(true))
             .unwrap();
 
     for &size in &[1_000, 10_000] {

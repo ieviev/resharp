@@ -1,7 +1,7 @@
 use std::time::Instant;
 
 fn profile(label: &str, pattern: &str, input: &[u8], iters: u32) {
-    let opts = resharp::EngineOptions::default().hardened(true);
+    let opts = resharp::RegexOptions::default().hardened(true);
     let re_h = match resharp::Regex::with_options(pattern, opts) {
         Ok(r) => r,
         Err(e) => {

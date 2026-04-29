@@ -236,3 +236,15 @@ pattern = '(^#\[command.*\n.*&_*name_*)'
 input = "  #[command(name = \"foo\")]\nfn foo() {}"
 matches = []
 
+
+[[test]]
+name = "bounded_dfa_basic_intersection"
+pattern = '_*c_*&[a-z]{2,4}'
+input = "xycdzz abcde fg"
+matches = [[0, 4], [7, 11]]
+
+[[test]]
+name = "dotstar_huck_stripped_prefix"
+pattern = '.*Huck.*&~(.*F.*)'
+input = "The Adventures of Huckleberry Finn', published in 1885."
+matches = [[0, 30]]

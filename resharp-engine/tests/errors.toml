@@ -80,3 +80,51 @@ name = "swap_greed_flag_group"
 pattern = '(?U:.*?)'
 expect_error = true
 reason = "SwapGreed flag in group unsupported"
+
+[[test]]
+name = "word_boundary_scientific_notation"
+pattern = '\b-?[1-9](?:\.\d+)?[Ee][-+]?\d+\b'
+expect_error = true
+reason = "word boundary in scientific notation - unsupported shape"
+
+[[test]]
+name = "neg_la_dot_star_neg_lb_min"
+pattern = 'a(?!b).*(?<!a)b'
+expect_error = true
+reason = "negative lookahead with .* and negative lookbehind"
+
+[[test]]
+name = "word_boundary_dot_star_word_boundary"
+pattern = 'a\b.*\bb'
+expect_error = true
+reason = "word boundary with .* between two word boundaries"
+
+[[test]]
+name = "ci_alt_word_boundary_cross_line"
+pattern = '(?i)(\btest\b.*\blong\b|\blong\b.*\btest\b)'
+expect_error = true
+reason = "case-insensitive alternation with word boundaries across .*"
+
+[[test]]
+name = "word_border_center"
+pattern = '\w*\b\s'
+expect_error = true
+reason = "word boundary in middle of pattern"
+
+[[test]]
+name = "alt_embedded_line_anchor_caret"
+pattern = '^.*(a|^b)'
+expect_error = true
+reason = "alternation embeds ^ inside; would cross newline"
+
+[[test]]
+name = "alt_embedded_line_anchor_dotstar"
+pattern = '.*(a|^b)'
+expect_error = true
+reason = "alternation embeds ^ inside .* tail"
+
+[[test]]
+name = "alt_embedded_word_boundary"
+pattern = '(a|\bb)'
+expect_error = true
+reason = "alternation with embedded word boundary"

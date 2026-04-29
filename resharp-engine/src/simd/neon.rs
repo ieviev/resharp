@@ -508,11 +508,17 @@ impl RevPrefixSearch {
         }
     }
 
+    pub fn add_tail_offset(mut self, extra: u32) -> Self {
+        self.tail_offset += extra as usize;
+        self
+    }
+
     pub fn len(&self) -> usize {
         self.len
     }
 
     pub fn find_rev(&self, haystack: &[u8], end: usize) -> Option<usize> {
+        let end = end.min(haystack.len().saturating_sub(1));
         let end = end.checked_sub(self.tail_offset)?;
         let r = unsafe {
             match self.num_simd {
@@ -1249,7 +1255,7 @@ mod tests {
         // single position: match byte 'c'
         let sets_raw = vec![vec![b'c']];
         let all_sets = vec![TSet::from_bytes(&[b'c'])];
-        let s = RevPrefixSearch::new(1, &sets_raw, all_sets);
+        let s = RevPrefixSearch::new(1, &sets_raw, all_sets, 0);
         assert_eq!(s.find_rev(b"xxcxx", 4), Some(2));
         assert_eq!(s.find_rev(b"xxxxx", 4), None);
         // long haystack
@@ -1262,7 +1268,7 @@ mod tests {
     fn rev_prefix_teddy2() {
         let sets_raw = vec![vec![b'c'], vec![b'b']];
         let all_sets = vec![TSet::from_bytes(&[b'c']), TSet::from_bytes(&[b'b'])];
-        let s = RevPrefixSearch::new(2, &sets_raw, all_sets);
+        let s = RevPrefixSearch::new(2, &sets_raw, all_sets, 0);
         assert_eq!(s.find_rev(b"xxbcxx", 5), Some(3));
         assert_eq!(s.find_rev(b"xxxcxx", 5), None);
         let mut hay = vec![b'.'; 50];
@@ -1305,7 +1311,7 @@ mod tests {
             TSet::from_bytes(&[b'b']),
             TSet::from_bytes(&[b'a']),
         ];
-        let s = RevPrefixSearch::new(3, &sets_raw, all_sets);
+        let s = RevPrefixSearch::new(3, &sets_raw, all_sets, 0);
         // short (scalar tail)
         assert_eq!(s.find_rev(b"xxabcxx", 6), Some(4));
         // 50 bytes - SIMD loop
@@ -1344,7 +1350,7 @@ mod tests {
         let vowels: Vec<u8> = vec![b'a', b'e', b'i', b'o', b'u'];
         let sets_raw = vec![vowels.clone()];
         let all_sets = vec![TSet::from_bytes(&vowels)];
-        let s = RevPrefixSearch::new(1, &sets_raw, all_sets);
+        let s = RevPrefixSearch::new(1, &sets_raw, all_sets, 0);
         let mut hay = vec![b'.'; 50];
         hay[35] = b'o';
         assert_eq!(s.find_rev(&hay, 49), Some(35));
@@ -1397,7 +1403,7 @@ mod tests {
     fn rev_prefix_at_chunk_boundaries() {
         let sets_raw = vec![vec![b'X']];
         let all_sets = vec![TSet::from_bytes(&[b'X'])];
-        let s = RevPrefixSearch::new(1, &sets_raw, all_sets);
+        let s = RevPrefixSearch::new(1, &sets_raw, all_sets, 0);
         let mut hay = vec![b'.'; 50];
         // match at position 15
         hay[15] = b'X';
@@ -1435,7 +1441,7 @@ mod tests {
     fn rev_prefix_size_sweep() {
         let sets_raw = vec![vec![b'c'], vec![b'b']];
         let all_sets = vec![TSet::from_bytes(&[b'c']), TSet::from_bytes(&[b'b'])];
-        let s = RevPrefixSearch::new(2, &sets_raw, all_sets);
+        let s = RevPrefixSearch::new(2, &sets_raw, all_sets, 0);
         for size in 3..=80 {
             let mut hay = vec![b'.'; size];
             hay[1] = b'b';
@@ -1528,7 +1534,7 @@ mod tests {
     fn rev_prefix_no_nibble_collision() {
         let sets_raw = vec![vec![b'c']];
         let all_sets = vec![TSet::from_bytes(&[b'c'])];
-        let s = RevPrefixSearch::new(1, &sets_raw, all_sets);
+        let s = RevPrefixSearch::new(1, &sets_raw, all_sets, 0);
         // 'c' = 0x63, 's' = 0x73 - same low nibble
         let hay = vec![b's'; 50];
         assert_eq!(s.find_rev(&hay, 49), None);
@@ -1538,7 +1544,7 @@ mod tests {
     fn rev_prefix_finds_last() {
         let sets_raw = vec![vec![b'X']];
         let all_sets = vec![TSet::from_bytes(&[b'X'])];
-        let s = RevPrefixSearch::new(1, &sets_raw, all_sets);
+        let s = RevPrefixSearch::new(1, &sets_raw, all_sets, 0);
         let mut hay = vec![b'.'; 50];
         hay[10] = b'X';
         hay[20] = b'X';
@@ -1591,7 +1597,7 @@ mod tests {
             TSet::from_bytes(&[b'b']),
             TSet::from_bytes(&[b'a']),
         ];
-        let s = RevPrefixSearch::new(3, &sets_raw, all_sets);
+        let s = RevPrefixSearch::new(3, &sets_raw, all_sets, 0);
         // 80 bytes: match early, found during second chunk of double-pump
         let mut hay = vec![b'.'; 80];
         hay[20] = b'a';

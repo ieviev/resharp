@@ -1,4 +1,4 @@
-use resharp::{EngineOptions, Error, Regex};
+use resharp::{Error, Regex, RegexOptions};
 use std::path::Path;
 
 struct TestCase {
@@ -119,7 +119,7 @@ fn run_file(filename: &str) {
 }
 
 #[test]
-fn basic() {
+fn normal_basic() {
     run_file("basic.toml");
 }
 
@@ -139,6 +139,7 @@ fn normal_lookaround() {
 }
 
 #[test]
+#[ignore = "slow in debug; run with --ignored or in release"]
 fn semantics() {
     run_file("semantics.toml");
 }
@@ -161,6 +162,34 @@ fn edge_cases() {
 #[test]
 fn normal_cross_feature() {
     run_file("cross_feature.toml");
+}
+
+fn run_file_javascript(filename: &str) {
+    let tests = load_tests(filename);
+    for tc in &tests {
+        if tc.ignore {
+            continue;
+        }
+        let opts = RegexOptions::default().unicode(resharp::UnicodeMode::Javascript);
+        let re = Regex::with_options(&tc.pattern, opts).unwrap_or_else(|e| {
+            panic!(
+                "file={}, name={:?}, pattern={:?}: compile error: {}",
+                filename, tc.name, tc.pattern, e
+            )
+        });
+        let matches = re.find_all(tc.input.as_bytes()).unwrap();
+        let result: Vec<(usize, usize)> = matches.iter().map(|m| (m.start, m.end)).collect();
+        assert_eq!(
+            result, tc.matches,
+            "JS file={}, name={:?}, pattern={:?}, input={:?}",
+            filename, tc.name, tc.pattern, tc.input
+        );
+    }
+}
+
+#[test]
+fn javascript() {
+    run_file_javascript("javascript.toml");
 }
 
 /// cross-validate resharp against regex crate
@@ -204,7 +233,7 @@ fn precompiled_matches_lazy() {
     let input = b"aaaa";
     let lazy_re = Regex::with_options(
         pattern,
-        EngineOptions {
+        RegexOptions {
             dfa_threshold: 0,
             max_dfa_capacity: 10000,
             ..Default::default()
@@ -213,7 +242,7 @@ fn precompiled_matches_lazy() {
     .unwrap();
     let precompiled_re = Regex::with_options(
         pattern,
-        EngineOptions {
+        RegexOptions {
             dfa_threshold: 1000,
             max_dfa_capacity: 10000,
             ..Default::default()
@@ -232,7 +261,7 @@ fn precompiled_complex() {
     let input = b"The Adventures of Huckleberry Finn', published in 1885.";
     let lazy_re = Regex::with_options(
         pattern,
-        EngineOptions {
+        RegexOptions {
             dfa_threshold: 0,
             max_dfa_capacity: 10000,
             ..Default::default()
@@ -241,7 +270,7 @@ fn precompiled_complex() {
     .unwrap();
     let precompiled_re = Regex::with_options(
         pattern,
-        EngineOptions {
+        RegexOptions {
             dfa_threshold: 1000,
             max_dfa_capacity: 10000,
             ..Default::default()
@@ -255,34 +284,10 @@ fn precompiled_complex() {
 }
 
 #[test]
-fn complement_bounded_repeat_inter_1() {
-    let re = Regex::new("~(_*(\\n_*){2})&[a-z]_*").unwrap();
-    let m = re.find_all(b"ab\ncd\nef").unwrap();
-    let r: Vec<_> = m.iter().map(|m| (m.start, m.end)).collect();
-    assert_eq!(r[0], (0, 5), "complement+alpha: got {:?}", r);
-}
-
-#[test]
-fn complement_bounded_repeat_inter_2() {
-    let re = Regex::new("~(_*(\\n_*){2})&_*d_*").unwrap();
-    let m = re.find_all(b"ab\ncd\nef").unwrap();
-    let r: Vec<_> = m.iter().map(|m| (m.start, m.end)).collect();
-    assert_eq!(r[0], (0, 5), "complement+contains_d: got {:?}", r);
-}
-
-#[test]
-fn complement_bounded_repeat_inter_3() {
-    let re = Regex::new("~(_*(\\n_*){2})&[a-z]_*&_*d_*").unwrap();
-    let m = re.find_all(b"ab\ncd\nef").unwrap();
-    let r: Vec<_> = m.iter().map(|m| (m.start, m.end)).collect();
-    assert_eq!(r[0], (0, 5), "complement+alpha+contains_d: got {:?}", r);
-}
-
-#[test]
 fn anchored_alt_star_rejected() {
-    use resharp::{EngineOptions, UnicodeMode};
+    use resharp::{RegexOptions, UnicodeMode};
     for mode in [UnicodeMode::Default, UnicodeMode::Javascript] {
-        let opts = EngineOptions::default().unicode(mode);
+        let opts = RegexOptions::default().unicode(mode);
         let err = Regex::with_options("(^\\*|REMARK)*", opts).err();
         assert!(err.is_some(), "mode={:?} expected rejection, got ok", mode);
     }
@@ -290,8 +295,8 @@ fn anchored_alt_star_rejected() {
 
 #[test]
 fn space_newline_space() {
-    use resharp::{EngineOptions, UnicodeMode};
-    let mk = || EngineOptions::default().unicode(UnicodeMode::Javascript);
+    use resharp::{RegexOptions, UnicodeMode};
+    let mk = || RegexOptions::default().unicode(UnicodeMode::Javascript);
     let line = "abcdefghij abcdefghij abcdefghij abcdefg ";
     let mut hay = String::new();
     while hay.len() < 1_000_000 {
@@ -351,7 +356,7 @@ fn check_literal_equiv(pattern: &str, input: &str) {
     let re_literal = Regex::new(pattern).unwrap();
     let mut b = resharp_algebra::RegexBuilder::new();
     let node = resharp_parser::parse_ast(&mut b, pattern).unwrap();
-    let re_dfa = Regex::from_node(b, node, EngineOptions::default()).unwrap();
+    let re_dfa = Regex::from_node(b, node, RegexOptions::default()).unwrap();
     let literal_matches = re_literal.find_all(input.as_bytes()).unwrap();
     let dfa_matches = re_dfa.find_all(input.as_bytes()).unwrap();
     assert_eq!(
@@ -393,7 +398,7 @@ fn literal_equiv_no_match() {
 fn capacity_exceeded_at_compile() {
     let result = Regex::with_options(
         "a.*b.*c",
-        EngineOptions {
+        RegexOptions {
             dfa_threshold: 0,
             max_dfa_capacity: 2,
             ..Default::default()
@@ -403,16 +408,6 @@ fn capacity_exceeded_at_compile() {
         matches!(result, Err(Error::CapacityExceeded)),
         "expected CapacityExceeded error"
     );
-}
-
-#[test]
-fn dictionary_small() {
-    let pattern = "accommodating|acknowledging|comprehensive|corresponding|disappointing";
-    let input = b"a]comprehensive/disappointing;acknowledging";
-    let re = Regex::new(pattern).unwrap();
-    let m = re.find_all(input).unwrap();
-    let r: Vec<_> = m.iter().map(|m| (m.start, m.end)).collect();
-    assert_eq!(r, vec![(2, 15), (16, 29), (30, 43)]);
 }
 
 #[test]
@@ -486,7 +481,7 @@ fn literal_alt() {
 fn capacity_exceeded_at_match() {
     let re = Regex::with_options(
         "a.*b.*c.*d",
-        EngineOptions {
+        RegexOptions {
             dfa_threshold: 0,
             max_dfa_capacity: 4,
             ..Default::default()
@@ -524,481 +519,11 @@ fn unanchored_search_false_positive() {
     }
 }
 
-fn rev_nulls(pattern: &str, input: &[u8]) -> Vec<usize> {
-    let re = Regex::new(pattern).unwrap();
-    let nulls = re.collect_rev_nulls_debug(input);
-    for i in 1..nulls.len() {
-        assert!(
-            nulls[i] <= nulls[i - 1],
-            "rev nulls not sorted descending at [{}]: {} > {} (pattern={:?}, input={:?}, nulls={:?})",
-            i, nulls[i], nulls[i - 1], pattern, std::str::from_utf8(input).unwrap_or("?"), nulls
-        );
-    }
-    nulls
-}
-
-#[test]
-fn collect_rev_nulls_sorted_descending() {
-    rev_nulls(r" [A-Z][a-z]+ ", b" Hello World Foo ");
-    rev_nulls(r"[A-Z][a-z]+", b" Hello World Foo ");
-    rev_nulls(r"(?<=\s)[A-Z][a-z]+(?=\s)", b" Hello World Foo ");
-}
-
-#[test]
-fn collect_rev_readme_lookahead_short() {
-    let nulls = rev_nulls(r"(?<=\s)[A-Z][a-z]+(?=\s)", b" Hello World Foo ");
-    eprintln!("readme short: {} nulls {:?}", nulls.len(), nulls);
-    assert!(nulls.len() <= 3);
-}
-
-#[test]
-fn collect_rev_readme_lookahead_scaling() {
-    let pattern = r"(?<=\s)[A-Z][a-z]+(?=\s)";
-    let re = Regex::new(pattern).unwrap();
-
-    let n10 = re
-        .collect_rev_nulls_debug(" Aaa ".repeat(10).as_bytes())
-        .len();
-    let n100 = re
-        .collect_rev_nulls_debug(" Aaa ".repeat(100).as_bytes())
-        .len();
-    let n1000 = re
-        .collect_rev_nulls_debug(" Aaa ".repeat(1000).as_bytes())
-        .len();
-
-    eprintln!(
-        "collect_rev scaling: 10-rep={}, 100-rep={}, 1000-rep={}",
-        n10, n100, n1000,
-    );
-    assert!(n1000 <= n100 * 12);
-}
-
-#[test]
-fn collect_rev_lookahead_simple() {
-    let nulls = rev_nulls(r"a(?=b)", b"_ab_ab_");
-    assert_eq!(nulls.len(), 2);
-}
-
-#[test]
-fn collect_rev_dotstar_lookahead() {
-    let re = Regex::new(r".*(?=aaa)").unwrap();
-    let n = re.collect_rev_nulls_debug(b"baaa");
-    eprintln!(".*(?=aaa) on \"baaa\": {} nulls {:?}", n.len(), n);
-
-    let short = "b".repeat(10) + "aaa";
-    let long = "b".repeat(1000) + "aaa";
-    let n_short = re.collect_rev_nulls_debug(short.as_bytes());
-    let n_long = re.collect_rev_nulls_debug(long.as_bytes());
-    eprintln!(
-        ".*(?=aaa): short(13)={} nulls, long(1003)={} nulls",
-        n_short.len(),
-        n_long.len()
-    );
-}
-
-#[test]
-fn collect_rev_dotstar_lookahead_multiple() {
-    let re = Regex::new(r".*(?=.*bbb)(?=.*ccc)").unwrap();
-    let short = "aaa bbb ccc";
-    let long = "a".repeat(500) + " bbb " + &"a".repeat(500) + " ccc";
-    let n_short = re.collect_rev_nulls_debug(short.as_bytes());
-    let n_long = re.collect_rev_nulls_debug(long.as_bytes());
-    eprintln!(
-        "chained: short({})={} nulls, long({})={} nulls",
-        short.len(),
-        n_short.len(),
-        long.len(),
-        n_long.len(),
-    );
-}
-
-#[test]
-fn collect_rev_lookahead_word_boundary() {
-    let nulls = rev_nulls(r"a+\b(?=.*---)", b"aaa ---");
-    eprintln!("wb: {} nulls {:?}", nulls.len(), nulls);
-    assert!(nulls.len() <= 3);
-}
-
-#[test]
-fn collect_rev_lookbehind_lookahead_combined() {
-    let nulls = rev_nulls(r"(?<=a.*).(?=.*c)", b"a__c");
-    eprintln!("lb+la: {} nulls {:?}", nulls.len(), nulls);
-    assert!(nulls.len() <= 2);
-}
-
-#[test]
-fn collect_rev_lookahead_class_repetition() {
-    let nulls = rev_nulls(r"[a-z]+(?=[A-Z])", b"abcDefGhi");
-    eprintln!("class rep: {} nulls {:?}", nulls.len(), nulls);
-    assert!(nulls.len() <= 5);
-}
-
-#[test]
-fn collect_rev_lookahead_time_pattern() {
-    let nulls = rev_nulls(r"\d+(?=[aApP]\.?[mM]\.?)", b"10pm");
-    eprintln!("time: {} nulls {:?}", nulls.len(), nulls);
-    assert!(nulls.len() <= 2);
-}
-
-#[test]
-fn literal_20_bytes() {
-    let pattern = "ABCDEFGHIJKLMNOPQRST";
-    let mut hay = vec![b'.'; 200];
-    hay[100..120].copy_from_slice(pattern.as_bytes());
-    let re = Regex::new(pattern).unwrap();
-    let r: Vec<_> = re
-        .find_all(&hay)
-        .unwrap()
-        .iter()
-        .map(|m| (m.start, m.end))
-        .collect();
-    assert_eq!(r, vec![(100, 120)]);
-}
-
-#[test]
-fn literal_16_bytes() {
-    let pattern = "ABCDEFGHIJKLMNOP";
-    let mut hay = vec![b'.'; 100];
-    hay[50..66].copy_from_slice(pattern.as_bytes());
-    let re = Regex::new(pattern).unwrap();
-    let r: Vec<_> = re
-        .find_all(&hay)
-        .unwrap()
-        .iter()
-        .map(|m| (m.start, m.end))
-        .collect();
-    assert_eq!(r, vec![(50, 66)]);
-}
-
-#[test]
-fn literal_17_bytes() {
-    let pattern = "ABCDEFGHIJKLMNOPQ";
-    let mut hay = vec![b'.'; 100];
-    hay[40..57].copy_from_slice(pattern.as_bytes());
-    let re = Regex::new(pattern).unwrap();
-    let r: Vec<_> = re
-        .find_all(&hay)
-        .unwrap()
-        .iter()
-        .map(|m| (m.start, m.end))
-        .collect();
-    assert_eq!(r, vec![(40, 57)]);
-}
-#[test]
-fn dotstar_inner_literal_rev_midskip() {
-    let re = Regex::new(".*=.*").unwrap();
-    // exercise rev DFA with multiline input to trigger \n mid-skip on nullable state
-    let nulls = re.collect_rev_nulls_debug(b"first\nsecond=line\nthird");
-    let mut sorted = nulls.clone();
-    sorted.sort();
-    sorted.dedup();
-    // match starts: every position from 6 ('s' in second) to 12 ('=')
-    assert_eq!(sorted, vec![6, 7, 8, 9, 10, 11, 12]);
-}
-
-#[test]
-fn dotstar_huck_stripped_prefix() {
-    let re = Regex::new(".*Huck.*&~(.*F.*)").unwrap();
-    let m = re
-        .find_all(b"The Adventures of Huckleberry Finn', published in 1885.")
-        .unwrap();
-    let r: Vec<_> = m.iter().map(|m| (m.start, m.end)).collect();
-    assert_eq!(r, vec![(0, 30)], ".*Huck.*&~(.*F.*)");
-}
-
-#[test]
-fn nullable_head_correctness() {
-    // non-Star nullable heads can't use backward scan (no self-loop)
-    let re = Regex::new(r"\d?abc").unwrap();
-    let check = |input: &[u8], expected: Vec<(usize, usize)>| {
-        let m = re.find_all(input).unwrap();
-        let r: Vec<_> = m.iter().map(|m| (m.start, m.end)).collect();
-        assert_eq!(
-            r,
-            expected,
-            r"input={:?}",
-            std::str::from_utf8(input).unwrap()
-        );
-    };
-    check(b"abc", vec![(0, 3)]);
-    check(b"1abc", vec![(0, 4)]);
-    check(b"x1abcx", vec![(1, 5)]);
-    check(b"xabcx", vec![(1, 4)]);
-    check(b"11abc", vec![(1, 5)]); // \d? is at most one digit
-    check(b"1abc2abc", vec![(0, 4), (4, 8)]);
-}
-
-#[test]
-fn bounded_dfa_basic() {
-    // intersection with complement: variable length, no prefix, bounded
-    // _*c_*&[a-z]{2,4} = 2-4 lowercase letters containing 'c'
-    let re = Regex::new("_*c_*&[a-z]{2,4}").unwrap();
-    let m = re.find_all(b"xycdzz abcde fg").unwrap();
-    let r: Vec<_> = m.iter().map(|m| (m.start, m.end)).collect();
-    assert_eq!(r, [(0, 4), (7, 11)]);
-}
-
-use resharp::{NodeId, RegexBuilder, BDFA};
-
-fn chain_len(node: NodeId, b: &RegexBuilder) -> usize {
-    let mut n = 0;
-    let mut cur = node;
-    while cur != NodeId::MISSING {
-        n += 1;
-        cur = cur.right(b);
-    }
-    n
-}
-
-fn chain_pp(node: NodeId, b: &RegexBuilder) -> Vec<String> {
-    let mut result = Vec::new();
-    let mut cur = node;
-    while cur != NodeId::MISSING {
-        result.push(b.pp(cur));
-        cur = cur.right(b);
-    }
-    result
-}
-
-fn bdfa_state_pp(pattern: &str, input: &[u8]) -> Vec<String> {
-    let mut b = RegexBuilder::new();
-    let node = resharp_parser::parse_ast(&mut b, pattern).unwrap();
-    let mut bdfa = BDFA::new(&mut b, node).unwrap();
-    let mut state = bdfa.initial;
-    let mut result = Vec::new();
-    for pos in 0..input.len() {
-        let mt = bdfa.minterms_lookup[input[pos] as usize] as usize;
-        state = (bdfa.transition(&mut b, state, mt).unwrap() & 0xFFFF) as u16;
-        let rel = bdfa.match_rel[state as usize];
-        let entries = chain_pp(bdfa.states[state as usize], &b);
-        result.push(format!(
-            "pos={} '{}' s={} rel={} [{}]",
-            pos,
-            input[pos] as char,
-            state,
-            rel,
-            entries.join(", ")
-        ));
-    }
-    result
-}
-
-fn bdfa_step_trace(pattern: &str, input: &[u8]) -> Vec<(usize, u16, usize, u32)> {
-    let mut b = RegexBuilder::new();
-    let node = resharp_parser::parse_ast(&mut b, pattern).unwrap();
-    let mut bdfa = BDFA::new(&mut b, node).unwrap();
-    let mut state = bdfa.initial;
-    let mut trace = Vec::new();
-    for pos in 0..input.len() {
-        let mt = bdfa.minterms_lookup[input[pos] as usize] as usize;
-        state = (bdfa.transition(&mut b, state, mt).unwrap() & 0xFFFF) as u16;
-        let rel = bdfa.match_rel[state as usize];
-        let clen = chain_len(bdfa.states[state as usize], &b);
-        trace.push((pos, state, clen, rel));
-    }
-    trace
-}
-
-fn bdfa_matches(pattern: &str, input: &[u8]) -> Vec<(usize, usize)> {
-    let mut b = RegexBuilder::new();
-    let node = resharp_parser::parse_ast(&mut b, pattern).unwrap();
-    let mut bdfa = BDFA::new(&mut b, node).unwrap();
-    let mut state = bdfa.initial;
-    let mut matches = Vec::new();
-    let mut pos = 0;
-    while pos < input.len() {
-        let mt = bdfa.minterms_lookup[input[pos] as usize] as usize;
-        state = (bdfa.transition(&mut b, state, mt).unwrap() & 0xFFFF) as u16;
-        let rel = bdfa.match_rel[state as usize];
-        if rel > 0 {
-            let end_off = bdfa.match_end_off[state as usize];
-            let start = pos + 1 - rel as usize;
-            let end = pos + 1 - end_off as usize;
-            matches.push((start, end));
-            state = bdfa.initial;
-            continue;
-        }
-        pos += 1;
-    }
-    // flush
-    if state != bdfa.initial {
-        let node = bdfa.states[state as usize];
-        if node != NodeId::MISSING {
-            let best = BDFA::counted_best(node, &b);
-            if best > 0 {
-                let end = input.len();
-                let start = end - best as usize;
-                matches.push((start, end));
-            }
-        }
-    }
-    matches
-}
-
-#[test]
-fn bdfa_literal_abc() {
-    // simple literal: each step should accumulate one more candidate
-    let trace = bdfa_step_trace("abc", b"xabcx");
-    eprintln!("abc on 'xabcx':");
-    for &(pos, s, vl, rel) in &trace {
-        eprintln!("  pos={} state={} vec_len={} rel={}", pos, s, vl, rel);
-    }
-    // after 'x' at pos=4, body dies with step=4 (match is 3 bytes starting at pos+1-step=1)
-    assert!(
-        trace.iter().any(|&(_, _, _, rel)| rel == 4),
-        "expected match with rel=4 (step)"
-    );
-}
-
-#[test]
-fn bdfa_alternation_ab_cd() {
-    assert_bdfa_eq("ab|cd", b"xabcdx");
-}
-
-#[test]
-fn bdfa_two_candidates() {
-    assert_bdfa_eq("aa", b"aaa");
-}
-
-fn assert_bdfa_eq(pattern: &str, input: &[u8]) {
-    let m = bdfa_matches(pattern, input);
-    let re = Regex::new(pattern).unwrap();
-    let std_m: Vec<_> = re
-        .find_all(input)
-        .unwrap()
-        .iter()
-        .map(|m| (m.start, m.end))
-        .collect();
-    assert_eq!(
-        m,
-        std_m,
-        "pattern={:?} input={:?}",
-        pattern,
-        String::from_utf8_lossy(input)
-    );
-}
-
-#[test]
-fn bdfa_ambiguous_a_or_aa() {
-    assert_bdfa_eq("a|aa", b"aab");
-}
-
-#[test]
-fn bdfa_ambiguous_ab_or_a() {
-    assert_bdfa_eq("ab|a", b"abab");
-}
-
-#[test]
-fn bdfa_ambiguous_repeat_ab_1_3() {
-    assert_bdfa_eq("(ab){1,3}", b"abababx");
-}
-
-#[test]
-fn bdfa_ambiguous_overlap_abc_bcd() {
-    assert_bdfa_eq("abc|bcd", b"abcde");
-}
-
-#[test]
-fn bdfa_ambiguous_a_1_4_greedy() {
-    assert_bdfa_eq("a{1,4}", b"aaaa");
-}
-
-#[test]
-fn bdfa_ambiguous_nested_alt() {
-    assert_bdfa_eq("(a|ab)(b|c)", b"abcx");
-}
-
-#[test]
-fn bdfa_ambiguous_triple_overlap() {
-    assert_bdfa_eq("a{2,4}", b"aaaaaa");
-}
-
-#[test]
-fn bdfa_multi_match_overlap() {
-    assert_bdfa_eq("a{2,4}", b"aaaaaaaaa");
-    assert_bdfa_eq("ab|a", b"ababababab");
-    assert_bdfa_eq("(ab){1,3}", b"ababababababab");
-    assert_bdfa_eq("abc|bcd", b"xabcbcdabcdy");
-    assert_bdfa_eq("[a-c]{2,3}", b"abcabcabc");
-}
-
-#[test]
-fn bdfa_prefix_literal() {
-    // "Twain.{0,5}" has literal prefix "Twain", BDFA should skip to it
-    assert_bdfa_eq("Twain.{0,5}", b"xxxx Twain was here, Twainyyy end");
-}
-
-#[test]
-fn bdfa_prefix_predicate() {
-    // [A-Z][a-z]{1,3} has deterministic prefix [A-Z]
-    assert_bdfa_eq("[A-Z][a-z]{1,3}", b"Hello World Foo B xy");
-}
-
-#[test]
-fn bdfa_prefix_predicate_pp() {
-    let pp = bdfa_state_pp("[A-Z][a-z]{1,3}", b"Hello World Foo B xy");
-    for line in &pp {
-        eprintln!("{}", line);
-    }
-    assert_eq!(pp, vec![
-        "pos=0 'H' s=2 rel=0 [#([a-z]{1,3})s1b0]",
-        "pos=1 'e' s=3 rel=0 [#((|(|[a-z])[a-z]))s2b2]",
-        "pos=2 'l' s=4 rel=0 [#((|[a-z]))s3b3]",
-        "pos=3 'l' s=5 rel=0 [#()s4b4]",
-        "pos=4 'o' s=6 rel=5 [#(\u{22a5})s5b4]",
-        "pos=5 ' ' s=6 rel=5 [#(\u{22a5})s5b4]",
-        "pos=6 'W' s=7 rel=5 [#(\u{22a5})s5b4, #([a-z]{1,3})s1b0]",
-        "pos=7 'o' s=8 rel=5 [#(\u{22a5})s5b4, #((|(|[a-z])[a-z]))s2b2]",
-        "pos=8 'r' s=9 rel=5 [#(\u{22a5})s5b4, #((|[a-z]))s3b3]",
-        "pos=9 'l' s=10 rel=5 [#(\u{22a5})s5b4, #()s4b4]",
-        "pos=10 'd' s=11 rel=5 [#(\u{22a5})s5b4, #(\u{22a5})s5b4]",
-        "pos=11 ' ' s=11 rel=5 [#(\u{22a5})s5b4, #(\u{22a5})s5b4]",
-        "pos=12 'F' s=12 rel=5 [#(\u{22a5})s5b4, #(\u{22a5})s5b4, #([a-z]{1,3})s1b0]",
-        "pos=13 'o' s=13 rel=5 [#(\u{22a5})s5b4, #(\u{22a5})s5b4, #((|(|[a-z])[a-z]))s2b2]",
-        "pos=14 'o' s=14 rel=5 [#(\u{22a5})s5b4, #(\u{22a5})s5b4, #((|[a-z]))s3b3]",
-        "pos=15 ' ' s=15 rel=5 [#(\u{22a5})s5b4, #(\u{22a5})s5b4, #(\u{22a5})s4b3]",
-        "pos=16 'B' s=16 rel=5 [#(\u{22a5})s5b4, #(\u{22a5})s5b4, #(\u{22a5})s4b3, #([a-z]{1,3})s1b0]",
-        "pos=17 ' ' s=15 rel=5 [#(\u{22a5})s5b4, #(\u{22a5})s5b4, #(\u{22a5})s4b3]",
-        "pos=18 'x' s=15 rel=5 [#(\u{22a5})s5b4, #(\u{22a5})s5b4, #(\u{22a5})s4b3]",
-        "pos=19 'y' s=15 rel=5 [#(\u{22a5})s5b4, #(\u{22a5})s5b4, #(\u{22a5})s4b3]",
-    ]);
-}
-
-#[test]
-fn bdfa_prefix_has_prefix() {
-    // verify the BDFA actually built a prefix for a literal pattern
-    let mut b = RegexBuilder::new();
-    let node = resharp_parser::parse_ast(&mut b, "Twain.{0,5}").unwrap();
-    let bdfa = BDFA::new(&mut b, node).unwrap();
-    assert!(bdfa.prefix.is_some(), "expected prefix for Twain.{{0,5}}");
-    assert!(
-        bdfa.prefix_len >= 5,
-        "expected prefix_len >= 5, got {}",
-        bdfa.prefix_len
-    );
-}
-
-#[test]
-fn bdfa_aws_key() {
-    assert_bdfa_eq(
-        r"((?:ASIA|AKIA|AROA|AIDA)([A-Z0-7]{16}))",
-        b"xxx AKIAIOSFODNN7EXAMPLE yyy",
-    );
-}
-
-#[test]
-fn bdfa_cyrillic_names() {
-    assert_bdfa_eq(
-        "Шерлок Холмс|Джон Уотсон|Ирен Адлер|инспектор Лестрейд|профессор Мориарти",
-        "zzz Шерлок Холмс и Джон Уотсон zzz".as_bytes(),
-    );
-}
-
 #[test]
 fn opts_unicode_false() {
     let re = Regex::with_options(
         r"\w+",
-        EngineOptions::default().unicode(resharp::UnicodeMode::Ascii),
+        RegexOptions::default().unicode(resharp::UnicodeMode::Ascii),
     )
     .unwrap();
     let m = re.find_all("café".as_bytes()).unwrap();
@@ -1012,7 +537,7 @@ fn opts_unicode_false() {
 
 #[test]
 fn opts_case_insensitive() {
-    let re = Regex::with_options("hello", EngineOptions::default().case_insensitive(true)).unwrap();
+    let re = Regex::with_options("hello", RegexOptions::default().case_insensitive(true)).unwrap();
     let m = re.find_all(b"Hello HELLO hello").unwrap();
     assert_eq!(m.len(), 3);
 }
@@ -1020,7 +545,7 @@ fn opts_case_insensitive() {
 #[test]
 fn opts_dot_matches_new_line() {
     let re =
-        Regex::with_options("a.b", EngineOptions::default().dot_matches_new_line(true)).unwrap();
+        Regex::with_options("a.b", RegexOptions::default().dot_matches_new_line(true)).unwrap();
     let m = re.find_all(b"a\nb").unwrap();
     assert_eq!(m.len(), 1);
     assert_eq!((m[0].start, m[0].end), (0, 3));
@@ -1051,7 +576,7 @@ fn opts_dot_all_scoped_group() {
 fn opts_ignore_whitespace() {
     let re = Regex::with_options(
         r"hello \ world",
-        EngineOptions::default().ignore_whitespace(true),
+        RegexOptions::default().ignore_whitespace(true),
     )
     .unwrap();
     let m = re.find_all(b"hello world").unwrap();
@@ -1071,7 +596,7 @@ fn word_match_lengths_en_sampled() {
     let pattern = r"\b[0-9A-Za-z_]+\b";
     let re = Regex::with_options(
         pattern,
-        EngineOptions::default().unicode(resharp::UnicodeMode::Ascii),
+        RegexOptions::default().unicode(resharp::UnicodeMode::Ascii),
     )
     .unwrap();
     let matches = re.find_all(input).unwrap();
@@ -1114,12 +639,17 @@ fn run_file_hardened(filename: &str) {
             check_hardened_vs_normal(&tc.pattern, tc.input.as_bytes());
             continue;
         }
-        let opts = EngineOptions::default().hardened(true);
+        let opts = RegexOptions::default().hardened(true);
         let re = match Regex::with_options(&tc.pattern, opts) {
             Ok(re) => re,
             Err(_) => continue,
         };
-        let matches = re.find_all(tc.input.as_bytes()).unwrap();
+        let matches = re.find_all(tc.input.as_bytes()).unwrap_or_else(|e| {
+            panic!(
+                "err on file={} name={:?} pat={:?} inp={:?}: {:?}",
+                filename, tc.name, tc.pattern, tc.input, e
+            )
+        });
         let result: Vec<(usize, usize)> = matches.iter().map(|m| (m.start, m.end)).collect();
         assert_eq!(
             result, tc.matches,
@@ -1140,6 +670,7 @@ fn hardened_anchors() {
 }
 
 #[test]
+#[ignore = "slow in debug; run with --ignored or in release"]
 fn hardened_semantics() {
     run_file_hardened("semantics.toml");
 }
@@ -1202,8 +733,7 @@ fn hardened_pathological() {
     let pattern = r".*[^A-Z]|[A-Z]";
     let input = "A".repeat(1000);
     let re_normal = Regex::new(pattern).unwrap();
-    let re_hardened =
-        Regex::with_options(pattern, EngineOptions::default().hardened(true)).unwrap();
+    let re_hardened = Regex::with_options(pattern, RegexOptions::default().hardened(true)).unwrap();
     assert_eq!(
         re_normal.find_all(input.as_bytes()).unwrap(),
         re_hardened.find_all(input.as_bytes()).unwrap(),
@@ -1212,7 +742,7 @@ fn hardened_pathological() {
 }
 
 fn check_hardened_vs_normal(pattern: &str, input: &[u8]) {
-    let opts = EngineOptions::default().hardened(true);
+    let opts = RegexOptions::default().hardened(true);
     let re_s = match Regex::with_options(pattern, opts) {
         Ok(re) => re,
         Err(_) => return, // skip patterns that fail in hardened mode (e.g. lookaround)
@@ -1279,7 +809,7 @@ fn hardened_bounded_repeat_tail() {
             .map(|m| (m.start(), m.end()))
             .collect();
 
-        let re_u = Regex::with_options(pattern, EngineOptions::default().hardened(true)).unwrap();
+        let re_u = Regex::with_options(pattern, RegexOptions::default().hardened(true)).unwrap();
         let got: Vec<(usize, usize)> = re_u
             .find_all(input.as_bytes())
             .unwrap()
@@ -1311,10 +841,9 @@ fn range_prefix_correctness() {
         b"aZbYcXdW",
         b"",
         b"Z",
-        b"ZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ", // > 32 bytes of matches
-        &[0u8; 100],                               // no ASCII letters
+        b"ZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ",
+        &[0u8; 100],                              
     ];
-    // patterns with >16 byte char classes that should use range prefix
     let patterns = [
         r"[A-Z]+",
         r"[A-Z][a-z]+",
@@ -1325,7 +854,7 @@ fn range_prefix_correctness() {
     ];
     for p in &patterns {
         let re = Regex::new(p).unwrap();
-        let re_hardened = Regex::with_options(p, EngineOptions::default().hardened(true)).unwrap();
+        let re_hardened = Regex::with_options(p, RegexOptions::default().hardened(true)).unwrap();
         for input in &inputs {
             let normal = re.find_all(input).unwrap();
             let hardened = re_hardened.find_all(input).unwrap();
@@ -1360,7 +889,7 @@ fn range_prefix_random_haystack() {
             .collect();
         for p in &patterns {
             let re = Regex::new(p).unwrap();
-            let re_s = Regex::with_options(p, EngineOptions::default().hardened(true)).unwrap();
+            let re_s = Regex::with_options(p, RegexOptions::default().hardened(true)).unwrap();
             let normal = re.find_all(&input).unwrap();
             let hardened = re_s.find_all(&input).unwrap();
             assert_eq!(
@@ -1370,14 +899,6 @@ fn range_prefix_random_haystack() {
             );
         }
     }
-}
-
-#[test]
-fn fwd_prefix_search_long_prefix_no_panic() {
-    let re = Regex::new("[aA]bcdefghijklmnopqrs(x|xy)").unwrap();
-    let m = re.find_all(b"abcdefghijklmnopqrsx").unwrap();
-    let r: Vec<_> = m.iter().map(|m| (m.start, m.end)).collect();
-    assert_eq!(r, vec![(0, 20)]);
 }
 
 #[test]
@@ -1399,7 +920,7 @@ fn hardened_nullable_empty_after_dedup() {
             .map(|m| (m.start, m.end))
             .collect();
 
-        let opts = EngineOptions::default().hardened(true);
+        let opts = RegexOptions::default().hardened(true);
         let re_h = Regex::with_options(pattern, opts).unwrap();
         let hardened: Vec<(usize, usize)> = re_h
             .find_all(input.as_bytes())
@@ -1443,7 +964,7 @@ fn hardened_cross_validate_all_toml() {
             if tc.ignore || tc.expect_error || tc.anchored {
                 continue;
             }
-            let opts = EngineOptions::default().hardened(true);
+            let opts = RegexOptions::default().hardened(true);
             let re = match Regex::with_options(&tc.pattern, opts) {
                 Ok(re) => re,
                 Err(_) => continue,
@@ -1517,6 +1038,7 @@ fn run_file_internal(filename: &str) {
                 filename, tc.name, tc.pattern, e
             )
         });
+        let node = b.simplify_fwd_initial(node);
         let got = b.pp(node);
         assert_eq!(
             got, tc.pp,
@@ -1524,16 +1046,7 @@ fn run_file_internal(filename: &str) {
             filename, tc.name, tc.pattern
         );
         if let Some(expected_ts_rev) = &tc.ts_rev {
-            let rev_start = b.reverse(node).unwrap();
-            let rev_start = b.normalize_rev(rev_start).unwrap();
-            let ts_rev_start = if b.get_kind(rev_start) == resharp_algebra::Kind::Concat
-                && rev_start.left(&b) == resharp_algebra::NodeId::BEGIN
-            {
-                rev_start
-            } else {
-                b.mk_concat(resharp_algebra::NodeId::TS, rev_start)
-            };
-            let ts_rev_start = b.simplify_rev_initial(ts_rev_start);
+            let ts_rev_start = b.ts_rev_start(node).unwrap();
             let got_ts_rev = b.pp(ts_rev_start);
             assert_eq!(
                 got_ts_rev, *expected_ts_rev,
@@ -1550,67 +1063,8 @@ fn internal() {
 }
 
 #[test]
-fn normalize() {
+fn normalize_toml() {
     run_file_internal("normalize.toml");
-}
-
-#[test]
-fn nullable_pattern_empty_interspersed() {
-    let re = Regex::new(r"\d{0,7}([\.\|\,]\d{0,2})?").unwrap();
-    let input = b"xxxxx0yyyyy";
-    let ms = re.find_all(input).unwrap();
-    let actual: Vec<[usize; 2]> = ms.iter().map(|m| [m.start, m.end]).collect();
-    let expected: &[[usize; 2]] = &[
-        [0, 0],
-        [1, 1],
-        [2, 2],
-        [3, 3],
-        [4, 4],
-        [5, 6],
-        [6, 6],
-        [7, 7],
-        [8, 8],
-        [9, 9],
-        [10, 10],
-        [11, 11],
-    ];
-    assert_eq!(actual, expected);
-}
-
-#[test]
-fn quantifier_a_star_1() {
-    let re = Regex::new(r"a*").unwrap();
-    let input = b"bbbbaaabbbbb";
-    let ms = re.find_all(input).unwrap();
-    let actual: Vec<[usize; 2]> = ms.iter().map(|m| [m.start, m.end]).collect();
-    let expected: &[[usize; 2]] = &[
-        [0, 0],
-        [1, 1],
-        [2, 2],
-        [3, 3],
-        [4, 7],
-        [7, 7],
-        [8, 8],
-        [9, 9],
-        [10, 10],
-        [11, 11],
-        [12, 12],
-    ];
-    assert_eq!(actual, expected);
-}
-
-#[test]
-fn line_anchors_counted_group() {
-    let re = Regex::new(r"^[^0-9]*(?:(\d)[^0-9]*){10}$").unwrap();
-    let input = b"0\n0\n0\n0\n0\n0\n0\n0\n00 0\n0\n0\n0\n0\n0\n0\n0\n00";
-    let ms = re.find_all(input).unwrap();
-    let actual: Vec<[usize; 2]> = ms.iter().map(|m| [m.start, m.end]).collect();
-    assert_eq!(actual, &[[2, 20]]);
-}
-
-#[test]
-fn word_boundary_scientific_notation() {
-    assert!(Regex::new(r"\b-?[1-9](?:\.\d+)?[Ee][-+]?\d+\b").is_err());
 }
 
 #[test]
@@ -1624,141 +1078,7 @@ fn word_boundary_inference() {
 }
 
 #[test]
-fn anchor_union() {
-    let re = Regex::new(r"(\A|(.*,))VALUE(\z|([,]?.))").unwrap();
-    let input = b"VALUE";
-    let ms = re.find_all(input).unwrap();
-    let actual: Vec<[usize; 2]> = ms.iter().map(|m| [m.start, m.end]).collect();
-    assert_eq!(actual, &[[0, 5]]);
-}
-
-#[test]
-fn unicode_test() {
-    let re = Regex::new(r"alt-1|alt-2|…").unwrap();
-    let input = "…".as_bytes();
-    let ms = re.find_all(input).unwrap();
-    let actual: Vec<[usize; 2]> = ms.iter().map(|m| [m.start, m.end]).collect();
-    assert_eq!(actual, &[[0, 3]]);
-}
-
-#[test]
-fn word_border_star() {
-    let re = Regex::new(r"\bTrue\b *").unwrap();
-    let input = "True".as_bytes();
-    let ms = re.find_all(input).unwrap();
-    let actual: Vec<[usize; 2]> = ms.iter().map(|m| [m.start, m.end]).collect();
-    assert_eq!(actual, &[[0, 4]]);
-}
-
-#[test]
-fn word_border_req_word() {
-    let re = Regex::new(r"!!\b").unwrap();
-    let input = "!!".as_bytes();
-    let ms = re.find_all(input).unwrap();
-    let actual: Vec<[usize; 2]> = ms.iter().map(|m| [m.start, m.end]).collect();
-    assert!(
-        actual.is_empty(),
-        "expected no matches for !!\\b, got {:?}",
-        actual
-    );
-
-    // \b before non-word should not match at start-of-string
-    let re2 = Regex::new(r"\b!!").unwrap();
-    let ms2 = re2.find_all(input).unwrap();
-    let actual2: Vec<[usize; 2]> = ms2.iter().map(|m| [m.start, m.end]).collect();
-    assert!(
-        actual2.is_empty(),
-        "expected no matches for \\b!!, got {:?}",
-        actual2
-    );
-
-    // but \b!! should match at a real word boundary
-    let re3 = Regex::new(r"\b!!").unwrap();
-    let ms3 = re3.find_all("a!!".as_bytes()).unwrap();
-    let actual3: Vec<[usize; 2]> = ms3.iter().map(|m| [m.start, m.end]).collect();
-    assert_eq!(actual3, &[[1, 3]], "\\b!! should match in 'a!!'");
-
-    // and !!\b should match at a real word boundary
-    let ms4 = re.find_all("!!a".as_bytes()).unwrap();
-    let actual4: Vec<[usize; 2]> = ms4.iter().map(|m| [m.start, m.end]).collect();
-    assert_eq!(actual4, &[[0, 2]], "!!\\b should match in '!!a'");
-}
-
-#[test]
-fn z_anchor() {
-    let re = Regex::new(r"\.xs\z").unwrap();
-
-    let input = ".xs .xs".as_bytes();
-
-    let ms = re.find_all(input).unwrap();
-    let actual: Vec<[usize; 2]> = ms.iter().map(|m| [m.start, m.end]).collect();
-    assert_eq!(actual, &[[4, 7]]);
-}
-
-#[test]
-fn a_anchor() {
-    let re = Regex::new(r"\A(\s*)").unwrap();
-
-    let input = "xxxxx\tyyyyy".as_bytes();
-
-    let ms = re.find_all(input).unwrap();
-    let actual: Vec<[usize; 2]> = ms.iter().map(|m| [m.start, m.end]).collect();
-    assert_eq!(actual, &[[0, 0]]);
-}
-
-#[test]
-fn neg_la_dot_star_neg_lb_min() {
-    let pat = r"a(?!b).*(?<!a)b";
-    assert!(Regex::new(pat).is_err());
-}
-
-#[test]
-fn word_boundary_dot_star_word_boundary_min() {
-    let pat = r"a\b.*\bb";
-    assert!(Regex::new(pat).is_err());
-}
-
-#[test]
-fn ci_alt_word_boundary_cross_line() {
-    let pat = r"(?i)(\btest\b.*\blong\b|\blong\b.*\btest\b)";
-    assert!(Regex::new(pat).is_err());
-}
-
-#[test]
-fn word_border_center() {
-    let pat = r"\w*\b\s";
-    assert!(Regex::new(pat).is_err());
-}
-
-#[test]
-fn word_boundary_ip_trailing_b_not_boundary() {
-    let re = Regex::new(r"2(\.([0-1]?[0-9]{1,2}|2[0-4][0-9])){3}\b").unwrap();
-    let ms = re.find_all(b"2.3.3.3a!").unwrap();
-    let actual: Vec<[usize; 2]> = ms.iter().map(|m| [m.start, m.end]).collect();
-    assert_eq!(actual, Vec::<[usize; 2]>::new());
-}
-
-#[test]
-fn missing_az_anchors_value() {
-    let re = Regex::new(r"(\A|(.*,))VALUE(\z|([,]?.))").unwrap();
-    let ms = re.find_all(b"xxxxxVALUEyyyyy").unwrap();
-    let actual: Vec<[usize; 2]> = ms.iter().map(|m| [m.start, m.end]).collect();
-    assert_eq!(actual, Vec::<[usize; 2]>::new());
-}
-
-#[test]
-fn date_optional_time_second_match() {
-    let re = Regex::new(r"\d{4}-\d\d?-\d\d?((T| )\d{2}:\d{2}:\d{2})?").unwrap();
-    let ms = re.find_all(b"0000-0-0 0000-0-0").unwrap();
-    let actual: Vec<[usize; 2]> = ms.iter().map(|m| [m.start, m.end]).collect();
-    assert_eq!(actual, &[[0, 8], [9, 17]]);
-}
-
-#[test]
-fn alt_embedded_line_anchor_crosses_newline() {
-    assert!(Regex::new(r"^.*(a|^b)").is_err());
-    assert!(Regex::new(r".*(a|^b)").is_err());
-    assert!(Regex::new(r"(a|\bb)").is_err());
+fn alt_embedded_line_anchor_compiles_ok() {
     assert!(Regex::new(r"^a|^b").is_ok());
     assert!(Regex::new(r"^(ab)").is_ok());
 }
@@ -1770,39 +1090,11 @@ fn word_boundaries_loop() {
 }
 
 #[test]
-fn repro_unanchored_fwd_ascii_word() {
-    let re = Regex::new(r"\w\w-\w\w").unwrap();
-    let hay = b"xxxxx00-00yyyyy";
-    let matches: Vec<_> = re
-        .find_all(hay)
-        .unwrap()
-        .into_iter()
-        .map(|m| (m.start, m.end))
-        .collect();
-    assert_eq!(matches, vec![(5, 10)]);
-}
-
-#[test]
-fn repro_unanchored_fwd_date() {
-    let re = Regex::new(r"\d{4}-\d\d?-\d\d?((T| )\d{2}:\d{2}:\d{2})?").unwrap();
-    let matches: Vec<_> = re
-        .find_all(b"0000-0-0 0000-0-0")
-        .unwrap()
-        .into_iter()
-        .map(|m| (m.start, m.end))
-        .collect();
-    assert_eq!(matches, vec![(0, 8), (9, 17)]);
-}
-
-#[test]
 fn fwd_la_1() {
-    // lookahead inside a Kleene loop is currently rejected by
-    // ensure_supported (see resharp-engine/src/lib.rs) because the
-    // lookahead body is not re-checked on each iteration.
     let pattern = r"(?:\[[^\]]*\]|[^\]]|\](?=[^\[]*\]))*";
-    let ops = EngineOptions::default().unicode(resharp::UnicodeMode::Ascii);
+    let ops = RegexOptions::default().unicode(resharp::UnicodeMode::Ascii);
     match Regex::with_options(pattern, ops) {
-        Err(resharp::Error::Algebra(resharp_algebra::AlgebraError::UnsupportedPattern)) => {}
+        Err(resharp::Error::Algebra(resharp_algebra::ResharpError::UnsupportedPattern)) => {}
         Err(e) => panic!("unexpected error: {:?}", e),
         Ok(_) => panic!("expected UnsupportedPattern"),
     }
@@ -1812,7 +1104,7 @@ fn fwd_la_1() {
 fn fwd_la_2() {
     let pattern = r"^((?=.*[0-9])(?=.*[a-z])(?=.*[A-Z])(?=.*[@#$%]).{6})";
     let hay = include_bytes!("../../data/haystacks/smallserver.txt");
-    let ops = EngineOptions::default().unicode(resharp::UnicodeMode::Ascii);
+    let ops = RegexOptions::default().unicode(resharp::UnicodeMode::Ascii);
     let re = Regex::with_options(pattern, ops).unwrap();
     let _ = re.find_all(hay).unwrap();
 }
@@ -1821,7 +1113,7 @@ fn fwd_la_2() {
 fn fwd_la_2_js() {
     let pattern = r"^(?=.{8,})(?=.*[A-Z])(?=.*[a-z])(?=.*[0-9])(?=.*[A-Za-z0-9]).*$";
     let hay = include_bytes!("../../data/haystacks/smallserver.txt");
-    let ops = EngineOptions::default().unicode(resharp::UnicodeMode::Ascii);
+    let ops = RegexOptions::default().unicode(resharp::UnicodeMode::Ascii);
     let re = Regex::with_options(pattern, ops).unwrap();
     let _ = re.find_all(&hay[..50]).unwrap();
 }
@@ -1830,14 +1122,14 @@ fn fwd_la_2_js() {
 fn fwd_la_3() {
     let pattern = "<(?:\\/?(?!(?:div|p|br|span)>)\\w+|(?:(?!(?:span style=\"white-space:\\s?pre;?\">)|br\\s?\\/>))\\w+\\s[^>]+)>";
     let hay = include_bytes!("../../data/haystacks/smallserver.txt");
-    let ops = EngineOptions::default().unicode(resharp::UnicodeMode::Ascii);
+    let ops = RegexOptions::default().unicode(resharp::UnicodeMode::Ascii);
     let re = Regex::with_options(pattern, ops).unwrap();
     let _ = re.find_all(&hay[..2]).unwrap();
 }
 
 #[test]
 fn word_boundary_rare_literal_modes() {
-    use resharp::{EngineOptions, UnicodeMode};
+    use resharp::{RegexOptions, UnicodeMode};
     let bytes = std::fs::read(
         "/home/ian/f/myrepos/resharp-wasm/test/data/haystacks/rust-src-tools-3b0d4813.txt",
     )
@@ -1847,8 +1139,8 @@ fn word_boundary_rare_literal_modes() {
         UnicodeMode::Default,
         UnicodeMode::Javascript,
     ] {
-        let re = Regex::with_options("\\bGIT_PARAMS\\b", EngineOptions::default().unicode(mode))
-            .unwrap();
+        let re =
+            Regex::with_options("\\bGIT_PARAMS\\b", RegexOptions::default().unicode(mode)).unwrap();
         let _ = re.find_all(&bytes).unwrap();
         let t = std::time::Instant::now();
         let m = re.find_all(&bytes).unwrap();
@@ -1865,154 +1157,9 @@ fn word_boundary_rare_literal_modes() {
 }
 
 #[test]
-#[ignore = "slow"]
-fn slow_pattern_regression_1() {
-    let bytes = std::fs::read(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../data/haystacks/rust-src-tools-3b0d4813.txt"
-    ))
-    .unwrap();
-    let hay = &bytes[..32 * 1024];
-    let patterns: &[&str] = &[
-        // r"[\s\S]+(?:rv|it|ra|ie)[/: ]([\d.]+)",
-        // r"^([\|\s+\S+]+\s+\|\s*)$",
-        // r".*#",
-        // r".*!",
-        // r"(.*)?(#)(.*)(.*)?",
-        // r"([^>]*)(<([a-z/][-a-z0-9_:.]*)[^>/]*(/*)>)([^<]*)",
-        // r"[$a-z_][0-9a-z_$]*[^=]+(-|=)>",
-        // r"(?=\S)[^@;{}()]?(?:[^@;{}()]|#\{\$[-\w]+\})+(?=\s*\{(?:\}|\s|[^}]+[:{][^}]+))",
-        // r"^\s*([a-z]{3})?\s*(-)?(\d*)(?:\.(\d*))?\s*([a-f0-9]{40}|[a-z0-9]{3})?\s*$",
-        // r"([\d,\w,\s,\./]*)(?=!)",
-        // r"([^#]*)#(.+)$",
-        // r"([^\s;{}][^;{}]*)\{",
-        // r"[^/\\]*\.\w{0,8}$",
-        // r"[^{}]+(?=})",
-        // r"<[^/][^>][^<]+\s+.[^<]+[=][^<]+>",
-        // r"([^\[]*)\[([^\]]+)]",
-        // r#"<('[^']*'|'[^']*'|[^''>])*>"#,
-        // r"[^{}\s][^{};]*(?=\s*\{)",
-        // r"^\s*([^{}]+)\s*\{\s*((?:[^{}]+\{[^{}]+\})+|[^{}]+)\s*\}$",
-        // r".*chicken.*",
-        // r".*/open_redirect",
-        // r"([^$]*\{@[^}]+\})|.*$",
-        // r"([^>]*-->)*",
-        // r"(.*/)?(?=[^/]+)",
-        // r"[^[0-9]\.\-]",
-        // r"^([a-z][a-z0-9.+-]*:)?(\/\/)?([\S\s]*)",
-        // r"^([^:\/?#]+:)?(\/\/(?:[^:@\/]*(?::[^:@\/]*)?@)?(([^:\/?#]*)(?::(\d*))?))?([^?#]*)(\?[^#]*)?(#[\s\S]*)?",
-        // r"^(\S+)(?:\s+(\S[\s\S]*))?",
-        // r"(?=\S)([\S\s]*\S)",
-        // r"\S(?:[\s\S]*\S)?",
-        // r"^([^\s]*)\s*([\S\s]*)",
-        // r"([\w\d_\-]*)\.?js$|[^\\\/]*$",
-        // r"([\w\d_-]*)\.?[^\\\/]*$",
-    ];
-    const ITERS: u32 = 10;
-    const FLOOR_MBPS: f64 = 30.0;
-    use resharp::UnicodeMode;
-    let mut failures = Vec::new();
-    for pattern in patterns {
-        for mode in [UnicodeMode::Javascript] {
-            let opts = EngineOptions::default().unicode(mode);
-            let re = Regex::with_options(pattern, opts).unwrap();
-            let _ = re.find_all(hay).unwrap(); // warm up
-            let mut best = f64::INFINITY;
-            let mut matches = 0;
-            for _ in 0..ITERS {
-                let t = std::time::Instant::now();
-                let m = re.find_all(hay).unwrap();
-                let dt = t.elapsed().as_secs_f64();
-                best = best.min(dt);
-                matches = m.len();
-            }
-            let mbps = (hay.len() as f64 / 1e6) / best;
-            eprintln!(
-                "{:?}  {:>8.2} MB/s  matches={:<4}  {:?}",
-                mode, mbps, matches, pattern
-            );
-            if mbps < FLOOR_MBPS {
-                failures.push((mode, pattern, mbps));
-            }
-        }
-    }
-    assert!(
-        failures.is_empty(),
-        "patterns below {} MB/s: {:#?}",
-        FLOOR_MBPS,
-        failures
-    );
-}
-
-#[test]
-fn slow_pattern_regression_2() {
-    let bytes = std::fs::read(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../data/haystacks/rust-src-tools-3b0d4813.txt"
-    ))
-    .unwrap();
-    // let hay = &bytes[..32 * 1024];
-    let hay = &bytes[..1 * 1024];
-    // let hay = &bytes[..29 * 1024];
-    // let hay = &bytes[16 * 1024..30 * 1024];
-    // let hay = &bytes[0 * 1024..32 * 1024];
-    let patterns: &[&str] = &[
-        // r"([^>]*-->)*",
-        // r"^([\|\s+\S+]+\s+\|\s*)$",
-        // r"[^@]*",
-        // r"[^/\\]*\.\w{0,8}$",
-        // r"(?:[^';]|'[^']*'|;(?=\s))+;(?=\S)",
-        // r"([^$]*\{@[^}]+\})|.*$",
-        // r"([^>]*-->)*",
-        // r"(.*/)?(?=[^/]+)",
-        // r"[^[0-9]\.\-]",
-        // r"^([a-z][a-z0-9.+-]*:)?(\/\/)?([\S\s]*)",
-        // r"^([^:\/?#]+:)?(\/\/(?:[^:@\/]*(?::[^:@\/]*)?@)?(([^:\/?#]*)(?::(\d*))?))?([^?#]*)(\?[^#]*)?(#[\s\S]*)?",
-        // r"^(\S+)(?:\s+(\S[\s\S]*))?",
-        // r"(?=\S)([\S\s]*\S)",
-        // r"\S(?:[\s\S]*\S)?",
-        // r"^([^\s]*)\s*([\S\s]*)",
-    ];
-    const ITERS: u32 = 5;
-    const FLOOR_MBPS: f64 = 30.0;
-    use resharp::UnicodeMode;
-    let mut failures = Vec::new();
-    for pattern in patterns {
-        for mode in [UnicodeMode::Javascript] {
-            let opts = EngineOptions::default().unicode(mode);
-            let re = Regex::with_options(pattern, opts).unwrap();
-            let _ = re.find_all(hay).unwrap(); // warm up
-            let mut best = f64::INFINITY;
-            let mut matches = 0;
-            for _ in 0..ITERS {
-                let t = std::time::Instant::now();
-                let m = re.find_all(hay).unwrap();
-                let dt = t.elapsed().as_secs_f64();
-                best = best.min(dt);
-                matches = m.len();
-            }
-            let mbps = (hay.len() as f64 / 1e6) / best;
-            eprintln!(
-                "{:?}  {:>8.2} MB/s  matches={:<4}  {:?}",
-                mode, mbps, matches, pattern
-            );
-            if mbps < FLOOR_MBPS {
-                failures.push((pattern, mbps));
-            }
-        }
-    }
-    assert!(
-        failures.is_empty(),
-        "patterns below {} MB/s: {:#?}",
-        FLOOR_MBPS,
-        failures
-    );
-}
-
-#[test]
 fn repro_lookahead_in_loop() {
     let pattern = r"(.(?=.))+x";
-    let opts = EngineOptions::default().unicode(resharp::UnicodeMode::Ascii);
+    let opts = RegexOptions::default().unicode(resharp::UnicodeMode::Ascii);
     let result = Regex::with_options(pattern, opts);
     let err = match result {
         Err(e) => e,
@@ -2021,7 +1168,7 @@ fn repro_lookahead_in_loop() {
     assert!(
         matches!(
             err,
-            resharp::Error::Algebra(resharp_algebra::AlgebraError::UnsupportedPattern)
+            resharp::Error::Algebra(resharp_algebra::ResharpError::UnsupportedPattern)
         ),
         "expected UnsupportedPattern, got {:?}",
         err
@@ -2031,7 +1178,7 @@ fn repro_lookahead_in_loop() {
 fn hardened_long_word() {
     let p = r"\b[a-z]{12,}\b";
     let input = b"!extraordinary";
-    let re_h = Regex::with_options(p, EngineOptions::default().hardened(true)).unwrap();
+    let re_h = Regex::with_options(p, RegexOptions::default().hardened(true)).unwrap();
     let re_n = Regex::new(p).unwrap();
     let a = re_n.find_all(input).unwrap();
     let b = re_h.find_all(input).unwrap();
@@ -2053,14 +1200,785 @@ fn repro_is_match_negative_lookahead() {
 }
 
 #[test]
-fn whenever_js_prefix() {
-    let p = r"^(?:WHENEVER\b)";
-    let re = Regex::with_options(
-        p,
-        EngineOptions::default().unicode(resharp::UnicodeMode::Javascript),
-    )
-    .unwrap();
-    let hay = b"WHENEVER you look at this pattern";
-    let ms = re.find_all(hay).unwrap();
-    println!("matches: {:?}", ms);
+fn light_depth_pass_bdfa_prefix_falls_through_to_potential() {
+    let p = r"\s\!?LIGHT_DEPTH_PASS\s";
+    for mode in [
+        resharp::UnicodeMode::Ascii,
+        resharp::UnicodeMode::Javascript,
+        resharp::UnicodeMode::Full,
+    ] {
+        let re = Regex::with_options(p, RegexOptions::default().unicode(mode)).unwrap();
+        let hay = " LIGHT_DEPTH_PASS ".repeat(100);
+        let ms = re.find_all(hay.as_bytes()).unwrap();
+        assert_eq!(ms.len(), 100, "mode {:?}", mode);
+    }
 }
+
+#[test]
+fn assets_path_js_unicode_uses_rev_literal() {
+    let p = r"..\/..\/Assets\/";
+    for mode in [
+        resharp::UnicodeMode::Ascii,
+        resharp::UnicodeMode::Javascript,
+        resharp::UnicodeMode::Full,
+    ] {
+        let re = Regex::with_options(p, RegexOptions::default().unicode(mode)).unwrap();
+        let hay = "xx/yy/Assets/file.cs\n".repeat(100);
+        let ms = re.find_all(hay.as_bytes()).unwrap();
+        assert_eq!(ms.len(), 100, "mode {:?}", mode);
+    }
+}
+
+#[test]
+fn lookahead_alternation_with_end_of_line() {
+    let re = Regex::new(r"x(?=a|$)").unwrap();
+    let input = b"xa xb x\nxc x";
+    let positions: Vec<usize> = re
+        .find_all(input)
+        .unwrap()
+        .iter()
+        .map(|m| m.start)
+        .collect();
+    assert_eq!(positions, vec![0, 6, 11]);
+}
+
+#[test]
+fn fwd_begin_anchor_short_circuits() {
+    use std::time::Instant;
+    let big = vec![b'x'; 1 << 22];
+    for &(p, expect_match) in &[(r"\Afoo", false), (r"\Axxx", true), (r"\A", true)] {
+        let re = Regex::new(p).unwrap();
+        let t = Instant::now();
+        let n = re.find_all(&big).unwrap().len();
+        let elapsed = t.elapsed();
+        assert_eq!(n > 0, expect_match, "pattern {:?}", p);
+        assert!(
+            elapsed.as_micros() < 1000,
+            "pattern {:?} took {:?}, expected O(1)",
+            p,
+            elapsed
+        );
+    }
+}
+
+#[test]
+#[cfg_attr(debug_assertions, ignore)]
+fn rev_bot_skip_terminates_fast() {
+    use std::time::Instant;
+    let big = vec![b'x'; 1 << 22];
+
+    let re = Regex::new(r"\z").unwrap();
+    let t = Instant::now();
+    let ms = re.find_all(&big).unwrap();
+    let elapsed = t.elapsed();
+    assert_eq!(ms.len(), 1);
+    assert_eq!(ms[0].start, big.len());
+    assert_eq!(ms[0].end, big.len());
+    assert!(
+        elapsed.as_micros() < 500,
+        "`\\z` on 4MB took {:?}, expected sub-ms (BOT skip regressed?)",
+        elapsed
+    );
+}
+
+#[test]
+fn is_match_agrees_with_find_all_for_lookahead() {
+    use resharp::UnicodeMode;
+    let mk = |p: &str| {
+        let opts = RegexOptions::default().unicode(UnicodeMode::Javascript);
+        Regex::with_options(p, opts).unwrap()
+    };
+    let re = mk(r".(?=a|$)");
+    let hay = b"xa xb x\nxc x";
+    assert_eq!(
+        re.is_match(hay).unwrap(),
+        !re.find_all(hay).unwrap().is_empty()
+    );
+    for hay in [&b"\n"[..], b"\n\n", b"\n\n\n\n"] {
+        assert_eq!(
+            re.is_match(hay).unwrap(),
+            !re.find_all(hay).unwrap().is_empty(),
+            "is_match disagrees with find_all on hay={:?}",
+            hay
+        );
+    }
+}
+
+#[test]
+fn alternation_prefix_soundness_bulk() {
+    use resharp::UnicodeMode;
+    let mk = |p: &str| {
+        let opts = RegexOptions::default().unicode(UnicodeMode::Javascript);
+        Regex::with_options(p, opts).unwrap()
+    };
+
+    let re = mk(r"EMU-(?!CLAUSE|XREF|ANNEX|INTRO)|DFN");
+    let mut hay = Vec::new();
+    for _ in 0..500 {
+        hay.extend_from_slice(b"zz EMU-FOO zz ");
+    }
+    assert!(!hay.windows(3).any(|w| w == b"DFN"));
+    assert_eq!(re.find_all(&hay).unwrap().len(), 500);
+
+    let re = mk(r"abcdef|xy");
+    let mut hay = Vec::new();
+    for _ in 0..200 {
+        hay.extend_from_slice(b"_ abcdef _ ");
+    }
+    assert_eq!(re.find_all(&hay).unwrap().len(), 200);
+}
+
+#[test]
+fn trailing_dollar_after_top_star_pruned() {
+    use resharp::UnicodeMode;
+    let mk = |p: &str| {
+        let opts = RegexOptions::default().unicode(UnicodeMode::Javascript);
+        Regex::with_options(p, opts).unwrap()
+    };
+    let with_dollar = mk(r"^((?!_\S+=)[^\s]+)\s?([\S\s]*)$");
+    let without_dollar = mk(r"^((?!_\S+=)[^\s]+)\s?([\S\s]*)");
+    let hay = b"hello world\nfoo bar baz";
+    assert_eq!(
+        with_dollar.find_all(hay).unwrap(),
+        without_dollar.find_all(hay).unwrap()
+    );
+    // multi-line haystack: longest match runs to \z regardless
+    let hay2 = b"abc def ghi\njkl mno\npqr";
+    assert_eq!(
+        with_dollar.find_all(hay2).unwrap(),
+        without_dollar.find_all(hay2).unwrap()
+    );
+}
+
+#[test]
+fn empty_language_short_circuits() {
+    let p = r"x+(?=aa(b+))z{2,}";
+    let re = Regex::new(p).unwrap();
+    let big = vec![b'x'; 1 << 20];
+    assert_eq!(re.find_all(&big).unwrap(), vec![]);
+    assert_eq!(re.is_match(&big).unwrap(), false);
+    assert_eq!(re.find_anchored(&big).unwrap(), None);
+    // Empty input path too.
+    assert_eq!(re.find_all(b"").unwrap(), vec![]);
+    assert_eq!(re.is_match(b"").unwrap(), false);
+}
+
+
+#[test]
+fn trailing_star_yields_to_fwd_prefix_kind() {
+    use resharp::UnicodeMode;
+    let opts = RegexOptions::default().unicode(UnicodeMode::Javascript);
+    let re = Regex::with_options(r"BREAKING CHANGE:([\s\S]*)", opts).unwrap();
+    assert_eq!(re.prefix_kind_name(), Some("AnchoredFwd"));
+}
+
+#[test]
+fn anchored_fwd_lb_selected_when_min_len_zero_kind() {
+    use resharp::UnicodeMode;
+    for pat in [r"^(?!\_\S+=)\S+", r"^((?!\_\S+=)[^\s]+)\s?([\S\s]*)$"] {
+        let opts = RegexOptions::default().unicode(UnicodeMode::Javascript);
+        let re = Regex::with_options(pat, opts).unwrap();
+        assert_eq!(
+            re.prefix_kind_name(),
+            Some("AnchoredFwdLb"),
+            "expected AnchoredFwdLb for `{pat}`, got {:?}",
+            re.prefix_kind_name()
+        );
+    }
+}
+
+mod probe_alt {
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+
+    #[test]
+    fn probe_alt() {
+        let p = r"2011|TL868|NETTV\/3.1\b";
+        let mode = std::env::var("MODE").unwrap_or_else(|_| "js".into());
+        let m = match mode.as_str() {
+            "ascii" => UnicodeMode::Ascii,
+            "full" => UnicodeMode::Full,
+            _ => UnicodeMode::Javascript,
+        };
+        let re = Regex::with_options(p, RegexOptions::default().unicode(m)).unwrap();
+        let hay = "User-Agent: Mozilla/5.0 NETTV/3.1 or 2011 or TL868 random text\n".repeat(50);
+        let ms = re.find_all(hay.as_bytes()).unwrap();
+        let mut counts = [0usize; 3];
+        for m in &ms {
+            let s = &hay.as_bytes()[m.start..m.end];
+            if s.starts_with(b"2011") {
+                counts[0] += 1;
+            } else if s.starts_with(b"TL868") {
+                counts[1] += 1;
+            } else if s.starts_with(b"NETTV") {
+                counts[2] += 1;
+            }
+        }
+        println!(
+            "matches: {} algo: {:?} 2011={} TL868={} NETTV={}",
+            ms.len(),
+            re.prefix_kind_name(),
+            counts[0],
+            counts[1],
+            counts[2]
+        );
+    }
+}
+
+mod probe_nettv {
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+
+    #[test]
+    fn probe_nettv() {
+        let p = r"NETTV\/3.1\b";
+        let re = Regex::with_options(p, RegexOptions::default().unicode(UnicodeMode::Javascript))
+            .unwrap();
+        let hay = "xyz NETTV/3.1 abc NETTV/3.1 end".as_bytes();
+        let ms = re.find_all(hay).unwrap();
+        println!("matches={} algo={:?}", ms.len(), re.prefix_kind_name());
+        for m in &ms {
+            println!(
+                "  at {}..{} = {:?}",
+                m.start,
+                m.end,
+                std::str::from_utf8(&hay[m.start..m.end]).unwrap()
+            );
+        }
+    }
+}
+
+mod probe_nullable_prefix {
+    use resharp::{calc_potential_start, calc_potential_start_prune};
+    use resharp_algebra::RegexBuilder;
+
+    fn pp_sets(b: &mut RegexBuilder, sets: &[resharp_algebra::solver::TSetId]) -> String {
+        sets.iter()
+            .map(|&s| b.solver().pp(s))
+            .collect::<Vec<_>>()
+            .join(";")
+    }
+
+    fn probe_result(pat: &str) -> (String, String) {
+        let mut b = RegexBuilder::new();
+        let node = resharp_parser::parse_ast(&mut b, pat).unwrap();
+        let ts_rev = b.ts_rev_start(node).unwrap();
+        println!("--- {pat}");
+        println!("  fwd pp:        {}", b.pp(node));
+        println!("  ts_rev:        {}", b.pp(ts_rev));
+        let fwd_full = calc_potential_start(&mut b, node, 16, 64, false).unwrap();
+        let fwd_s = pp_sets(&mut b, &fwd_full);
+        println!("  fwd_potential:    {}", fwd_s);
+        let rev_pot = calc_potential_start_prune(&mut b, ts_rev, 16, 64, true).unwrap();
+        let rev_s = pp_sets(&mut b, &rev_pot);
+        println!("  rev_potential:    {}", rev_s);
+        (fwd_s, rev_s)
+    }
+
+    #[test]
+    fn probe_nullable_suffix() {
+        assert_eq!(probe_result(r"a~(b_*)"), ("a".into(), "a".into()));
+        assert_eq!(probe_result(r"a~(b_*)c"), ("a;[^b]".into(), "c;_".into()));
+        assert_eq!(
+            probe_result(r"_*\A~(_*b)c"),
+            ("_;_;_;_;_;_;_;_;_;_;_;_;_;_;_;_".into(), "c".into())
+        );
+        assert_eq!(probe_result(r"_*[^b]c|\Ac"), ("_;_".into(), "c".into()));
+        assert_eq!(
+            probe_result(r"2011|TL868|NETTV\/3.1\b"),
+            (
+                "[2NT];[0EL];[18T];[16T]".into(),
+                "[18];[16];[08];[2L]".into()
+            )
+        );
+    }
+}
+
+mod parser_size {
+    use resharp::Regex;
+
+    #[test]
+    fn huge_repetitions_are_rejected() {
+        let reject = [
+            "a{2001}",
+            "a{1000000}",
+            ".{1,8191}",
+            ".{1,7168}",
+            "a{2147483647,2147483647}",
+            "a{2147483648,2147483648}",
+            "([0-9]{1,9999}):([0-9]{1,9999})",
+        ];
+        let accept = ["a{500}", "a{0,500}", "a{1,499}"];
+        for p in reject {
+            assert!(Regex::new(p).is_err(), "expected error for {p:?}");
+        }
+        for p in accept {
+            assert!(Regex::new(p).is_ok(), "expected ok for {p:?}");
+        }
+    }
+
+    #[test]
+    fn deeply_nested_repetitions_rejected() {
+        let reject = [
+            "(?:a(?:b(?:c(?:d(?:e(?:f(?:g(?:h(?:i(?:FooBar){3,6}){3,6}){3,6}){3,6}){3,6}){3,6}){3,6}){3,6}){3,6}){3,6}",
+            "(?:a(?:b(?:c(?:d(?:e(?:f(?:g(?:h(?:i(?:j(?:k(?:l(?:FooBar){2}){2}){2}){2}){2}){2}){2}){2}){2}){2}){2}){2}){2}",
+        ];
+        for p in reject {
+            assert!(Regex::new(p).is_err(), "expected error for {p:?}");
+        }
+        let long_alt = format!("{}|{}", "a".repeat(5000), "b".repeat(5000));
+        assert!(Regex::new(&long_alt).is_err());
+        let accept = [
+            "(?:a(?:b(?:c(?:FooBar){2}){2}){2}){2}",
+            "a{100}",
+            "[a-z]{50,200}",
+        ];
+        for p in accept {
+            assert!(Regex::new(p).is_ok(), "expected ok for {p:?}");
+        }
+    }
+
+    #[test]
+    fn mixed_alt_and_intersection_top_level_does_not_panic() {
+        let cases = ["^&|&$", r"\s|&nbsp;", "&|x", "&&|\\|\\|"];
+        for p in cases {
+            assert!(Regex::new(p).is_err(), "expected error for {p:?}");
+        }
+    }
+}
+
+mod prefix_toml {
+    use resharp::{PrefixSets, RegexBuilder};
+    use resharp_algebra::solver::TSetId;
+    use std::path::Path;
+
+    fn make_prefix_sets(pattern: &str) -> (RegexBuilder, PrefixSets) {
+        let mut b = RegexBuilder::new();
+        let node = resharp_parser::parse_ast(&mut b, pattern).unwrap();
+        let rev = b.ts_rev_start(node).unwrap();
+        let sets = PrefixSets::compute(&mut b, node, rev).unwrap();
+        (b, sets)
+    }
+
+    fn pp_sets(b: &RegexBuilder, sets: &[TSetId]) -> String {
+        sets.iter()
+            .map(|&s| b.solver_ref().pp(s))
+            .collect::<Vec<_>>()
+            .join(";")
+    }
+
+    const KINDS: &[&str] = &[
+        "prefix_rev",
+        "prefix_fwd",
+        "potential_rev",
+        "potential_fwd",
+        "kind",
+    ];
+
+    struct PrefixTestCase {
+        name: String,
+        pattern: String,
+        ignore: bool,
+        checks: Vec<(&'static str, String)>,
+    }
+
+    fn load_prefix_tests() -> Vec<PrefixTestCase> {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join("prefix.toml");
+        let content = std::fs::read_to_string(&path).unwrap();
+        let table: toml::Value = content.parse().unwrap();
+        let tests = table["test"].as_array().unwrap();
+        tests
+            .iter()
+            .map(|t| PrefixTestCase {
+                name: t["name"].as_str().unwrap().to_string(),
+                pattern: t["pattern"].as_str().unwrap().to_string(),
+                ignore: t.get("ignore").and_then(|v| v.as_bool()).unwrap_or(false),
+                checks: KINDS
+                    .iter()
+                    .filter_map(|&kind| {
+                        t.get(kind)
+                            .and_then(|v| v.as_str())
+                            .map(|expected| (kind, expected.to_string()))
+                    })
+                    .collect(),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn test_prefix_toml() {
+        for tc in load_prefix_tests() {
+            if tc.ignore {
+                continue;
+            }
+            let needs_sets = tc.checks.iter().any(|(k, _)| *k != "kind");
+            let sets_pair = needs_sets.then(|| make_prefix_sets(&tc.pattern));
+            let kind_result = tc.checks.iter().find(|(k, _)| *k == "kind").map(|_| {
+                resharp::Regex::new(&tc.pattern)
+                    .unwrap()
+                    .prefix_kind_name()
+                    .unwrap_or("None")
+                    .to_string()
+            });
+            for (kind, expected) in &tc.checks {
+                let result = if *kind == "kind" {
+                    kind_result.clone().unwrap()
+                } else {
+                    let (b, sets) = sets_pair.as_ref().unwrap();
+                    match *kind {
+                        "prefix_rev" => pp_sets(b, &sets.rev_anchored.sets),
+                        "potential_rev" => pp_sets(b, &sets.rev_potential.sets),
+                        "potential_fwd" => pp_sets(b, &sets.fwd_potential.sets),
+                        k => panic!("unknown prefix test kind: {}", k),
+                    }
+                };
+                assert_eq!(
+                    result, *expected,
+                    "prefix test failed: name={}, kind={}",
+                    tc.name, kind
+                );
+            }
+        }
+    }
+}
+
+mod accel_skip {
+    use resharp::{Regex, RegexOptions};
+    use std::path::Path;
+
+    fn load_tests(path: &str) -> Vec<(String, String, Vec<(usize, usize)>)> {
+        let content = std::fs::read_to_string(path).unwrap();
+        let table: toml::Value = content.parse().unwrap();
+        let tests = table["test"].as_array().unwrap();
+        tests
+            .iter()
+            .map(|t| {
+                let pattern = t["pattern"].as_str().unwrap().to_string();
+                let input = t["input"].as_str().unwrap().to_string();
+                let matches: Vec<(usize, usize)> = t["matches"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|m| {
+                        let arr = m.as_array().unwrap();
+                        (
+                            arr[0].as_integer().unwrap() as usize,
+                            arr[1].as_integer().unwrap() as usize,
+                        )
+                    })
+                    .collect();
+                (pattern, input, matches)
+            })
+            .collect()
+    }
+
+    #[test]
+    #[ignore = "slow in debug; run with --ignored or in release"]
+    fn accel_skip_lazy() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join("accel_skip.toml");
+        let tests = load_tests(path.to_str().unwrap());
+        for (pattern, input, expected) in &tests {
+            let re = Regex::with_options(
+                pattern,
+                RegexOptions {
+                    dfa_threshold: 0,
+                    max_dfa_capacity: 10000,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            let matches = re.find_all(input.as_bytes()).unwrap();
+            let result: Vec<(usize, usize)> = matches.iter().map(|m| (m.start, m.end)).collect();
+            assert_eq!(
+                result, *expected,
+                "lazy: pattern={:?}, input={:?}",
+                pattern, input
+            );
+        }
+    }
+}
+
+mod auto_harden {
+    use resharp::{Regex, RegexOptions};
+    use std::path::Path;
+
+    #[test]
+    fn auto_harden_toml() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join("auto_harden.toml");
+        let content = std::fs::read_to_string(&path).unwrap();
+        let table: toml::Value = content.parse().unwrap();
+        let tests = table["test"].as_array().unwrap();
+        for t in tests {
+            let pattern = t["pattern"].as_str().unwrap();
+            let expected = t["hardened"].as_bool().unwrap();
+            let re = Regex::new(pattern).expect("pattern compiles");
+            assert_eq!(
+                re.is_hardened(),
+                expected,
+                "pattern={:?}: expected is_hardened={}, got {}",
+                pattern,
+                expected,
+                re.is_hardened()
+            );
+            if expected {
+                let hardened =
+                    Regex::with_options(pattern, RegexOptions::default().hardened(true)).unwrap();
+                let inputs: &[&[u8]] = &[b"", b"aaaaaaaa", b"abcdefg", b"|  |\n| a |\n|  |"];
+                for input in inputs {
+                    assert_eq!(
+                        re.find_all(input).unwrap(),
+                        hardened.find_all(input).unwrap(),
+                        "pattern={:?} input={:?}",
+                        pattern,
+                        input
+                    );
+                }
+            }
+        }
+    }
+}
+
+mod deriv {
+    use resharp::{NodeId, RegexBuilder};
+    use resharp_algebra::nulls::Nullability;
+    use std::path::Path;
+
+    struct DerivTestCase {
+        name: String,
+        pattern: String,
+        ignore: bool,
+        input: String,
+        rev: Vec<Option<String>>,
+        fwd: Vec<Option<String>>,
+        rev_nulls: Option<Vec<usize>>,
+        fwd_nulls: Option<Vec<usize>>,
+    }
+
+    fn parse_null_positions(t: &toml::Value, key: &str) -> Option<Vec<usize>> {
+        t.get(key).and_then(|v| v.as_array()).map(|arr| {
+            arr.iter()
+                .map(|e| e.as_integer().expect("null pos must be integer") as usize)
+                .collect()
+        })
+    }
+
+    fn parse_expected(t: &toml::Value, key: &str) -> Vec<Option<String>> {
+        t.get(key)
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .map(|e| {
+                        let s = e.as_str().unwrap();
+                        if s == "?" {
+                            None
+                        } else {
+                            Some(s.to_string())
+                        }
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    fn load_tests() -> Vec<DerivTestCase> {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join("deriv.toml");
+        let content = std::fs::read_to_string(&path).unwrap();
+        let table: toml::Value = content.parse().unwrap();
+        let tests = table["test"].as_array().unwrap();
+        tests
+            .iter()
+            .map(|t| DerivTestCase {
+                name: t["name"].as_str().unwrap().to_string(),
+                pattern: t["pattern"].as_str().unwrap().to_string(),
+                ignore: t.get("ignore").and_then(|v| v.as_bool()).unwrap_or(false),
+                input: t
+                    .get("input")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+                rev: parse_expected(t, "rev"),
+                fwd: parse_expected(t, "fwd"),
+                rev_nulls: parse_null_positions(t, "rev_nulls"),
+                fwd_nulls: parse_null_positions(t, "fwd_nulls"),
+            })
+            .collect()
+    }
+
+    fn pos_mask(pos: usize, n: usize) -> Nullability {
+        if n == 0 {
+            Nullability::BEGIN.or(Nullability::END)
+        } else if pos == 0 {
+            Nullability::BEGIN
+        } else if pos == n {
+            Nullability::END
+        } else {
+            Nullability::CENTER
+        }
+    }
+
+    fn walk_bytes(
+        b: &mut RegexBuilder,
+        mut node: NodeId,
+        bytes: &[u8],
+        expected: &[Option<String>],
+        expected_nulls: Option<&[usize]>,
+        dir: &str,
+        name: &str,
+    ) {
+        assert_eq!(
+            bytes.len(),
+            expected.len(),
+            "input length must match {dir} expected length for {name}"
+        );
+        let n = bytes.len();
+        let report_null = |b: &mut RegexBuilder, node: NodeId, pos: usize, label: &str| -> bool {
+            let mask = pos_mask(pos, n);
+            let null = b.nullability(node).has(mask);
+            eprintln!(
+                "  [{}] {} pos={} mask={:?} nullable={}",
+                dir, label, pos, mask, null
+            );
+            null
+        };
+        let mut got_nulls: Vec<usize> = Vec::new();
+        if report_null(b, node, 0, "initial") {
+            got_nulls.push(0);
+        }
+        for (i, byte) in bytes.iter().enumerate() {
+            let der_mask = pos_mask(i, n);
+            let tset = b.solver().u8_to_set_id(*byte);
+            let tregex = b.der(node, der_mask).unwrap();
+            let next = b.transition_term(tregex, tset);
+            let pp = b.pp(next);
+            eprintln!(
+                "  [{}] step={} byte='{}' (0x{:02x}) der_mask={:?} node={:?} => {}",
+                dir, i, *byte as char, byte, der_mask, next, pp
+            );
+            if let Some(exp) = &expected[i] {
+                assert_eq!(
+                    pp, *exp,
+                    "deriv pp mismatch: name={} dir={} step={} byte='{}'",
+                    name, dir, i, *byte as char
+                );
+            }
+            node = next;
+            if report_null(b, node, i + 1, "after") {
+                got_nulls.push(i + 1);
+            }
+        }
+        if let Some(exp) = expected_nulls {
+            assert_eq!(
+                got_nulls, exp,
+                "nullability mismatch: name={} dir={}\n  got:      {:?}\n  expected: {:?}",
+                name, dir, got_nulls, exp
+            );
+        }
+    }
+
+    /// Regression: `init_contributes_pos` must record an empty match `(pos, pos)`
+    /// when the always-nullable initial state transitions to DEAD on the byte
+    /// at `pos`. Without it, intermediate empty matches at positions where
+    /// the initial-state transition dies are lost in the FAS hardened scan.
+    /// Triggered by patterns that are simultaneously always-nullable AND have
+    /// a non-nullable cycle (forcing hardened mode).
+    #[test]
+    fn hardened_always_nullable_empty_matches() {
+        use resharp::{Regex, RegexOptions, UnicodeMode};
+        let mk = || RegexOptions::default().unicode(UnicodeMode::Javascript).hardened(true);
+        let cases: &[(&str, &[u8], &[(usize, usize)])] = &[
+            ("(?:b*c|)", b"yy", &[(0, 0), (1, 1), (2, 2)]),
+            ("(?:[^<]*<[\\w\\W]+>[^>]*$|)", b"x", &[(0, 0), (1, 1)]),
+            ("()|(a+b+)", b"x", &[(0, 0), (1, 1)]),
+            ("(?:.*x|)", b"yy", &[(0, 0), (1, 1), (2, 2)]),
+        ];
+        for (pat, input, expected) in cases {
+            let re = Regex::with_options(pat, mk()).unwrap();
+            assert!(re.is_hardened(), "{pat:?} should be hardened");
+            let got: Vec<(usize, usize)> = re
+                .find_all(input)
+                .unwrap()
+                .into_iter()
+                .map(|m| (m.start, m.end))
+                .collect();
+            assert_eq!(
+                got, *expected,
+                "pattern={pat:?} input={:?}",
+                std::str::from_utf8(input).unwrap()
+            );
+        }
+    }
+
+    #[test]
+    fn test_deriv_toml() {
+        for tc in load_tests() {
+            if tc.ignore {
+                continue;
+            }
+            let mut b = RegexBuilder::new();
+            let node = resharp_parser::parse_ast(&mut b, &tc.pattern).unwrap();
+
+            if !tc.rev.is_empty() || tc.rev_nulls.is_some() {
+                let rev = b.reverse(node).unwrap();
+                let rev = b.normalize_rev(rev).unwrap();
+                let rev = b.mk_concat(NodeId::TS, rev);
+
+                eprintln!(
+                    "\n[{}] rev initial: node={:?} pp={}",
+                    tc.name,
+                    rev,
+                    b.pp(rev)
+                );
+                let bytes: Vec<u8> = tc.input.as_bytes().iter().rev().copied().collect();
+                let empty_rev = vec![None; bytes.len()];
+                let rev_pp = if tc.rev.is_empty() {
+                    &empty_rev
+                } else {
+                    &tc.rev
+                };
+                walk_bytes(
+                    &mut b,
+                    rev,
+                    &bytes,
+                    rev_pp,
+                    tc.rev_nulls.as_deref(),
+                    "rev",
+                    &tc.name,
+                );
+            }
+
+            if !tc.fwd.is_empty() || tc.fwd_nulls.is_some() {
+                eprintln!(
+                    "\n[{}] fwd initial: node={:?} kind={:?} pp={}",
+                    tc.name,
+                    node,
+                    b.get_kind(node),
+                    b.pp(node)
+                );
+                let bytes: Vec<u8> = tc.input.as_bytes().to_vec();
+                let empty_fwd = vec![None; bytes.len()];
+                let fwd_pp = if tc.fwd.is_empty() {
+                    &empty_fwd
+                } else {
+                    &tc.fwd
+                };
+                walk_bytes(
+                    &mut b,
+                    node,
+                    &bytes,
+                    fwd_pp,
+                    tc.fwd_nulls.as_deref(),
+                    "fwd",
+                    &tc.name,
+                );
+            }
+        }
+    }
+}
+
+

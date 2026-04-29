@@ -7,7 +7,7 @@ Guarantees **linear matching for all patterns** - O(N·S) where N is input lengt
 ```rust
 let re = resharp::Regex::with_options(
     r"pattern",
-    resharp::EngineOptions::default().hardened(true),
+    resharp::RegexOptions::default().hardened(true),
 ).unwrap();
 ```
 

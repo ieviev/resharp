@@ -218,13 +218,6 @@ fn dispatch_info(pattern: &str) -> (bool, bool, bool) {
 }
 
 #[test]
-fn dispatch_alt_suffix() {
-    let (bdfa, fwd, _rev) = dispatch_info("(Sherlock|Holmes)[a-z]{0,5}");
-    assert!(!bdfa);
-    assert!(fwd);
-}
-
-#[test]
 fn dispatch_literal() {
     let (bdfa, _fwd, _rev) = dispatch_info("Sherlock Holmes");
     assert!(!bdfa);

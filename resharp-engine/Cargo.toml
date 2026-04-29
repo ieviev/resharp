@@ -16,9 +16,11 @@ readme = "../README.md"
 doctest = false
 
 [features]
-debug = []
+default = ["convergence_prefix"]
+debug = ["resharp-algebra/debug"]
 diag = []
 precompile-tests = []
+convergence_prefix = []
 
 [dependencies]
 resharp-algebra.workspace = true
@@ -48,10 +50,6 @@ path = "src/bin/build_byte_freq.rs"
 
 [[bench]]
 name = "comparison"
-harness = false
-
-[[bench]]
-name = "regression"
 harness = false
 
 [[bench]]

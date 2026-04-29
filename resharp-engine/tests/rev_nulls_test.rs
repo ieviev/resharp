@@ -1,5 +1,4 @@
-use resharp::{NodeId, RegexBuilder};
-use resharp_algebra::nulls::Nullability;
+use resharp::Regex;
 use std::path::Path;
 
 struct TestCase {
@@ -7,25 +6,7 @@ struct TestCase {
     pattern: String,
     ignore: bool,
     input: String,
-    rev_nulls: Vec<Option<String>>,
-}
-
-fn parse_expected(t: &toml::Value, key: &str) -> Vec<Option<String>> {
-    t.get(key)
-        .and_then(|v| v.as_array())
-        .map(|arr| {
-            arr.iter()
-                .map(|e| {
-                    let s = e.as_str().unwrap();
-                    if s == "?" {
-                        None
-                    } else {
-                        Some(s.to_string())
-                    }
-                })
-                .collect()
-        })
-        .unwrap_or_default()
+    rev_nulls: Vec<usize>,
 }
 
 fn load_tests() -> Vec<TestCase> {
@@ -46,59 +27,14 @@ fn load_tests() -> Vec<TestCase> {
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .to_string(),
-            rev_nulls: parse_expected(t, "rev_nulls"),
+            rev_nulls: t["rev_nulls"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|v| v.as_integer().unwrap() as usize)
+                .collect(),
         })
         .collect()
-}
-
-fn walk_rev(
-    b: &mut RegexBuilder,
-    mut node: NodeId,
-    bytes: &[u8],
-    expected: &[Option<String>],
-    name: &str,
-) {
-    assert_eq!(
-        bytes.len(),
-        expected.len(),
-        "input length must match rev_nulls length for {name}"
-    );
-    let n = bytes.len();
-    for (i, byte) in bytes.iter().enumerate() {
-        let mask = if i == 0 {
-            Nullability::BEGIN
-        } else if i == n - 1 {
-            Nullability::END
-        } else {
-            Nullability::CENTER
-        };
-        let tset = b.solver().u8_to_set_id(*byte);
-        let tregex = b.der(node, mask).unwrap();
-        let next = b.transition_term(tregex, tset);
-        let pp = b.pp(next);
-        let nulls_pp = b.pp_nulls(next);
-        eprintln!(
-            "  [rev] step={} byte='{}' (0x{:02x}) node={:?} nulls={} => {}",
-            i,
-            *byte as char,
-            byte,
-            next,
-            nulls_pp,
-            if pp.len() > 40 {
-                format!("{}...", &pp[..40])
-            } else {
-                pp.clone()
-            }
-        );
-        if let Some(exp) = &expected[i] {
-            assert_eq!(
-                nulls_pp, *exp,
-                "nulls mismatch: name={} step={} byte='{}'",
-                name, i, *byte as char
-            );
-        }
-        node = next;
-    }
 }
 
 #[test]
@@ -107,12 +43,21 @@ fn test_rev_nulls_toml() {
         if tc.ignore {
             continue;
         }
-        let mut b = RegexBuilder::new();
-        let node = resharp_parser::parse_ast(&mut b, &tc.pattern).unwrap();
-        let rev = b.reverse(node).unwrap();
-
-        // let rev_ts = b.mk_concat(NodeId::TS, rev);
-        let bytes: Vec<u8> = tc.input.as_bytes().iter().rev().copied().collect();
-        walk_rev(&mut b, rev, &bytes, &tc.rev_nulls, &tc.name);
+        let re = Regex::new(&tc.pattern).unwrap_or_else(|e| {
+            panic!("name={} pattern={:?}: compile error: {}", tc.name, tc.pattern, e)
+        });
+        let got = re.collect_rev_nulls_debug(tc.input.as_bytes());
+        for i in 1..got.len() {
+            assert!(
+                got[i] <= got[i - 1],
+                "rev nulls not sorted descending at [{}]: {} > {} (name={}, pattern={:?}, got={:?})",
+                i, got[i], got[i - 1], tc.name, tc.pattern, got
+            );
+        }
+        assert_eq!(
+            got, tc.rev_nulls,
+            "name={} pattern={:?} input={:?}",
+            tc.name, tc.pattern, tc.input
+        );
     }
 }

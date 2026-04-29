@@ -4,6 +4,12 @@ matches = [[start, end]] in utf8 bytes (half-open intervals).
 '''
 
 [[test]]
+name = "exact_string"
+pattern = '^\A([^\: \t]+):\s*(.+)\z'
+input = "\n:!"
+matches = [[0, 3]]
+
+[[test]]
 name = "anchor_digit_exact"
 pattern = '^\d$'
 input = "1"
@@ -542,3 +548,111 @@ name = "caret_multiline_no_newline_consumed"
 pattern = '^foo'
 input = "foo\nfoo"
 matches = [[0, 3], [4, 7]]
+
+[[test]]
+name = "line_anchors_counted_group"
+pattern = '^[^0-9]*(?:(\d)[^0-9]*){10}$'
+input = "0\n0\n0\n0\n0\n0\n0\n0\n00 0\n0\n0\n0\n0\n0\n0\n0\n00"
+matches = [[2, 20]]
+
+[[test]]
+name = "anchor_union_a_z"
+pattern = '(\A|(.*,))VALUE(\z|([,]?.))'
+input = "VALUE"
+matches = [[0, 5]]
+
+[[test]]
+name = "anchor_union_no_match"
+pattern = '(\A|(.*,))VALUE(\z|([,]?.))'
+input = "xxxxxVALUEyyyyy"
+matches = []
+
+[[test]]
+name = "z_anchor_xs"
+pattern = '\.xs\z'
+input = ".xs .xs"
+matches = [[4, 7]]
+
+[[test]]
+name = "a_anchor_leading_ws"
+pattern = '\A(\s*)'
+input = "xxxxx\tyyyyy"
+matches = [[0, 0]]
+
+[[test]]
+name = "fas_begin_alt_a_plus_or_x_foo"
+pattern = '(?:\Aa+|x)foo'
+input = "aaaaafoo"
+matches = [[0, 8]]
+
+[[test]]
+name = "fas_begin_alt_a_plus_or_x_foo_multi"
+pattern = '(?:\Aa+|x)foo'
+input = "aaafoo xfoo yfoo"
+matches = [[0, 6], [7, 11]]
+
+[[test]]
+name = "fas_begin_alt_or_x_foo"
+pattern = '(?:\A|x)foo'
+input = "foo xfoo yfoo"
+matches = [[0, 3], [4, 8]]
+
+[[test]]
+name = "fas_dotstar_foo_dollar_single"
+pattern = '.*foo$'
+input = "abcfoo"
+matches = [[0, 6]]
+
+[[test]]
+name = "fas_dotstar_foo_dollar_long"
+pattern = '.*foo$'
+input = "foo bar foo"
+matches = [[0, 11]]
+
+[[test]]
+name = "fas_word_boundary_foo_repeated"
+pattern = '\bfoo\b'
+input = "foo bar foo"
+matches = [[0, 3], [8, 11]]
+
+[[test]]
+name = "fas_word_boundary_foo_middle"
+pattern = '\bfoo\b'
+input = "a foo b"
+matches = [[2, 5]]
+
+[[test]]
+name = "fas_word_boundary_lower_words"
+pattern = '\b[a-z]+\b'
+input = "hello world 123 foo"
+matches = [[0, 5], [6, 11], [16, 19]]
+
+[[test]]
+name = "fas_word_word_boundary"
+pattern = '\w+\b'
+input = "hello world foo"
+matches = [[0, 5], [6, 11], [12, 15]]
+
+[[test]]
+name = "fas_lower_z_anchor"
+pattern = '[a-z]+\z'
+input = "abc def"
+matches = [[4, 7]]
+
+[[test]]
+name = "fas_caret_lower_dollar"
+pattern = '^[a-z]+$'
+input = "abc"
+matches = [[0, 3]]
+
+[[test]]
+name = "fas_digit_dollar"
+pattern = '\d+$'
+input = "abc123"
+matches = [[3, 6]]
+
+[[test]]
+name = "fas_caret_dotstar_dollar"
+pattern = '^.*$'
+input = "abc"
+matches = [[0, 3]]

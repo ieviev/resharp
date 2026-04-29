@@ -21,7 +21,7 @@ fn main() {
     let t3 = std::time::Instant::now();
     eprintln!("reverse: {:?}  nodes={}", t3 - t2, b.num_nodes());
 
-    let re = resharp::Regex::from_node(b, node, resharp::EngineOptions::default()).unwrap();
+    let re = resharp::Regex::from_node(b, node, resharp::RegexOptions::default()).unwrap();
     let t4 = std::time::Instant::now();
     eprintln!("compile: {:?}", t4 - t3);
     if !input.is_empty() {

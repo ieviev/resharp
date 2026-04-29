@@ -23,7 +23,7 @@ use resharp_algebra::NodeId;
 
 type TB<'s> = resharp_algebra::RegexBuilder;
 
-/// global pattern-level flags, set from `EngineOptions`.
+/// global pattern-level flags, set from `RegexOptions`.
 pub struct PatternFlags {
     /// `\w`/`\d`/`\s` match full Unicode (true) or ASCII only (false).
     pub unicode: bool,
@@ -135,7 +135,7 @@ pub enum Either<Left, Right> {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ResharpError {
+pub struct ParseError {
     /// The kind of error.
     pub kind: ErrorKind,
     /// The original pattern that the parser generated the error from. Every
@@ -145,14 +145,14 @@ pub struct ResharpError {
     pub span: Span,
 }
 
-impl std::fmt::Display for ResharpError {
+impl std::fmt::Display for ParseError {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         write!(f, "{:?}: {:?}", self.kind, self.span)
     }
 }
-impl std::error::Error for ResharpError {}
+impl std::error::Error for ParseError {}
 
-type Result<T> = core::result::Result<T, ResharpError>;
+type Result<T> = core::result::Result<T, ParseError>;
 
 #[derive(Clone, Debug)]
 enum GroupState {
@@ -165,10 +165,6 @@ enum GroupState {
         /// Whether this group has the `x` flag enabled or not.
         ignore_whitespace: bool,
     },
-    /// This state is pushed whenever a new alternation branch is found. If
-    /// an alternation branch is found and this state is at the top of the
-    /// stack, then this state should be modified to include the new
-    /// alternation.
     Alternation(ast::Alternation),
     Intersection(ast::Intersection),
 }
@@ -179,9 +175,6 @@ enum ClassState {
     Open {
         /// The union of class items immediately preceding this class.
         union: regex_syntax::ast::ClassSetUnion,
-        /// The class that has been opened. Typically this just corresponds
-        /// to the `[`, but it can also include `[^` since `^` indicates
-        /// negation of the class.
         set: regex_syntax::ast::ClassBracketed,
     },
     /// This state is pushed when a operator is seen. When popped, the stored
@@ -220,7 +213,7 @@ pub struct ResharpParser<'s> {
 fn specialize_err<T>(result: Result<T>, from: ast::ErrorKind, to: ast::ErrorKind) -> Result<T> {
     result.map_err(|e| {
         if e.kind == from {
-            ResharpError {
+            ParseError {
                 kind: to,
                 pattern: e.pattern,
                 span: e.span,
@@ -282,30 +275,14 @@ pub fn escape_into(text: &str, buf: &mut String) {
 }
 
 pub fn is_escapeable_character(c: char) -> bool {
-    // Certainly escapeable if it's a meta character.
     if is_meta_character(c) {
         return true;
     }
-    // Any character that isn't ASCII is definitely not escapeable. There's
-    // no real need to allow things like \☃ right?
     if !c.is_ascii() {
         return false;
     }
-    // Otherwise, we basically say that everything is escapeable unless it's a
-    // letter or digit. Things like \3 are either octal (when enabled) or an
-    // error, and we should keep it that way. Otherwise, letters are reserved
-    // for adding new syntax in a backwards compatible way.
     match c {
         '0'..='9' | 'A'..='Z' | 'a'..='z' => false,
-        // While not currently supported, we keep these as not escapeable to
-        // give us some flexibility with respect to supporting the \< and
-        // \> word boundary assertions in the future. By rejecting them as
-        // escapeable, \< and \> will result in a parse error. Thus, we can
-        // turn them into something else in the future without it being a
-        // backwards incompatible change.
-        //
-        // OK, now we support \< and \>, and we need to retain them as *not*
-        // escapeable here since the escape sequence is significant.
         '<' | '>' => false,
         _ => true,
     }
@@ -356,61 +333,41 @@ impl<'s> ResharpParser<'s> {
         }
     }
 
-    /// Return a reference to the parser state.
     fn parser(&'_ self) -> &'_ ResharpParser<'_> {
         self
     }
 
-    /// Return a reference to the pattern being parsed.
     fn pattern(&self) -> &str {
         self.pattern
     }
 
-    /// Create a new error with the given span and error type.
-    fn error(&self, span: Span, kind: ast::ErrorKind) -> ResharpError {
-        ResharpError {
+    fn error(&self, span: Span, kind: ast::ErrorKind) -> ParseError {
+        ParseError {
             kind,
             pattern: self.pattern().to_string(),
             span,
         }
     }
 
-    fn unsupported_error(&self, _: regex_syntax::hir::Error) -> ResharpError {
+    fn unsupported_error(&self, _: regex_syntax::hir::Error) -> ParseError {
         self.error(
             Span::splat(self.pos()),
             ast::ErrorKind::UnsupportedResharpRegex,
         )
     }
 
-    /// Return the current offset of the parser.
-    ///
-    /// The offset starts at `0` from the beginning of the regular expression
-    /// pattern string.
     fn offset(&self) -> usize {
         self.parser().pos.get().offset
     }
 
-    /// Return the current line number of the parser.
-    ///
-    /// The line number starts at `1`.
     fn line(&self) -> usize {
         self.parser().pos.get().line
     }
 
-    /// Return the current column of the parser.
-    ///
-    /// The column number starts at `1` and is reset whenever a `\n` is seen.
     fn column(&self) -> usize {
         self.parser().pos.get().column
     }
 
-    /// Return the next capturing index. Each subsequent call increments the
-    /// internal index.
-    ///
-    /// The span given should correspond to the location of the opening
-    /// parenthesis.
-    ///
-    /// If the capture limit is exceeded, then an error is returned.
     fn next_capture_index(&self, span: Span) -> Result<u32> {
         let current = self.parser().capture_index.get();
         let i = current
@@ -540,9 +497,6 @@ impl<'s> ResharpParser<'s> {
         }
     }
 
-    /// Peek at the next character in the input without advancing the parser.
-    ///
-    /// If the input has been exhausted, then this returns `None`.
     fn peek(&self) -> Option<char> {
         if self.is_eof() {
             return None;
@@ -578,24 +532,18 @@ impl<'s> ResharpParser<'s> {
         self.pattern()[start..].chars().next()
     }
 
-    /// Returns true if the next call to `bump` would return false.
     fn is_eof(&self) -> bool {
         self.offset() == self.pattern().len()
     }
 
-    /// Return the current position of the parser, which includes the offset,
-    /// line and column.
     fn pos(&self) -> Position {
         self.parser().pos.get()
     }
 
-    /// Create a span at the current position of the parser. Both the start
-    /// and end of the span are set.
     fn span(&self) -> Span {
         Span::splat(self.pos())
     }
 
-    /// Create a span that covers the current character.
     fn span_char(&self) -> Span {
         let mut next = Position {
             offset: self.offset().checked_add(self.char().len_utf8()).unwrap(),
@@ -609,15 +557,6 @@ impl<'s> ResharpParser<'s> {
         Span::new(self.pos(), next)
     }
 
-    /// Parse and push a single alternation on to the parser's internal stack.
-    /// If the top of the stack already has an alternation, then add to that
-    /// instead of pushing a new one.
-    ///
-    /// The concatenation given corresponds to a single alternation branch.
-    /// The concatenation returned starts the next branch and is empty.
-    ///
-    /// This assumes the parser is currently positioned at `|` and will advance
-    /// the parser to the character following `|`.
     #[inline(never)]
     fn push_alternate(&self, mut concat: ast::Concat) -> Result<ast::Concat> {
         assert_eq!(self.char(), '|');
@@ -630,8 +569,6 @@ impl<'s> ResharpParser<'s> {
         })
     }
 
-    /// Pushes or adds the given branch of an alternation to the parser's
-    /// internal stack of state.
     fn push_or_add_alternation(&self, concat: Concat) {
         use self::GroupState::*;
 
@@ -658,8 +595,6 @@ impl<'s> ResharpParser<'s> {
         })
     }
 
-    /// Pushes or adds the given branch of an alternation to the parser's
-    /// internal stack of state.
     fn push_or_add_intersect(&self, concat: Concat) {
         use self::GroupState::*;
 
@@ -674,19 +609,6 @@ impl<'s> ResharpParser<'s> {
         }));
     }
 
-    /// Parse and push a group AST (and its parent concatenation) on to the
-    /// parser's internal stack. Return a fresh concatenation corresponding
-    /// to the group's sub-AST.
-    ///
-    /// If a set of flags was found (with no group), then the concatenation
-    /// is returned with that set of flags added.
-    ///
-    /// This assumes that the parser is currently positioned on the opening
-    /// parenthesis. It advances the parser to the character at the start
-    /// of the sub-expression (or adjoining expression).
-    ///
-    /// If there was a problem parsing the start of the group, then an error
-    /// is returned.
     #[inline(never)]
     fn push_group(&self, mut concat: Concat) -> Result<Concat> {
         assert_eq!(self.char(), '(');
@@ -758,15 +680,6 @@ impl<'s> ResharpParser<'s> {
         })
     }
 
-    /// Pop a group AST from the parser's internal stack and set the group's
-    /// AST to the given concatenation. Return the concatenation containing
-    /// the group.
-    ///
-    /// This assumes that the parser is currently positioned on the closing
-    /// parenthesis and advances the parser to the character following the `)`.
-    ///
-    /// If no such group could be popped, then an unopened group error is
-    /// returned.
     #[inline(never)]
     fn pop_group(&self, mut group_concat: Concat) -> Result<Concat> {
         use self::GroupState::*;
@@ -849,12 +762,6 @@ impl<'s> ResharpParser<'s> {
         Ok(prior_concat)
     }
 
-    /// Pop the last state from the parser's internal stack, if it exists, and
-    /// add the given concatenation to it. There either must be no state or a
-    /// single alternation item on the stack. Any other scenario produces an
-    /// error.
-    ///
-    /// This assumes that the parser has advanced to the end.
     #[inline(never)]
     fn pop_group_end(&self, mut concat: ast::Concat) -> Result<Ast> {
         concat.span.end = self.pos();
@@ -891,14 +798,6 @@ impl<'s> ResharpParser<'s> {
         }
     }
 
-    /// Parse the opening of a character class and push the current class
-    /// parsing context onto the parser's stack. This assumes that the parser
-    /// is positioned at an opening `[`. The given union should correspond to
-    /// the union of set items built up before seeing the `[`.
-    ///
-    /// If there was a problem parsing the opening of the class, then an error
-    /// is returned. Otherwise, a new union of set items for the class is
-    /// returned (which may be populated with either a `]` or a `-`).
     #[inline(never)]
     fn push_class_open(
         &self,
@@ -917,20 +816,6 @@ impl<'s> ResharpParser<'s> {
         Ok(nested_union)
     }
 
-    /// Parse the end of a character class set and pop the character class
-    /// parser stack. The union given corresponds to the last union built
-    /// before seeing the closing `]`. The union returned corresponds to the
-    /// parent character class set with the nested class added to it.
-    ///
-    /// This assumes that the parser is positioned at a `]` and will advance
-    /// the parser to the byte immediately following the `]`.
-    ///
-    /// If the stack is empty after popping, then this returns the final
-    /// "top-level" character class AST (where a "top-level" character class
-    /// is one that is not nested inside any other character class).
-    ///
-    /// If there is no corresponding opening bracket on the parser's stack,
-    /// then an error is returned.
     #[inline(never)]
     fn pop_class(
         &self,
@@ -942,26 +827,8 @@ impl<'s> ResharpParser<'s> {
         let prevset = self.pop_class_op(item);
         let mut stack = self.parser().stack_class.borrow_mut();
         match stack.pop() {
-            None => {
-                // We can never observe an empty stack:
-                //
-                // 1) We are guaranteed to start with a non-empty stack since
-                //    the character class parser is only initiated when it sees
-                //    a `[`.
-                // 2) If we ever observe an empty stack while popping after
-                //    seeing a `]`, then we signal the character class parser
-                //    to terminate.
-                panic!("unexpected empty character class stack")
-            }
-            Some(ClassState::Op { .. }) => {
-                // This panic is unfortunate, but this case is impossible
-                // since we already popped the Op state if one exists above.
-                // Namely, every push to the class parser stack is guarded by
-                // whether an existing Op is already on the top of the stack.
-                // If it is, the existing Op is modified. That is, the stack
-                // can never have consecutive Op states.
-                panic!("unexpected ClassState::Op")
-            }
+            None => panic!("unexpected empty character class stack"),
+            Some(ClassState::Op { .. }) => panic!("unexpected ClassState::Op"),
             Some(ClassState::Open { mut union, mut set }) => {
                 self.bump();
                 set.span.end = self.pos();
@@ -976,27 +843,16 @@ impl<'s> ResharpParser<'s> {
         }
     }
 
-    /// Return an "unclosed class" error whose span points to the most
-    /// recently opened class.
-    ///
-    /// This should only be called while parsing a character class.
     #[inline(never)]
-    fn unclosed_class_error(&self) -> ResharpError {
+    fn unclosed_class_error(&self) -> ParseError {
         for state in self.parser().stack_class.borrow().iter().rev() {
             if let ClassState::Open { ref set, .. } = *state {
                 return self.error(set.span, ast::ErrorKind::ClassUnclosed);
             }
         }
-        // We are guaranteed to have a non-empty stack with at least
-        // one open bracket, so we should never get here.
         panic!("no open character class found")
     }
 
-    /// Push the current set of class items on to the class parser's stack as
-    /// the left hand side of the given operator.
-    ///
-    /// A fresh set union is returned, which should be used to build the right
-    /// hand side of this operator.
     #[inline(never)]
     fn push_class_op(
         &self,
@@ -1015,11 +871,6 @@ impl<'s> ResharpParser<'s> {
         }
     }
 
-    /// Pop a character class set from the character class parser stack. If the
-    /// top of the stack is just an item (not an operation), then return the
-    /// given set unchanged. If the top of the stack is an operation, then the
-    /// given set will be used as the rhs of the operation on the top of the
-    /// stack. In that case, the binary operation is returned as a set.
     #[inline(never)]
     fn pop_class_op(&self, rhs: regex_syntax::ast::ClassSet) -> regex_syntax::ast::ClassSet {
         let mut stack = self.parser().stack_class.borrow_mut();
@@ -1533,7 +1384,8 @@ impl<'s> ResharpParser<'s> {
             }
             Ast::Top(_) => Ok(NodeId::TOP),
             Ast::Dot(_) => {
-                let hirv = match (self.global_ascii_perl, self.dot_all.get()) {
+                let codepoint_dot = self.global_ascii_perl || self.global_full_unicode;
+                let hirv = match (codepoint_dot, self.dot_all.get()) {
                     (true, true) => hir::Hir::dot(hir::Dot::AnyChar),
                     (true, false) => hir::Hir::dot(hir::Dot::AnyCharExceptLF),
                     (false, true) => return Ok(NodeId::TOP),
@@ -1662,6 +1514,12 @@ impl<'s> ResharpParser<'s> {
             Ast::Lookaround(g) => {
                 let body = self.ast_to_node_id(&g.ast, translator, tb)?;
                 match g.kind {
+                    ast::LookaroundKind::PositiveLookahead
+                    | ast::LookaroundKind::NegativeLookahead
+                        if body.contains_lookbehind(tb) =>
+                    {
+                        Err(self.error(g.span, ast::ErrorKind::UnsupportedResharpRegex))
+                    }
                     ast::LookaroundKind::PositiveLookahead => {
                         Ok(tb.mk_lookahead(body, NodeId::MISSING, 0))
                     }
@@ -1819,8 +1677,6 @@ impl<'s> ResharpParser<'s> {
         Ok(ast)
     }
 
-    /// Parse the regular expression and return an abstract syntax tree with
-    /// all of the comments found in the pattern.
     fn parse(&mut self, tb: &mut TB<'s>) -> Result<NodeId> {
         let ast = self.parse_inner()?;
         self.ast_to_node_id(&ast, &mut None, tb)
@@ -2311,10 +2167,6 @@ impl<'s> ResharpParser<'s> {
             ));
         }
         let start_contents = self.pos();
-        // This is one of the critical bits: if the first non-whitespace
-        // character isn't in [-A-Za-z] (i.e., this can't be a special word
-        // boundary), then we bail and let the counted repetition parser deal
-        // with this.
         if !is_valid_char(self.char()) {
             self.parser().pos.set(start);
             return Ok(None);
@@ -2410,8 +2262,6 @@ impl<'s> ResharpParser<'s> {
             }
             scratch.push(self.char());
         }
-        // The final bump just moves the parser past the literal, which may
-        // be EOF.
         self.bump_and_bump_space();
         let end = self.pos();
         let hex = scratch.as_str();
@@ -2506,10 +2356,6 @@ impl<'s> ResharpParser<'s> {
             }
             match self.char() {
                 '[' => {
-                    // If we've already parsed the opening bracket, then
-                    // attempt to treat this as the beginning of an ASCII
-                    // class. If ASCII class parsing fails, then the parser
-                    // backs up to `[`.
                     if !self.parser().stack_class.borrow().is_empty() {
                         if let Some(cls) = self.maybe_parse_ascii_class() {
                             union.push(ClassSetItem::Ascii(cls));
@@ -2870,10 +2716,7 @@ pub fn expanded_ast_size(ast: &ast::Ast, limit: u64) -> u64 {
     go(ast, limit)
 }
 
-pub fn parse_ast<'s>(
-    tb: &mut TB<'s>,
-    pattern: &'s str,
-) -> std::result::Result<NodeId, ResharpError> {
+pub fn parse_ast<'s>(tb: &mut TB<'s>, pattern: &'s str) -> std::result::Result<NodeId, ParseError> {
     let mut p: ResharpParser<'s> = ResharpParser::new(pattern);
     p.parse(tb)
 }
@@ -2882,13 +2725,13 @@ pub fn parse_ast_with<'s>(
     tb: &mut TB<'s>,
     pattern: &'s str,
     flags: &PatternFlags,
-) -> std::result::Result<NodeId, ResharpError> {
+) -> std::result::Result<NodeId, ParseError> {
     let mut p: ResharpParser<'s> = ResharpParser::with_flags(pattern, flags);
     p.parse(tb)
 }
 
 /// Parse a pattern into the raw AST without converting to algebra nodes.
-pub fn parse_to_ast(pattern: &str) -> std::result::Result<ast::Ast, ResharpError> {
+pub fn parse_to_ast(pattern: &str) -> std::result::Result<ast::Ast, ParseError> {
     let mut p: ResharpParser = ResharpParser::new(pattern);
     p.parse_inner()
 }

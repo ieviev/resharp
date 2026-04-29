@@ -529,12 +529,18 @@ impl RevPrefixSearch {
         }
     }
 
+    pub fn add_tail_offset(mut self, extra: u32) -> Self {
+        self.tail_offset += extra as usize;
+        self
+    }
+
     #[allow(dead_code)]
     pub fn len(&self) -> usize {
         self.len
     }
 
     pub fn find_rev(&self, haystack: &[u8], end: usize) -> Option<usize> {
+        let end = end.min(haystack.len().saturating_sub(1));
         let end = end.checked_sub(self.tail_offset)?;
         let r = unsafe {
             match self.num_simd {

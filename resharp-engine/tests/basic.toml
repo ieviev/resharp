@@ -4,6 +4,37 @@ matches = [[start, end]] in utf8 bytes (half-open intervals).
 '''
 
 [[test]]
+name = "basic_plus"
+pattern = '\s?(.+)\n'
+input = "!\n !\n"
+matches = [[0, 2], [2, 5]]
+
+[[test]]
+name = "basic_digit"
+pattern = '[\w]{3}-[\d]{4}'
+input = "xxxxx000-0000yyyyy"
+matches = [[5, 13]]
+
+[[test]]
+name = "basic_z"
+pattern = '(/|\z)'
+input = "xxxxx/yyyyy"
+matches = [[5, 6], [11, 11]]
+
+[[test]]
+name = "basic_empty"
+pattern = "^[/]{0,2}"
+input = "abc"
+matches = [[0, 0]]
+
+
+[[test]]
+name = "basic_dots"
+pattern = ".."
+input = "xxxxx!!yyyyy"
+matches = [[0, 2], [2, 4], [4, 6], [6, 8], [8, 10], [10, 12]]
+
+[[test]]
 name = "basic_literal"
 pattern = "abc"
 input = "xxabcxx"
@@ -116,3 +147,57 @@ name = "optional_suffix_with_match"
 pattern = 'Download( (Image|File))?'
 input = "Download Image"
 matches = [[0, 14]]
+
+[[test]]
+name = "nullable_pattern_empty_interspersed"
+pattern = '\d{0,7}([\.\|\,]\d{0,2})?'
+input = "xxxxx0yyyyy"
+matches = [[0, 0], [1, 1], [2, 2], [3, 3], [4, 4], [5, 6], [6, 6], [7, 7], [8, 8], [9, 9], [10, 10], [11, 11]]
+
+[[test]]
+name = "quantifier_a_star_single_run"
+pattern = "a*"
+input = "bbbbaaabbbbb"
+matches = [[0, 0], [1, 1], [2, 2], [3, 3], [4, 7], [7, 7], [8, 8], [9, 9], [10, 10], [11, 11], [12, 12]]
+
+[[test]]
+name = "nullable_head_correctness_abc"
+pattern = '\d?abc'
+input = "abc"
+matches = [[0, 3]]
+
+[[test]]
+name = "nullable_head_correctness_1abc"
+pattern = '\d?abc'
+input = "1abc"
+matches = [[0, 4]]
+
+[[test]]
+name = "nullable_head_correctness_x1abcx"
+pattern = '\d?abc'
+input = "x1abcx"
+matches = [[1, 5]]
+
+[[test]]
+name = "nullable_head_correctness_xabcx"
+pattern = '\d?abc'
+input = "xabcx"
+matches = [[1, 4]]
+
+[[test]]
+name = "nullable_head_correctness_11abc"
+pattern = '\d?abc'
+input = "11abc"
+matches = [[1, 5]]
+
+[[test]]
+name = "nullable_head_correctness_two_groups"
+pattern = '\d?abc'
+input = "1abc2abc"
+matches = [[0, 4], [4, 8]]
+
+[[test]]
+name = "date_optional_time_second_match"
+pattern = '\d{4}-\d\d?-\d\d?((T| )\d{2}:\d{2}:\d{2})?'
+input = "0000-0-0 0000-0-0"
+matches = [[0, 8], [9, 17]]

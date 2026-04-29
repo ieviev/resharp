@@ -1,4 +1,4 @@
-use resharp::{EngineOptions, Regex};
+use resharp::{Regex, RegexOptions};
 use std::path::Path;
 
 fn load_tests(path: &str) -> Vec<(String, String, Vec<(usize, usize)>)> {
@@ -28,6 +28,7 @@ fn load_tests(path: &str) -> Vec<(String, String, Vec<(usize, usize)>)> {
 }
 
 #[test]
+#[ignore = "slow in debug; run with --ignored or in release"]
 fn accel_skip_lazy() {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests")
@@ -37,7 +38,7 @@ fn accel_skip_lazy() {
         // println!("pattern: {}",pattern);
         let re = Regex::with_options(
             pattern,
-            EngineOptions {
+            RegexOptions {
                 dfa_threshold: 0,
                 max_dfa_capacity: 10000,
                 ..Default::default()

@@ -25,18 +25,20 @@ pub struct Match {
 }
 ```
 
-### EngineOptions
+### RegexOptions
 
 ```rust
-let opts = resharp::EngineOptions {
-    dfa_threshold: 0,              // states to eagerly precompile (0 = fully lazy)
-    max_dfa_capacity: 65535,       // max DFA states (clamped to u16::MAX)
-    lookahead_context_max: 800,    // max lookahead distance before AnchorLimit error
-    hardened: false,               // O(N·S) forward scan, slower but worst-case safe
-    unicode: true,                 // \w/\d/\s match full Unicode (false = ASCII only)
-    case_insensitive: false,       // global case-insensitive matching
-    dot_matches_new_line: false,   // . matches \n (behaves like _)
-    ignore_whitespace: false,      // allow whitespace and # comments in pattern
+use resharp::{RegexOptions, UnicodeMode};
+
+let opts = RegexOptions {
+    dfa_threshold: 0,                 // states to eagerly precompile (0 = fully lazy)
+    max_dfa_capacity: 65535,          // max DFA states (clamped to u16::MAX)
+    lookahead_context_max: 800,       // max lookahead distance before AnchorLimit error
+    hardened: false,                  // O(N·S) forward scan, slower but worst-case safe
+    unicode: UnicodeMode::Default,    // \w/\d coverage (Ascii | Default | Full | Javascript)
+    case_insensitive: false,          // global case-insensitive matching
+    dot_matches_new_line: false,      // . matches \n (behaves like _)
+    ignore_whitespace: false,         // allow whitespace and # comments in pattern
 };
 ```
 
@@ -45,7 +47,7 @@ All fields have sensible defaults via `Default::default()`. Builder-style setter
 ```rust
 let re = Regex::with_options(
     r"\w+@\w+\.\w+",
-    EngineOptions::default().unicode(false).case_insensitive(true),
+    RegexOptions::default().unicode(UnicodeMode::Ascii).case_insensitive(true),
 )?;
 ```
 
@@ -53,12 +55,12 @@ let re = Regex::with_options(
 
 - `dfa_threshold`: set >0 to precompile hot states at build time, trading compile cost for faster first match.
 - `max_dfa_capacity`: upper bound on cached DFA states. patterns with large state spaces return `Error::CapacityExceeded` instead of allocating unbounded memory.
-- `lookahead_context_max`: limits how far ahead the engine tracks lookaround context. increase if patterns with deep lookahead return `AlgebraError::AnchorLimit`.
+- `lookahead_context_max`: limits how far ahead the engine tracks lookaround context. increase if patterns with deep lookahead return `ResharpError::AnchorLimit`.
 - `hardened`: use O(n·S) hardened forward scan, preventing quadratic blowup even when both pattern and input are adversarial.
 
 #### pattern flags
 
-- `unicode`: when false, `\w` = `[a-zA-Z0-9_]`, `\d` = `[0-9]`, `\s` = `[ \t\n\r\f\v]`. equivalent to inline `(?-u)`.
+- `unicode`: `UnicodeMode` enum controlling `\w`/`\d`/`\s` coverage. `Ascii` is equivalent to inline `(?-u)` (`\w` = `[a-zA-Z0-9_]`, `\d` = `[0-9]`, `\s` = `[\t\n\v\f\r ]`); `Default` covers up to 2-byte UTF-8; `Full` covers all Unicode; `Javascript` matches default JS `RegExp` semantics. See [syntax.md](syntax.md#unicode).
 - `case_insensitive`: equivalent to inline `(?i)`.
 - `dot_matches_new_line`: makes `.` match `\n`. equivalent to inline `(?s)`. note that `_` always matches any byte regardless of this flag.
 - `ignore_whitespace`: equivalent to inline `(?x)`.
@@ -78,9 +80,11 @@ let re = Regex::new(&pattern)?;
 
 ```rust
 pub enum Error {
-    Parse(ResharpError),       // invalid pattern syntax
-    Algebra(AlgebraError),     // unsupported pattern or state explosion
+    Parse(Box<ParseError>),    // invalid pattern syntax
+    Algebra(ResharpError),     // unsupported pattern or state explosion
     CapacityExceeded,          // DFA exceeded max_dfa_capacity
+    PatternTooLarge,           // pattern produced too many algebra nodes
+    Serialize(String),         // serialization/deserialization failure
 }
 ```
 
@@ -140,10 +144,10 @@ Key construction methods:
 | `NodeId::BEGIN` | start anchor `^` |
 | `NodeId::END` | end anchor `$` |
 
-### AlgebraError
+### ResharpError
 
 ```rust
-pub enum AlgebraError {
+pub enum ResharpError {
     AnchorLimit,          // lookahead context distance exceeded
     StateSpaceExplosion,  // infinite derivative expansion
     UnsupportedPattern,   // pattern cannot be compiled to DFA

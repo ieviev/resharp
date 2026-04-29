@@ -1,6 +1,3 @@
-# Tests for internal compiled representation (pp output).
-# Used to pin the algebra node structure produced by the parser.
-
 [[test]]
 name = "ci_flag_prefix_alternation"
 pattern = "(?i)min|max"

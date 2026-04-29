@@ -17,14 +17,6 @@ pub fn has_simd() -> bool {
     {
         true
     }
-    #[cfg(not(any(
-        target_arch = "x86_64",
-        target_arch = "aarch64",
-        all(target_arch = "wasm32", target_feature = "simd128"),
-    )))]
-    {
-        false
-    }
 }
 
 #[cfg(target_arch = "x86_64")]
@@ -316,6 +308,7 @@ pub struct RevPrefixSearch {
     num_simd: usize,
     masks: Box<TeddyMasks>,
     pub(crate) sets: Vec<TSet>,
+    /// bytes between SIMD window's rightmost byte and reported match-end-1.
     tail_offset: usize,
 }
 
@@ -342,13 +335,17 @@ impl RevPrefixSearch {
         }
     }
 
-    // TBD: cleanup
-    #[allow(dead_code)]
+    pub fn add_tail_offset(mut self, extra: u32) -> Self {
+        self.tail_offset += extra as usize;
+        self
+    }
+
     pub fn len(&self) -> usize {
         self.len
     }
 
     pub fn find_rev(&self, haystack: &[u8], end: usize) -> Option<usize> {
+        let end = end.min(haystack.len().saturating_sub(1));
         let end = end.checked_sub(self.tail_offset)?;
         let r = unsafe { self.find_rev_avx2(haystack, end) };
         r.map(|p| p + self.tail_offset)
@@ -477,11 +474,6 @@ pub struct FwdPrefixSearch {
     verify_order: [u8; 16],
 }
 
-#[cfg(any(
-    target_arch = "x86_64",
-    target_arch = "aarch64",
-    all(target_arch = "wasm32", target_feature = "simd128"),
-))]
 #[repr(align(32))]
 #[cfg_attr(debug_assertions, derive(Debug))]
 pub(crate) struct TeddyMasks {
@@ -489,11 +481,7 @@ pub(crate) struct TeddyMasks {
     hi: [[u8; 32]; 3],
 }
 
-#[cfg(any(
-    target_arch = "x86_64",
-    target_arch = "aarch64",
-    all(target_arch = "wasm32", target_feature = "simd128"),
-))]
+#[cfg(target_arch = "x86_64")]
 impl TeddyMasks {
     pub(crate) fn build(byte_sets_raw: &[Vec<u8>], num_simd: usize) -> Box<Self> {
         let mut masks = Box::new(TeddyMasks {
@@ -1047,141 +1035,5 @@ impl RevSearchRanges {
             }
         }
         None
-    }
-}
-
-#[cfg(not(any(
-    target_arch = "x86_64",
-    target_arch = "aarch64",
-    all(target_arch = "wasm32", target_feature = "simd128"),
-)))]
-pub struct RevSearchBytes {
-    _private: (),
-}
-
-#[cfg(not(any(
-    target_arch = "x86_64",
-    target_arch = "aarch64",
-    all(target_arch = "wasm32", target_feature = "simd128"),
-)))]
-impl RevSearchBytes {
-    pub fn bytes(&self) -> &[u8] {
-        unreachable!()
-    }
-
-    pub fn find_rev(&self, _haystack: &[u8]) -> Option<usize> {
-        unreachable!()
-    }
-
-    pub fn find_fwd(&self, _haystack: &[u8]) -> Option<usize> {
-        unreachable!()
-    }
-}
-
-#[cfg(not(any(
-    target_arch = "x86_64",
-    target_arch = "aarch64",
-    all(target_arch = "wasm32", target_feature = "simd128"),
-)))]
-pub struct FwdLiteralSearch {
-    _private: (),
-}
-
-#[cfg(not(any(
-    target_arch = "x86_64",
-    target_arch = "aarch64",
-    all(target_arch = "wasm32", target_feature = "simd128"),
-)))]
-impl FwdLiteralSearch {
-    pub fn len(&self) -> usize {
-        unreachable!()
-    }
-
-    pub fn rare_byte(&self) -> u8 {
-        unreachable!()
-    }
-
-    pub fn find_fwd(&self, _haystack: &[u8]) -> Option<usize> {
-        unreachable!()
-    }
-
-    pub fn find_all_fixed(&self, _haystack: &[u8], _matches: &mut Vec<(usize, usize)>) {
-        unreachable!()
-    }
-}
-
-#[cfg(not(any(
-    target_arch = "x86_64",
-    target_arch = "aarch64",
-    all(target_arch = "wasm32", target_feature = "simd128"),
-)))]
-pub struct RevPrefixSearch {
-    _private: (),
-}
-
-#[cfg(not(any(
-    target_arch = "x86_64",
-    target_arch = "aarch64",
-    all(target_arch = "wasm32", target_feature = "simd128"),
-)))]
-impl RevPrefixSearch {
-    pub fn len(&self) -> usize {
-        unreachable!()
-    }
-
-    pub fn find_rev(&self, _haystack: &[u8], _end: usize) -> Option<usize> {
-        unreachable!()
-    }
-}
-
-#[cfg(not(any(
-    target_arch = "x86_64",
-    target_arch = "aarch64",
-    all(target_arch = "wasm32", target_feature = "simd128"),
-)))]
-pub struct FwdPrefixSearch {
-    _private: (),
-}
-
-#[cfg(not(any(
-    target_arch = "x86_64",
-    target_arch = "aarch64",
-    all(target_arch = "wasm32", target_feature = "simd128"),
-)))]
-impl FwdPrefixSearch {
-    pub fn len(&self) -> usize {
-        unreachable!()
-    }
-
-    pub fn find_fwd(&self, _haystack: &[u8], _start: usize) -> Option<usize> {
-        unreachable!()
-    }
-}
-
-#[cfg(not(any(
-    target_arch = "x86_64",
-    target_arch = "aarch64",
-    all(target_arch = "wasm32", target_feature = "simd128"),
-)))]
-pub struct RevSearchRanges {
-    _private: (),
-}
-
-#[cfg(not(any(
-    target_arch = "x86_64",
-    target_arch = "aarch64",
-    all(target_arch = "wasm32", target_feature = "simd128"),
-)))]
-impl RevSearchRanges {
-    pub fn ranges(&self) -> &[(u8, u8)] {
-        unreachable!()
-    }
-
-    pub fn find_rev(&self, _haystack: &[u8]) -> Option<usize> {
-        unreachable!()
-    }
-
-    pub fn find_fwd(&self, _haystack: &[u8]) -> Option<usize> {
-        unreachable!()
     }
 }

@@ -1,9 +1,9 @@
-use resharp::{EngineOptions, Regex};
+use resharp::{Regex, RegexOptions};
 
 fn dump(pattern: &str, input: &str) {
     let re = Regex::with_options(
         pattern,
-        EngineOptions {
+        RegexOptions {
             dfa_threshold: 1000,
             max_dfa_capacity: 65535,
             ..Default::default()

@@ -4,6 +4,7 @@ data/fuzz/
 bench-cmp.sh
 TODO.md
 justfile
+resharp-engine/tests/probe*
 resharp-engine/examples/test*
 resharp-engine/examples/profile*
 resharp-engine/examples/bench*

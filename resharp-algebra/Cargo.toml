@@ -21,3 +21,4 @@ rustc-hash = "2"
 [features]
 graphviz = []
 norewrite = []
+debug = []

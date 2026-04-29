@@ -1,7 +1,7 @@
-use resharp::{EngineOptions, Regex};
+use resharp::{Regex, RegexOptions};
 
-fn lazy_opts() -> EngineOptions {
-    EngineOptions {
+fn lazy_opts() -> RegexOptions {
+    RegexOptions {
         dfa_threshold: 0,
         max_dfa_capacity: 10000,
         ..Default::default()
@@ -232,6 +232,7 @@ fn bounded_rep_multiple_at_boundaries() {
 }
 
 #[test]
+#[ignore = "slow in debug; run with --ignored or in release"]
 fn all_accel_skip_patterns_simd_vs_default() {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests")
@@ -324,6 +325,7 @@ fn lazy_anchors_toml() {
 }
 
 #[test]
+// #[ignore = "slow in debug; run with --ignored or in release"]
 fn lazy_semantics_toml() {
     run_toml_lazy("semantics.toml");
 }

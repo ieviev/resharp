@@ -54,10 +54,10 @@ RE# is designed around `is_match` and `find_all`. It doesn't provide `find` or `
 
 > **Leftmost-longest, not leftmost-greedy (PCRE).** `y|yes|n|no` on `"yes please"` matches `yes` in RE#, `y` in PCRE / `regex`. Alternation order doesn't matter.
 
-Matching returns `Result<Vec<Match>, Error>`. capacity or lookahead overflow will fail outright rather than silently degrade. `EngineOptions` controls precompilation threshold, capacity, and lookahead context:
+Matching returns `Result<Vec<Match>, Error>`. capacity or lookahead overflow will fail outright rather than silently degrade. `RegexOptions` controls precompilation threshold, capacity, and lookahead context:
 
 ```rust
-let opts = resharp::EngineOptions {
+let opts = resharp::RegexOptions {
     dfa_threshold: 0,             // eagerly compile up to N states (default: 0 = fully lazy)
     max_dfa_capacity: 65535,       // max automata states (default: u16::MAX)
     lookahead_context_max: 800,    // max lookahead context distance (default: 800)

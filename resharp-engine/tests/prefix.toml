@@ -1,17 +1,22 @@
-description = "prefix set and potential_start computation tests"
+description = "prefix set and potential_start computation tests (matches engine runtime via ts_rev_start)"
+
+[[test]]
+name = "alt-neg-la"
+pattern = "EMU-(?!CLAUSE|XREF|ANNEX|INTRO)|DFN"
+prefix_rev = ""
+potential_rev = "N;F;D"
 
 [[test]]
 name = "non_percent"
-pattern = '^[^%]+'
+pattern = "^[^%]+"
 prefix_rev = ""
 potential_rev = "[\\x00-\\$\\&-\\xBF]"
 
 [[test]]
 name = "value"
-pattern = '(\A|(.*,))VALUE(\z|([,]?.))'
+pattern = "(\\A|(.*,))VALUE(\\z|([,]?.))"
 potential_rev = ".;[,E];[EU];[LU];[AL];[AV]"
 potential_fwd = ".;.;.;.;.;."
-
 
 [[test]]
 name = "prefix_twain"
@@ -21,66 +26,55 @@ potential_rev = "n;i;a;w;T"
 
 [[test]]
 name = "prefix_la1"
-pattern = 'a(?=b)'
-prefix_rev = "b"
+pattern = "a(?=b)"
+prefix_rev = "b;a"
 
 [[test]]
 name = "prefix_la"
-pattern = 'bb(?=aa)'
-prefix_fwd = "b;b;a;a"
-
+pattern = "bb(?=aa)"
 
 [[test]]
 name = "num"
-pattern = '^\d+$'
-prefix_fwd = "\\n;[0-9]"
+pattern = "^\\d+$"
 
 [[test]]
 name = "claude_user_frustration"
-pattern = '\b(wtf|wth|ffs|omfg|shit(ty|tiest)?|dumbass|horrible|awful|piss(ed|ing)? off|piece of (shit|crap|junk)|what the (fuck|hell)|fucking? (broken|useless|terrible|awful|horrible)|fuck you|screw (this|you)|so frustrating|this sucks|damn it)\b'
+pattern = "\\b(wtf|wth|ffs|omfg|shit(ty|tiest)?|dumbass|horrible|awful|piss(ed|ing)? off|piece of (shit|crap|junk)|what the (fuck|hell)|fucking? (broken|useless|terrible|awful|horrible)|fuck you|screw (this|you)|so frustrating|this sucks|damn it)\\b"
 prefix_rev = ""
-prefix_fwd = ''
 potential_rev = "[e-hklnps-uy];[acefiklnos-u];[ a-cefhikmortuwy]"
-potential_fwd = "[\\x00-/:-@\\[-\\^`\\{-\\x7F\\xC0-\\xC3\\xCB\\xCD-\\xCF\\xD2\\xD4-\\xD9\\xDB-\\xF7];[adfhopstw\\x80-\\xBF];[acdfhimops-uw\\x80-\\xBF];[ ac-fhimopr-uw\\x80-\\xBF]"
-
+potential_fwd = "[adfhopstw];[acfhimotuw];[ acefhimrs]"
 
 [[test]]
 name = "simple_lb2"
-pattern = '(?<=a|\A)b*'
-prefix_fwd = "a"
-
+pattern = "(?<=a|\\A)b*"
 
 [[test]]
 name = "datetime"
-pattern = '\d+(?=[aA]\.?[mM]\.?)'
-potential_rev = "[Mm];[\\.Aa];[0-9Aa]"
+pattern = "\\d+(?=[aA]\\.?[mM]\\.?)"
 prefix_rev = "[Mm]"
+potential_rev = "[Mm];[\\.Aa];[0-9Aa]"
 
 [[test]]
 name = "apache"
-pattern = '(?m)^(?:\S+) \S+ \S+ \[(?:[^\]]+)\] "(?:\S+) (?:\S+) [^"]*" (?:\d{3}) (?:\d+|-)'
+pattern = "(?m)^(?:\\S+) \\S+ \\S+ \\[(?:[^\\]]+)\\] \"(?:\\S+) (?:\\S+) [^\"]*\" (?:\\d{3}) (?:\\d+|-)"
 prefix_rev = ""
-prefix_fwd = '\n'
 potential_rev = "[\\-0-9];[ 0-9];[ 0-9];[ 0-9];[ 0-9];[ 0-9];[ \"0-9];[\\x00-\\xBF];[\\x00-\\xBF\\xC2-\\xDF];[\\x00-\\xEF];[\\x00-\\xF4];[\\x00-\\xF7];[\\x00-\\xF7];[\\x00-\\xF7];[\\x00-\\xF7];[\\x00-\\xF7]"
-potential_fwd = "_;_;_;_;_;_;_;_;_;_;_;_;_;_"
+potential_fwd = "[\\x00-\\x08\\x0E-\\x1F!-\\x7F\\xC0-\\xF7];[\\x00-\\x08\\x0E-\\xF7];[\\x00-\\x08\\x0E-\\xF7];[\\x00-\\x08\\x0E-\\xF7];[\\x00-\\x08\\x0E-\\xF7];[\\x00-\\x08\\x0E-\\xF7];[\\x00-\\x08\\x0E-\\xF7];[\\x00-\\xF7];[\\x00-\\xF7];[\\x00-\\xF7];[\\x00-\\xF7];[\\x00-\\xF7];[\\x00-\\xF7];[\\x00-\\xF7];[\\x00-\\xF7];[\\x00-\\xF7]"
 
 [[test]]
 name = "simple_lb"
-pattern = '(?<=a)b*'
-prefix_fwd = "a"
-
+pattern = "(?<=a)b*"
 
 [[test]]
 name = "potential_start_rev_word_boundary"
-pattern = '\b[A-Z][a-z]+\b'
+pattern = "\\b[A-Z][a-z]+\\b"
 
 [[test]]
 name = "credit_card3"
-pattern = '''\b(4a|5b|6c)'''
-potential_fwd = "[\\x00-/:-@\\[-\\^`\\{-\\x7F\\xC0-\\xC3\\xCB\\xCD-\\xCF\\xD2\\xD4-\\xD9\\xDB-\\xF7];[4-6\\x80-\\xBF];[4-6a-c\\x80-\\xBF]"
-prefix_fwd = ""
+pattern = "\\b(4a|5b|6c)"
 prefix_rev = ""
 potential_rev = "[a-c];[4-6]"
+potential_fwd = "[4-6];[a-c]"
 
 [[test]]
 name = "prefix_intersection"
@@ -89,23 +83,21 @@ prefix_rev = "B"
 
 [[test]]
 name = "huck_complement"
-pattern = '.*Huck.*&~(.*F.*)'
+pattern = ".*Huck.*&~(.*F.*)"
 prefix_rev = ""
-prefix_fwd = ""
 potential_rev = "[Fk];.;.;."
 potential_fwd = ".;.;.;."
 
 [[test]]
 name = "huck_complement_kind"
-pattern = '.*Huck.*&~(.*F.*)'
+pattern = ".*Huck.*&~(.*F.*)"
 ignore = true
-kind = "UnanchoredFwd"
+kind = "PotentialStart"
 
 [[test]]
 name = "prefix_huck"
 pattern = "_*Huck_*"
 prefix_rev = "k;c;u;H"
-prefix_fwd = "H;u;c;k"
 
 [[test]]
 name = "prefix_hello"
@@ -119,12 +111,12 @@ potential_rev = "[mnry];[enor];[Tiry]"
 
 [[test]]
 name = "prefix_lookahead"
-pattern = '.*(?=aaa)'
+pattern = ".*(?=aaa)"
 prefix_rev = "a;a;a"
 
 [[test]]
 name = "potential_start_union_suffix"
-pattern = 'Huck[a-zA-Z]+|Saw[a-zA-Z]+'
+pattern = "Huck[a-zA-Z]+|Saw[a-zA-Z]+"
 potential_rev = "[A-Za-z];[kw];[ac];[Su]"
 
 [[test]]
@@ -144,7 +136,7 @@ potential_rev = "[a-c];.;."
 
 [[test]]
 name = "potential_start_rev_lookbehind"
-pattern = '(?<=x)abc'
+pattern = "(?<=x)abc"
 potential_rev = "c;b;a;x"
 
 [[test]]
@@ -154,28 +146,28 @@ potential_rev = "k;c;u;H"
 
 [[test]]
 name = "potential_start_rev_lookahead_word"
-pattern = '(?<=\s)[A-Z][a-z]+(?=\s)'
-potential_rev = '[\t-\r ];[a-z];[A-Za-z];[\t-\r A-Za-z]'
+pattern = "(?<=\\s)[A-Z][a-z]+(?=\\s)"
+potential_rev = "[\\t-\\r ];[a-z];[A-Za-z];[\\t-\\r A-Za-z]"
 
 [[test]]
 name = "potential_start_rev_alternation_with_lookahead"
-pattern = '(?<=\s)(Tom|Sawyer|Finn)(?=\s)'
-potential_rev = '[\t-\r ];[mnr];[eno];[Tiy];[\t-\r Fw]'
+pattern = "(?<=\\s)(Tom|Sawyer|Finn)(?=\\s)"
+potential_rev = "[\\t-\\r ];[mnr];[eno];[Tiy];[\\t-\\r Fw]"
 
 [[test]]
 name = "potential_start_rev_char_class_plus"
-pattern = '[0-9]+'
+pattern = "[0-9]+"
 potential_rev = "[0-9]"
 
 [[test]]
 name = "wb_fwd_prefix_alternation"
-pattern = '\b(4a|5b|6c)'
-potential_fwd = "[\\x00-/:-@\\[-\\^`\\{-\\x7F\\xC0-\\xC3\\xCB\\xCD-\\xCF\\xD2\\xD4-\\xD9\\xDB-\\xF7];[4-6\\x80-\\xBF];[4-6a-c\\x80-\\xBF]"
+pattern = "\\b(4a|5b|6c)"
+potential_fwd = "[4-6];[a-c]"
 
 [[test]]
 name = "wb_fwd_prefix_simple"
-pattern = '\b4a'
-potential_fwd = "[\\x00-/:-@\\[-\\^`\\{-\\x7F\\xC0-\\xC3\\xCB\\xCD-\\xCF\\xD2\\xD4-\\xD9\\xDB-\\xF7];[4\\x80-\\xBF];[4a\\x80-\\xBF]"
+pattern = "\\b4a"
+potential_fwd = "4;a"
 
 [[test]]
 name = "prefix_bounded_repeat"
@@ -189,7 +181,35 @@ prefix_rev = "g;.;."
 
 [[test]]
 name = "word_boundary_the"
-pattern = '\bthe\b'
+pattern = "\\bthe\\b"
 prefix_rev = ""
 potential_rev = "e;h;t"
 
+[[test]]
+name = "smtp_mail_rcpt"
+pattern = "^(MAIL|RCPT)\\s+(.*)$"
+prefix_rev = "[\\t-\\r ]"
+potential_rev = "[\\t-\\r ];[LT];[IP];[AC];[MR]"
+potential_fwd = "[MR];[AC];[IP];[LT];[\\t-\\r ]"
+
+[[test]]
+name = "neg_la_rev_wb_alt"
+pattern = "2011|TL868|NETTV\\/3.1\\b"
+prefix_rev = ""
+potential_rev = "[18];[16];[08];[2L]"
+potential_fwd = "[2NT];[0EL];[18T];[16T]"
+kind = "AnchoredFwd"
+
+[[test]]
+name = "S_default_mode"
+pattern = "\\S"
+prefix_rev = ""
+potential_rev = "[\\x00-\\x08\\x0E-\\x1F!-\\xBF]"
+
+[[test]]
+name = "neg_la_pref"
+pattern = 'OU(?=I(?!LL)|[AEOU])'
+prefix_rev = ""
+potential_rev = "[AEOU];U;O"
+potential_fwd = "O;U;[AEIOU]"
+kind = "AnchoredFwd"

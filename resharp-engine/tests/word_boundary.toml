@@ -3,6 +3,18 @@ word boundary tests, cross-validated against the regex crate.
 '''
 
 [[test]]
+name = "basic_boundary"
+pattern = '(and|AND)\b(.*)'
+input = "xxxxxANDyyyyy"
+vs_regex = true
+
+[[test]]
+name = "basic_boundary"
+pattern = '(and|AND)\b(.*)'
+input = "xxxxxANDyyyyy"
+vs_regex = true
+
+[[test]]
 name = "wb_bare_11"
 pattern = '\b11\b'
 input = "11"
@@ -223,3 +235,45 @@ name = "wb_the_adjacent"
 pattern = '\bthe\b'
 input = "!the! .the. the"
 vs_regex = true
+
+[[test]]
+name = "word_border_star"
+pattern = '\bTrue\b *'
+input = "True"
+matches = [[0, 4]]
+
+[[test]]
+name = "word_border_req_word_trailing_no_match"
+pattern = '!!\b'
+input = "!!"
+matches = []
+
+[[test]]
+name = "word_border_req_word_leading_no_match"
+pattern = '\b!!'
+input = "!!"
+matches = []
+
+[[test]]
+name = "word_border_req_word_leading_match"
+pattern = '\b!!'
+input = "a!!"
+matches = [[1, 3]]
+
+[[test]]
+name = "word_border_req_word_trailing_match"
+pattern = '!!\b'
+input = "!!a"
+matches = [[0, 2]]
+
+[[test]]
+name = "word_boundary_ip_trailing_b_not_boundary"
+pattern = '2(\.([0-1]?[0-9]{1,2}|2[0-4][0-9])){3}\b'
+input = "2.3.3.3a!"
+matches = []
+
+[[test]]
+name = "repro_unanchored_fwd_ascii_word"
+pattern = '\w\w-\w\w'
+input = "xxxxx00-00yyyyy"
+matches = [[5, 10]]

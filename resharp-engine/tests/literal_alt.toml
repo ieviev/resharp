@@ -97,3 +97,45 @@ name = "dotstar_inner_literal_multiline2"
 pattern = '.*=.*'
 input = "x=y\na=b\n"
 vs_regex = true
+
+[[test]]
+name = "dictionary_small"
+pattern = "accommodating|acknowledging|comprehensive|corresponding|disappointing"
+input = "a]comprehensive/disappointing;acknowledging"
+matches = [[2, 15], [16, 29], [30, 43]]
+
+[[test]]
+name = "literal_20_bytes"
+pattern = "ABCDEFGHIJKLMNOPQRST"
+input = "....................................................................................................ABCDEFGHIJKLMNOPQRST................................................................................"
+matches = [[100, 120]]
+
+[[test]]
+name = "literal_16_bytes"
+pattern = "ABCDEFGHIJKLMNOP"
+input = "..................................................ABCDEFGHIJKLMNOP.................................."
+matches = [[50, 66]]
+
+[[test]]
+name = "literal_17_bytes"
+pattern = "ABCDEFGHIJKLMNOPQ"
+input = "........................................ABCDEFGHIJKLMNOPQ..........................................."
+matches = [[40, 57]]
+
+[[test]]
+name = "unicode_alt_ellipsis"
+pattern = 'alt-1|alt-2|…'
+input = "…"
+matches = [[0, 3]]
+
+[[test]]
+name = "fwd_prefix_search_long_prefix"
+pattern = '[aA]bcdefghijklmnopqrs(x|xy)'
+input = "abcdefghijklmnopqrsx"
+matches = [[0, 20]]
+
+[[test]]
+name = "repro_unanchored_fwd_date"
+pattern = '\d{4}-\d\d?-\d\d?((T| )\d{2}:\d{2}:\d{2})?'
+input = "0000-0-0 0000-0-0"
+matches = [[0, 8], [9, 17]]

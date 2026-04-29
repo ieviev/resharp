@@ -2,6 +2,10 @@ description = '''
 expected internal representation
 '''
 
+[[test]]
+name = 'foo_anch'
+pattern = '^_*foo_*$'
+pp = "_*foo_*"
 
 [[test]]
 pattern = 'a(?!b).*(?<!a)b'
@@ -46,3 +50,82 @@ pp = '[^\na]'
 
 
 
+
+[[test]]
+name = 'neg_la_single_byte'
+pattern = 'b(?!a)'
+pp = 'b(?=~(a_*)\z)'
+ts_rev = '(\Ab|_*[^a]b)'
+
+[[test]]
+name = 'neg_la_ascii_word_class'
+pattern = 'x(?![a-zA-Z0-9_])'
+pp = 'x(?=~([0-9A-Z\_a-z]_*)\z)'
+ts_rev = '(\Ax|_*[^0-9A-Z\_a-z]x)'
+
+[[test]]
+name = 'end_anchor_then_literal'
+pattern = '\za'
+pp = '⊥'
+
+[[test]]
+name = 'end_anchor_then_literal_after_prefix'
+pattern = 'a\zb'
+pp = '⊥'
+
+[[test]]
+name = 'end_anchor_then_class'
+pattern = '\z[abc]'
+pp = '⊥'
+
+[[test]]
+name = 'la_peel_drop'
+pattern = '(?=a).'
+pp = 'a'
+
+[[test]]
+name = 'la_peel_unsat_single'
+pattern = '(?=a)b'
+pp = '⊥'
+
+[[test]]
+name = 'la_peel_unsat_two'
+pattern = '(?=ab)cd'
+pp = '⊥'
+
+[[test]]
+name = 'la_peel_cascade_full'
+pattern = '(?=abc)...'
+pp = 'abc'
+
+[[test]]
+name = 'la_peel_partial'
+pattern = '(?=a)..'
+pp = 'a.'
+
+[[test]]
+name = 'la_peel_class_intersect'
+pattern = '(?=[ab])[bc]'
+pp = 'b'
+
+[[test]]
+name = 'la_peel_class_disjoint'
+pattern = '(?=[ab])[cd]'
+pp = '⊥'
+
+[[test]]
+name = 'la_peel_neg'
+pattern = '$STRING:string'
+pp = '⊥'
+
+
+# `(?!b)(.*)` simplifies to a Lookahead with body=`~(b_*)\z` and tail=`.*`,
+# rel=u32::MAX. The body asserts "next does not start with b" and is
+# zero-width; the `.*` is carried as the lookahead's tail. Bug: at runtime
+# this Lookahead is treated as nullable in CENTER irrespective of whether
+# the assertion holds, so `(and|AND)\b(.*)` over `xxxxxANDyyyyy` yields a
+# spurious match (\b fails between D and y but a match is reported).
+[[test]]
+name = 'neg_la_then_dotstar'
+pattern = 'a(?!b)(.*)'
+pp = 'a(?=~(b_*)\z){∅}❮.*❯'
