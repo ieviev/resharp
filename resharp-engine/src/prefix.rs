@@ -49,6 +49,11 @@ pub(crate) fn calc_prefix_sets_inner(
 
         targets.retain(|(t, _)| !redundant.contains(t));
 
+        if targets.is_empty() {
+            result.clear();
+            break;
+        }
+
         if targets.len() == 1 {
             let (target, char_set) = targets[0];
             if target == node {
@@ -139,6 +144,9 @@ pub fn calc_potential_start(
         }
 
         if next_nodes.is_empty() || union_set == TSetId::EMPTY {
+            if next_nodes.is_empty() {
+                result.clear();
+            }
             break;
         }
 
@@ -357,11 +365,6 @@ pub fn build_strict_literal_prefix(
     }
 }
 
-/// Forward prefix search, picking the rarest position for the SIMD anchor.
-///
-/// Returns `(searcher, stripped)`.  `stripped` is true when a leading `_*` was
-/// removed - the returned position is a potential *end* position for the match,
-/// not the guaranteed start.
 pub fn build_fwd_prefix(
     b: &mut RegexBuilder,
     node: NodeId,
@@ -383,8 +386,6 @@ fn try_build_fwd_search(
     try_build_fwd_search_raw(&byte_sets_raw)
 }
 
-/// Core of `try_build_fwd_search`, operating on raw byte sets to avoid
-/// requiring a `RegexBuilder`.
 fn try_build_fwd_search_raw(
     byte_sets_raw: &[Vec<u8>],
 ) -> Result<Option<crate::accel::FwdPrefixSearch>, crate::Error> {
@@ -725,40 +726,14 @@ pub(crate) fn build_rev_prefix_search(
 /// Runtime prefix acceleration
 #[cfg_attr(debug_assertions, derive(Debug))]
 pub enum PrefixKind {
-    /// `calc_prefix_sets` on the rev DFA succeeded.
-    ///
-    /// Every match ends with this byte sequence (read right-to-left).  Bytes
-    /// outside the set drive the rev DFA to dead - skipping them is safe and
-    /// exact.  The `RevPrefixSearch` lives in `LDFA::prefix_skip`.
     AnchoredRev,
-
-    /// Forward literal prefix with no `_*` stripping.
-    ///
-    /// Every match starts at the returned SIMD hit position - guaranteed anchor.
-    /// The forward DFA confirms the match end from there.
     AnchoredFwd(crate::accel::FwdPrefixSearch),
-
-    /// Forward `_*`-stripped potential-start prefix.
-    ///
-    /// Finds candidate positions that are on the shortest path to a match end.
-    /// The match may start before the candidate - a leftward walk of the fwd DFA
-    /// from the initial state extends the match start backwards.
     UnanchoredFwd(crate::accel::FwdPrefixSearch),
-
-    /// Forward prefix for patterns with a leading lookbehind (e.g. `\b`, `^`).
-    ///
-    /// The SIMD anchor uses the first bytes of the body after stripping leading
-    /// lookbehinds.  Every hit is a candidate match start.  The runtime verifies
-    /// the full pattern - including the leading lookbehind - by initialising the
-    /// full-pattern fwd DFA (`fwd_lb`) with the preceding byte as context.
     AnchoredFwdLb(crate::accel::FwdPrefixSearch),
-
-    /// Reverse potential start, may have false positives.
     PotentialStart,
 }
 
 impl PrefixKind {
-    /// Return `true` if this variant uses the fwd scanning path.
     #[cfg(feature = "diag")]
     pub(crate) fn is_fwd(&self) -> bool {
         matches!(
@@ -784,14 +759,7 @@ impl PrefixKind {
     }
 }
 
-/// Try to build a rev-side `PrefixKind` from any rev-DFA node (not just
-/// `ts_rev_start`). Used both by the standard prefix-selection path and by
-/// the convergence-prefix path which feeds in a peeled state node.
-///
-/// Returns the chosen `PrefixKind` (always `AnchoredRev` or `PotentialStart`)
-/// paired with a `RevPrefixSearch` for the runtime, or `None` if no usable
-/// rev prefix can be extracted.
-#[allow(dead_code)] // used by convergence_prefix feature; see CONVERGENCE.md S7
+#[allow(dead_code)]
 pub(crate) fn try_rev_prefix(
     b: &mut RegexBuilder,
     rev_node: NodeId,
@@ -827,7 +795,6 @@ pub(crate) fn select_prefix(
         return Ok((None, None));
     }
     let (kind, skip) = select_prefix_simd(b, node, rev_start, has_look, min_len)?;
-    // Convergence override (rev-prefix); only when no fwd prefix already chosen.
     let fwd_already = matches!(
         kind,
         Some(
@@ -938,7 +905,6 @@ fn select_prefix_simd(
     min_len: u32,
 ) -> Result<(Option<PrefixKind>, Option<crate::accel::RevPrefixSearch>), Error> {
     use resharp_algebra::nulls::NullsId;
-    // min_len==0 disables skip-by-prefix; AnchoredFwdLb still works (lb walk preserves empty matches).
     if min_len == 0 {
         if has_look && node.contains_lookbehind(b) {
             if let Some(fp) = try_build_fwd_lb(b, node)? {
@@ -976,18 +942,6 @@ fn select_prefix_simd(
         && (!sets.rev_anchored.sets.is_empty() || !sets.rev_potential.sets.is_empty());
     let fwd_wins = fwd_cost < rev_cost;
 
-    // Build whichever fwd candidate is possible for this pattern. A leading
-    // lookbehind rules out plain fwd scanning (the DFA would start without
-    // prior-byte context); instead we splice the lb bytes onto the body and
-    // build AnchoredFwdLb, which walks lb_len bytes back at each candidate.
-    // AnchoredFwd is unsound when the fwd pattern contains a `Lookahead(_, _,
-    // u32::MAX)` state. That form is created by `attempt_rw_concat_2` when a
-    // `Lookahead(la_body, MISSING, 0)` is concatenated with a center-nullable
-    // tail (e.g. `.*`); the resulting state's nullability can fire at non-end-
-    // of-input positions during fwd scanning, producing spurious matches.
-    // Patterns with a leading lookbehind are still safe via AnchoredFwdLb. For
-    // patterns with the unsound rel=MAX form, fall through to the sound
-    // llmatch path (rev_collect + fwd_scan).
     let fwd_candidate = if has_look && node.contains_lookbehind(b) {
         try_build_fwd_lb(b, node)?.map(PrefixKind::AnchoredFwdLb)
     } else if has_look && contains_lookahead_rel_max(b, node) {
@@ -1001,9 +955,6 @@ fn select_prefix_simd(
         match fp {
             Some(fp) if stripped => Some(PrefixKind::UnanchoredFwd(fp)),
             Some(fp) => Some(PrefixKind::AnchoredFwd(fp)),
-            // strict literal fallback (e.g. `_*FOO` where potential_start is
-            // too wide but the exact literal still helps).
-            // strict literal fallback: use the leading fixed literal.
             None if b.is_infinite(node) => {
                 build_strict_literal_prefix(b, node)?.map(PrefixKind::AnchoredFwd)
             }
@@ -1015,8 +966,6 @@ fn select_prefix_simd(
         if !rev_usable {
             return None;
         }
-        // Use the pre-computed sets (same as `try_rev_prefix` would compute)
-        // to avoid recomputing. Keep behavior identical to pre-refactor.
         if !sets.rev_anchored.sets.is_empty() {
             if let Some(s) = build_rev_prefix_search(b, &sets.rev_anchored.sets) {
                 return Some((PrefixKind::AnchoredRev, s));
@@ -1030,10 +979,6 @@ fn select_prefix_simd(
         None
     };
 
-    // Decision: if fwd built AND won on cost, use it. Otherwise try rev;
-    // if rev also fails, fall back to whatever fwd we did build. Previous
-    // revisions had a bug where the lb-strip path would return None after
-    // rejecting fwd on cost and then failing to build rev.
     if fwd_wins {
         if let Some(kind) = fwd_candidate {
             return Ok((Some(kind), None));
@@ -1048,11 +993,6 @@ fn select_prefix_simd(
     Ok((None, None))
 }
 
-/// Build an `AnchoredFwdLb` fwd-prefix searcher for a pattern whose outermost
-/// structure is `Concat(Lookbehind, body)` with a fixed lb length in 1..=4.
-/// Returns `None` if any structural precondition fails or the resulting fwd
-/// prefix isn't anchored (a stripped/unanchored result can't be combined with
-/// the walk-back-lb-bytes trick).
 fn try_build_fwd_lb(
     b: &mut RegexBuilder,
     node: NodeId,
@@ -1079,7 +1019,6 @@ fn try_build_fwd_lb(
     if !matches!(b.get_fixed_length(lb_stripped), Some(1..=4)) {
         return Ok(None);
     }
-    // Reject when body's leading star absorbs the lb byte(s) (`^X*Y` with X ⊇ lb-bytes).
     if body_absorbs_lb(b, body, lb_stripped)? {
         #[cfg(feature = "debug")]
         eprintln!("  [fwd-lb] reject: body's leading star absorbs lb byte(s)");
@@ -1087,15 +1026,12 @@ fn try_build_fwd_lb(
     }
     let lb_body = b.mk_concat(lb_stripped, body);
     let (fp, stripped) = build_fwd_prefix(b, lb_body)?;
-    // an unanchored (_*-stripped) prefix has lost the lb bytes we just
-    // spliced on; can't combine it with walk-back-lb verification.
     if stripped {
         return Ok(None);
     }
     Ok(fp)
 }
 
-/// True iff body's leading wide set is a superset of lb's last byte set.
 fn body_absorbs_lb(b: &mut RegexBuilder, body: NodeId, lb: NodeId) -> Result<bool, crate::Error> {
     let body_first = calc_potential_start(b, body, 1, 64, false)?;
     let lb_first = calc_potential_start(b, lb, 1, 64, false)?;
@@ -1104,8 +1040,6 @@ fn body_absorbs_lb(b: &mut RegexBuilder, body: NodeId, lb: NodeId) -> Result<boo
     };
     let body_bytes = b.solver().collect_bytes(bf);
     let lb_bytes = b.solver().collect_bytes(lf);
-    // Body's first set must be wide (uninformative as a Teddy fingerprint)
-    // AND must be a superset of the lb's byte alphabet.
     if body_bytes.len() < 64 {
         return Ok(false);
     }

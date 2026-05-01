@@ -1,5 +1,12 @@
 description = "prefix set and potential_start computation tests (matches engine runtime via ts_rev_start)"
 
+
+[[test]]
+name = "unsat"
+pattern = "foo&_*bar_*"
+prefix_rev = ""
+potential_fwd = ""
+
 [[test]]
 name = "alt-neg-la"
 pattern = "EMU-(?!CLAUSE|XREF|ANNEX|INTRO)|DFN"

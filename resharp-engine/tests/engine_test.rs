@@ -222,6 +222,20 @@ fn literal_alt_suffix_is_match() {
     assert!(!re.is_match(b"cat!").unwrap());
 }
 
+#[test]
+fn intersect_narrow_with_widened_term_is_sound() {
+    for pat in ["foo&_*bar_*", "foo&.*bar.*"] {
+        let re = Regex::with_options(pat, RegexOptions::default()).unwrap();
+        for input in ["foo", "foo baz", "foo bar", "barfoo", "foobar"] {
+            let ms = re.find_all(input.as_bytes()).unwrap();
+            assert!(
+                ms.is_empty(),
+                "pat={pat:?} input={input:?} unexpectedly matched: {ms:?}"
+            );
+        }
+    }
+}
+
 fn _assert_send_sync() {
     fn assert_send_sync<T: Send + Sync>() {}
     assert_send_sync::<Regex>();
@@ -1125,35 +1139,6 @@ fn fwd_la_3() {
     let ops = RegexOptions::default().unicode(resharp::UnicodeMode::Ascii);
     let re = Regex::with_options(pattern, ops).unwrap();
     let _ = re.find_all(&hay[..2]).unwrap();
-}
-
-#[test]
-fn word_boundary_rare_literal_modes() {
-    use resharp::{RegexOptions, UnicodeMode};
-    let bytes = std::fs::read(
-        "/home/ian/f/myrepos/resharp-wasm/test/data/haystacks/rust-src-tools-3b0d4813.txt",
-    )
-    .unwrap();
-    for mode in [
-        UnicodeMode::Ascii,
-        UnicodeMode::Default,
-        UnicodeMode::Javascript,
-    ] {
-        let re =
-            Regex::with_options("\\bGIT_PARAMS\\b", RegexOptions::default().unicode(mode)).unwrap();
-        let _ = re.find_all(&bytes).unwrap();
-        let t = std::time::Instant::now();
-        let m = re.find_all(&bytes).unwrap();
-        let dt = t.elapsed();
-        let mbps = (bytes.len() as f64 / 1e6) / dt.as_secs_f64();
-        eprintln!(
-            "mode={:?} matches={} dt={:?} MB/s={:.1}",
-            mode,
-            m.len(),
-            dt,
-            mbps
-        );
-    }
 }
 
 #[test]
