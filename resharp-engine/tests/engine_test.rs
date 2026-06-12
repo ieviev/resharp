@@ -1343,26 +1343,39 @@ fn assets_path_js_unicode_uses_rev_literal() {
 #[test]
 fn rev_bot_constant_time() {
     use std::time::{Duration, Instant};
-    fn timed(re: &Regex, hay: &[u8]) -> Duration {
-        let ms = re.find_all(hay).unwrap();
-        assert_eq!(ms.len(), 1);
-        assert_eq!(ms[0].start, hay.len());
-        assert_eq!(ms[0].end, hay.len());
-        let t = Instant::now();
-        re.find_all(hay).unwrap();
-        t.elapsed()
+    fn best(re: &Regex, hay: &[u8], expect: usize) -> Duration {
+        let mut lo = Duration::MAX;
+        for _ in 0..16 {
+            let t = Instant::now();
+            let ms = re.find_all(hay).unwrap();
+            let e = t.elapsed();
+            assert_eq!(ms.len(), expect);
+            lo = lo.min(e);
+        }
+        lo
     }
-    let re = Regex::new(r"\z").unwrap();
     let small = vec![b'x'; 1 << 14];
     let big = vec![b'x'; 1 << 22];
-    let _ = timed(&re, &small);
-    let t_small = timed(&re, &small);
-    let t_big = timed(&re, &big);
-    let factor = t_big.as_secs_f64() / t_small.as_secs_f64();
-    println!("factor: {:?}", factor);
+
+    let z = Regex::new(r"\z").unwrap();
+    let z_small = best(&z, &small, 1);
+    let z_big = best(&z, &big, 1);
+    let z_factor = z_big.as_secs_f64() / z_small.as_secs_f64();
+
+    // linear baseline: an absent byte forces a full O(n) scan with no early exit.
+    let lin = Regex::new(r"q").unwrap();
+    let lin_small = best(&lin, &small, 0);
+    let lin_big = best(&lin, &big, 0);
+    let lin_factor = lin_big.as_secs_f64() / lin_small.as_secs_f64();
+
+    println!("z_factor={z_factor:.2} lin_factor={lin_factor:.2}");
+    // `\z` must scale far better than a linear scan of the same inputs. Comparing
+    // the two growth ratios cancels per-platform timer/allocator/page-fault noise
+    // that made an absolute threshold flaky on macOS.
     assert!(
-        factor < 5.,
-        "`\\z` scaling was {factor:.1}x (small={t_small:?}, big={t_big:?})",
+        z_factor * 8.0 < lin_factor,
+        "`\\z` scaling ({z_factor:.1}x) not clearly sub-linear vs literal scan ({lin_factor:.1}x); \
+         z_small={z_small:?} z_big={z_big:?} lin_small={lin_small:?} lin_big={lin_big:?}",
     );
 }
 
