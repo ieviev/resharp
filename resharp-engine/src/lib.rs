@@ -52,6 +52,7 @@ pub(crate) mod ldfa;
 pub(crate) mod fas;
 pub(crate) mod minterms;
 pub(crate) mod fwd;
+pub(crate) mod ismatch;
 pub(crate) mod prefix;
 pub(crate) mod scan;
 pub(crate) mod stream;
@@ -1366,6 +1367,12 @@ impl Regex {
     }
 }
 
+fn push_end_zero_width(matches: &mut Vec<Match>, len: usize) {
+    if matches.last().map(|m| m.start) != Some(len) {
+        matches.push(Match { start: len, end: len });
+    }
+}
+
 fn compute_find_all(
     is_empty_lang: bool,
     fwd_begin_anchored: bool,
@@ -1592,7 +1599,7 @@ impl Regex {
     #[allow(missing_docs)]
     pub fn scan_fwd_debug(&self, input: &[u8], pos: usize) -> Option<usize> {
         let inner = &mut *self.inner.lock().unwrap_or_else(|e| e.into_inner());
-        inner.fwd.scan_fwd_slow(&mut inner.b, pos, input).unwrap()
+        inner.fwd.scan_fwd_optional(&mut inner.b, pos, input).unwrap()
     }
 
     /// Walk RTL step by step, printing the rev-DFA state and its nulls
@@ -1774,7 +1781,7 @@ impl Regex {
         let inner = &mut *self.inner.lock().unwrap_or_else(|e| e.into_inner());
         let mut pos = 0;
         while pos < input.len() {
-            if let Some(max_end) = inner.fwd.scan_fwd_slow(&mut inner.b, pos, input)? {
+            if let Some(max_end) = inner.fwd.scan_fwd_optional(&mut inner.b, pos, input)? {
                 if max_end > pos {
                     return Ok(vec![Match {
                         start: pos,
@@ -1811,12 +1818,7 @@ impl Regex {
             } = *inner;
             let fas = fas.as_mut().expect("fas initialized for always_nullable");
             fwd.scan_fwd_active_set::<true>(b, fas, input, &[], matches)?;
-            if matches.last().map(|m| m.start) != Some(input.len()) {
-                matches.push(Match {
-                    start: input.len(),
-                    end: input.len(),
-                });
-            }
+            push_end_zero_width(matches, input.len());
             return Ok(matches.clone());
         }
 
@@ -1842,12 +1844,7 @@ impl Regex {
             let fas = fas.as_mut().unwrap();
             if self.always_nullable {
                 fwd.scan_fwd_active_set::<true>(b, fas, input, nulls, matches)?;
-                if matches.last().map(|m| m.start) != Some(input.len()) {
-                    matches.push(Match {
-                        start: input.len(),
-                        end: input.len(),
-                    });
-                }
+                push_end_zero_width(matches, input.len());
             } else {
                 fwd.scan_fwd_active_set::<false>(b, fas, input, nulls, matches)?;
             }
@@ -1897,7 +1894,7 @@ impl Regex {
             return Ok(self.find_all(input)?.into_iter().next().filter(|m| m.start == 0));
         }
         let inner = &mut *self.inner.lock().unwrap_or_else(|e| e.into_inner());
-        Ok(inner.fwd.scan_fwd_slow(&mut inner.b, 0, input)?.map(|end| Match { start: 0, end }))
+        Ok(inner.fwd.scan_fwd_optional(&mut inner.b, 0, input)?.map(|end| Match { start: 0, end }))
     }
 
     /// longest match anchored at the string end (`\z`).
@@ -1912,29 +1909,4 @@ impl Regex {
             .map(|start| Match { start, end: len }))
     }
 
-    pub(crate) fn is_match_fwd_ts(&self, input: &[u8]) -> Result<bool, Error> {
-        let inner = &mut *self.inner.lock().unwrap_or_else(|e| e.into_inner());
-        Ok(inner.fwd_ts.scan_fwd_slow(&mut inner.b, 0, input)?.is_some())
-    }
-
-    /// whether the pattern matches anywhere in the input.
-    ///
-    /// faster than `find_all` when you only need a yes/no answer.
-    pub fn is_match(&self, input: &[u8]) -> Result<bool, Error> {
-        if input.is_empty() {
-            #[cfg(feature = "debug")]
-            eprintln!("[is_match] path=empty_input empty_nullable={}", self.empty_nullable);
-            return Ok(self.empty_nullable && !self.is_empty_lang);
-        }
-        #[cfg(all(feature = "debug", debug_assertions))]
-        eprintln!("[is_match] path={:?}", self.find_all);
-        match self.find_all {
-            FindAll::EmptyLang => Ok(false),
-            FindAll::Anchored => Ok(self.find_anchored(input)?.is_some()),
-            FindAll::EndAnchored => Ok(self.find_end_anchored(input)?.is_some()),
-            FindAll::Hardened | FindAll::Dfa => Ok(!self.find_all_dfa(input)?.is_empty()),
-            FindAll::Bounded |
-            FindAll::FwdPrefix | FindAll::FwdLbPrefix => self.is_match_fwd_ts(input),
-        }
-    }
 }

@@ -693,7 +693,7 @@ impl LDFA {
     }
 
     /// attempt to scan from this pos: may return non-match
-    pub(crate) fn scan_fwd_slow(
+    pub(crate) fn scan_fwd_optional(
         &mut self,
         b: &mut RegexBuilder,
         pos_begin: usize,
@@ -1152,7 +1152,6 @@ impl LDFA {
         self.collect_rev_inner::<false>(b, start_pos, data, nulls)
     }
 
-    #[allow(dead_code)]
     pub fn collect_rev_first(
         &mut self,
         b: &mut RegexBuilder,
