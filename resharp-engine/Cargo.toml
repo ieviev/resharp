@@ -52,14 +52,6 @@ schemars = "0.8"
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 criterion = "0.5"
 
-[[example]]
-name = "test_seek"
-required-features = ["stream"]
-
-[[example]]
-name = "bench_stream"
-required-features = ["stream"]
-
 [[bench]]
 name = "comparison"
 harness = false
