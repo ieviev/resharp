@@ -1176,6 +1176,10 @@ impl FwdRangeSearch {
 
 #[cfg(target_arch = "aarch64")]
 #[cfg_attr(debug_assertions, derive(Debug))]
+#[cfg_attr(
+    feature = "serialize",
+    derive(serde::Serialize, serde::Deserialize, Clone)
+)]
 pub struct FwdRangeSearch {
     pub(crate) len: usize,
     pub(crate) anchor_pos: usize,

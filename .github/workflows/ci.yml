@@ -28,6 +28,10 @@ jobs:
       # internal debug_assert! guards fail loudly here instead of being
       # compiled out.
       - run: cargo test --workspace
+      # non-default features are invisible to --workspace; the serialize
+      # feature bit-rotted once (load() missing five Regex fields) because
+      # nothing built it. compile and run the engine's tests with it on.
+      - run: cargo test --package resharp --features serialize
 
   clippy:
     runs-on: ubuntu-latest
