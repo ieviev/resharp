@@ -1,6 +1,43 @@
-//! All stream/seek methods return shortest matches (left-to-right, earliest end).
+/// REMOVED FROM PUBLIC API TILL SEMANTICS FINISHED.
+// //! All stream/seek methods return shortest matches (left-to-right, earliest end).
 
 use crate::{accel, ldfa, prefix, Error, Match, Nullability, Regex};
+use resharp_algebra::nulls::{EID_ALWAYS0, EID_BEGIN0, EID_CENTER0, EID_END0, EID_NONE};
+
+fn collect_valid_ends(dfa: &ldfa::LDFA, state: u32, pos: usize, len: usize, out: &mut Vec<usize>) {
+    out.clear();
+    let eid = dfa.effects_id[state as usize] as u32;
+    match eid {
+        EID_NONE => {}
+        EID_CENTER0 => {
+            if pos < len {
+                out.push(pos);
+            }
+        }
+        EID_ALWAYS0 => out.push(pos),
+        EID_BEGIN0 => {
+            if pos == 0 {
+                out.push(pos);
+            }
+        }
+        EID_END0 => {
+            if pos == len {
+                out.push(pos);
+            }
+        }
+        _ => {
+            for n in &dfa.effects[eid as usize] {
+                let Some(e) = pos.checked_sub(n.rel as usize) else { continue };
+                let ctx = if e == len { Nullability::END } else { Nullability::CENTER };
+                if n.mask.has(ctx) {
+                    out.push(e);
+                }
+            }
+            out.sort_unstable();
+            out.dedup();
+        }
+    }
+}
 
 fn begin_search_start(re: &Regex, input: &[u8]) -> Result<usize, Error> {
     let inner = &mut *re.inner.lock().unwrap();
@@ -224,35 +261,33 @@ fn try_emit_step<const REV: bool, F: FnMut(usize, usize)>(
     inner: &mut crate::RegexInner,
     input: &[u8],
     pos: usize,
-    mask: Nullability,
+    skip_until: &mut usize,
     state: u32,
-    last_match_end: &mut usize,
     emit: &mut F,
-) -> Result<bool, Error> {
-    let dfa = &inner.fwd_ts;
-    if !ldfa::has_any_null(&dfa.effects_id, &dfa.effects, state, mask) {
-        return Ok(false);
+) -> Result<Option<usize>, Error> {
+    let len = input.len();
+    let mut ends: Vec<usize> = Vec::new();
+    collect_valid_ends(&inner.fwd_ts, state, pos, len, &mut ends);
+    let mut resume: Option<usize> = None;
+    for &match_end in ends.iter() {
+        if match_end < *skip_until {
+            continue;
+        }
+        let m_start = if REV {
+            let rev = inner.rev.as_mut().unwrap();
+            let s = rev.scan_rev_from(&mut inner.b, match_end, *skip_until, input)?;
+            s.unwrap_or(match_end)
+        } else {
+            match_end
+        };
+        if m_start < *skip_until {
+            continue;
+        }
+        emit(m_start, match_end);
+        *skip_until = if match_end > m_start { match_end } else { match_end + 1 };
+        resume = Some(match_end);
     }
-    let mut match_end = ldfa::NO_MATCH;
-    ldfa::collect_max_fwd(
-        &dfa.effects_id,
-        &dfa.effects,
-        state,
-        pos,
-        mask,
-        &mut match_end,
-    );
-    let match_end = if match_end == ldfa::NO_MATCH { pos } else { match_end };
-    let m_start = if REV {
-        let rev = inner.rev.as_mut().unwrap();
-        let s = rev.scan_rev_from(&mut inner.b, match_end, *last_match_end, input)?;
-        *last_match_end = match_end;
-        s.unwrap_or(match_end)
-    } else {
-        match_end
-    };
-    emit(m_start, match_end);
-    Ok(true)
+    Ok(resume)
 }
 
 fn stream_general<const REV: bool, const STOP: bool, F: FnMut(usize, usize)>(
@@ -262,11 +297,11 @@ fn stream_general<const REV: bool, const STOP: bool, F: FnMut(usize, usize)>(
     input: &[u8],
     mut emit: F,
 ) -> Result<(), Error> {
-    let end = input.len();
-    let mut last_match_end = 0usize;
+    let mut skip_until = 0usize;
 
     if begin_nullable {
         emit(0, 0);
+        skip_until = 1;
         if STOP {
             return Ok(());
         }
@@ -276,7 +311,7 @@ fn stream_general<const REV: bool, const STOP: bool, F: FnMut(usize, usize)>(
             input,
             0,
             ldfa::DFA_INITIAL as u32,
-            &mut last_match_end,
+            &mut skip_until,
             &mut emit,
         )?;
         return Ok(());
@@ -284,28 +319,13 @@ fn stream_general<const REV: bool, const STOP: bool, F: FnMut(usize, usize)>(
 
     let mt0 = inner.fwd_ts.mt_lookup[input[0] as usize] as u32;
     let first = inner.fwd_ts.begin_table[mt0 as usize] as u32;
-    let pos = 1usize;
-    let mask = if pos < end {
-        Nullability::CENTER
-    } else {
-        Nullability::END
-    };
-    let emitted = try_emit_step::<REV, _>(
-        inner,
-        input,
-        pos,
-        mask,
-        first,
-        &mut last_match_end,
-        &mut emit,
-    )?;
-    if STOP && emitted {
+    let resume = try_emit_step::<REV, _>(inner, input, 1, &mut skip_until, first, &mut emit)?;
+    if STOP && resume.is_some() {
         return Ok(());
     }
-    let state = if emitted {
-        ldfa::DFA_INITIAL as u32
-    } else {
-        first
+    let (pos, state) = match resume {
+        Some(e) => (e, ldfa::DFA_INITIAL as u32),
+        None => (1usize, first),
     };
     stream_feed_loop::<REV, true, STOP, _>(
         inner,
@@ -313,7 +333,7 @@ fn stream_general<const REV: bool, const STOP: bool, F: FnMut(usize, usize)>(
         input,
         pos,
         state,
-        &mut last_match_end,
+        &mut skip_until,
         &mut emit,
     )?;
     Ok(())
@@ -330,7 +350,7 @@ fn stream_feed_loop<
     input: &[u8],
     mut pos: usize,
     init_state: u32,
-    last_match_end: &mut usize,
+    skip_until: &mut usize,
     emit: &mut F,
 ) -> Result<u32, Error> {
     let end = input.len();
@@ -371,16 +391,14 @@ fn stream_feed_loop<
             state = ldfa::DFA_INITIAL as u32;
             continue;
         }
-        let mask = if pos < end {
-            Nullability::CENTER
-        } else {
-            Nullability::END
-        };
-        let emitted = try_emit_step::<REV, _>(inner, input, pos, mask, next, last_match_end, emit)?;
-        if STOP && emitted {
+        let resume = try_emit_step::<REV, _>(inner, input, pos, skip_until, next, emit)?;
+        if STOP && resume.is_some() {
             return Ok(ldfa::DFA_INITIAL as u32);
         }
-        state = if emitted {
+        if let Some(e) = resume {
+            pos = e;
+        }
+        state = if resume.is_some() {
             ldfa::DFA_INITIAL as u32
         } else {
             next

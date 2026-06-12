@@ -285,6 +285,7 @@ fn fas_apply(
     linker: &mut [u32],
     max: &mut [usize],
     pos: usize,
+    data_end: usize,
     keep_spawn_on_merge: bool,
     spawn_allowed: bool,
 ) {
@@ -304,6 +305,10 @@ fn fas_apply(
             next_pos.checked_sub(rel as usize)
         } else {
             None
+        };
+        let candidate_end = match candidate_end {
+            Some(e) if e == data_end => None,
+            other => other,
         };
         if (code & FAS_LOW_BIT) != 0 {
             if let Some(ce) = candidate_end {
@@ -338,6 +343,7 @@ fn fas_apply(
                     } else {
                         0
                     };
+                    let candidate_end = if candidate_end == data_end { pos } else { candidate_end };
                     new_regs[idx].push_spawn(linker, pos as u32, candidate_end);
                 }
             }
@@ -349,6 +355,7 @@ fn fas_apply(
                 } else {
                     0
                 };
+                let candidate_end = if candidate_end == data_end { pos } else { candidate_end };
                 new_regs[idx].push_spawn(linker, pos as u32, candidate_end);
             }
         }
@@ -387,6 +394,7 @@ fn fas_step(
         linker,
         max,
         pos,
+        data.len(),
         fas.keep_spawn_on_merge,
         spawn_allowed,
     );
@@ -462,13 +470,17 @@ impl LDFA {
                             .map(|n| n.rel)
                             .unwrap_or(FAS_NOT_NULLABLE),
                     };
-                    let me = if rel != FAS_NOT_NULLABLE {
-                        1usize.saturating_sub(rel as usize)
-                    } else if self.initial_nullability.has(Nullability::BEGIN) {
+                    let begin_floor = if self.initial_nullability.has(Nullability::BEGIN) {
                         0
                     } else {
                         NO_END
                     };
+                    let me = if rel != FAS_NOT_NULLABLE {
+                        1usize.saturating_sub(rel as usize)
+                    } else {
+                        begin_floor
+                    };
+                    let me = if me == data_end { begin_floor } else { me };
                     let mut s0 = SlotEntries::default();
                     s0.push_spawn(&mut linker, 0u32, me);
                     regs.push(s0);

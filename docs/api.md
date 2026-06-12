@@ -93,6 +93,8 @@ pub enum Error {
 
 ## Streaming (experimental)
 
+> **Experimental, off by default.** Gated behind the `stream` Cargo feature (`features = ["stream"]`). Zero-width and anchored patterns can report phantom matches; see `TODO.md`. Not recommended for production.
+
 Streaming and cursor APIs return **shortest** matches (left-to-right, earliest end), not leftmost-longest. Authoritative source: [`resharp-engine/src/stream.rs`](../resharp-engine/src/stream.rs).
 
 | method | yields |

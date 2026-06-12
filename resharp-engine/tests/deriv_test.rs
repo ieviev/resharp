@@ -169,3 +169,29 @@ fn test_deriv_toml() {
         }
     }
 }
+
+fn end_nullable_after(pattern: &str, input: &[u8]) -> bool {
+    use resharp_algebra::nulls::Nullability;
+    let mut b = RegexBuilder::new();
+    let node = resharp_parser::parse_ast(&mut b, pattern).unwrap();
+    let n = input.len();
+    let mut cur = node;
+    for (i, &byte) in input.iter().enumerate() {
+        let der_mask = pos_mask(i, n);
+        let tset = b.solver().u8_to_set_id(byte);
+        let tregex = b.der(cur, der_mask).unwrap();
+        cur = b.transition_term(tregex, tset);
+    }
+    b.nullability(cur).has(Nullability::END)
+}
+
+#[test]
+fn deriv_complement_counted_z_not_end_nullable() {
+    assert!(
+        !end_nullable_after(r"~(.{1,3}\z){2,4}", b"ab"),
+        "(.{{1,3}}\\z){{2,4}} cannot complete 2 reps before \\z, so ~(...) matches 'ab' \
+         as a substring but NOT ending at the absolute end: residual must not be END-nullable"
+    );
+    assert!(!end_nullable_after(r"~(.{1,3}\z){2,4}", b"a"));
+    assert!(!end_nullable_after(r"~(.{1,3}\z)", b"ab"));
+}

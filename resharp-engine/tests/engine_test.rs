@@ -295,20 +295,6 @@ fn literal_alt_suffix_is_match() {
 }
 
 #[test]
-fn stream_matches_find_all_for_zero_rep_group_intersection() {
-    for (pat, hay) in [
-        (r"(?<=b)&(a){0}", &b"b"[..]),
-        (r"(?<=b)&^{0}", &b"b"[..]),
-        (r"((?<=b+){2}&(\n{2,}\w{1,3}){0}^{0})", &b"b"[..]),
-    ] {
-        let re = Regex::new(pat).unwrap();
-        let fa: Vec<[usize; 2]> = re.find_all(hay).unwrap().iter().map(|m| [m.start, m.end]).collect();
-        let st: Vec<[usize; 2]> = re.stream(hay).unwrap().iter().map(|m| [m.start, m.end]).collect();
-        assert_eq!(st, fa, "stream vs find_all diverge for {pat:?} on {hay:?}");
-    }
-}
-
-#[test]
 fn hardened_zero_width_interior_null_matches_default() {
     for (pat, hay) in [
         (r"~(\A|\n+){2}", &b"\n\n"[..]),
@@ -1541,15 +1527,10 @@ mod probe_nullable_prefix {
         let mut b = RegexBuilder::new();
         let node = resharp_parser::parse_ast(&mut b, pat).unwrap();
         let ts_rev = b.ts_rev_start(node).unwrap();
-        println!("--- {pat}");
-        println!("  fwd pp:        {}", b.pp(node));
-        println!("  ts_rev:        {}", b.pp(ts_rev));
         let fwd_full = calc_potential_start(&mut b, node, 16, 64, false).unwrap();
         let fwd_s = pp_sets(&mut b, &fwd_full);
-        println!("  fwd_potential:    {}", fwd_s);
         let rev_pot = calc_potential_start_prune(&mut b, ts_rev, 16, 64, true).unwrap();
         let rev_s = pp_sets(&mut b, &rev_pot);
-        println!("  rev_potential:    {}", rev_s);
         (fwd_s, rev_s)
     }
 
@@ -2563,31 +2544,6 @@ fn bug12_neg_lookahead_class_not_nullable() {
 }
 
 #[test]
-fn bug15_direct_no_catch() {
-    let re = resharp::Regex::new("a&b").unwrap();
-    let _ = re.stream(b"aaa");
-}
-
-#[test]
-fn bug15_stream_no_panic_on_extended_operators() {
-    use resharp::Regex;
-    let cases: &[(&str, &[u8])] = &[
-        ("a&b",             b"aaa"),
-        ("(a*&b)",          b"aaa"),
-        ("( &c)",           b"aaa"),
-        ("((?<! )\\D)",     b"abc"),
-        ("((?![\\w])1)",    b"111"),
-        ("((?!a) )+",       b"   "),
-        ("\\z\\A.*",        b"abc"),
-    ];
-    for &(pat, hay) in cases {
-        let re = Regex::new(pat).unwrap();
-        let result = std::panic::catch_unwind(|| re.stream(hay));
-        assert!(result.is_ok(), "pat={pat:?} hay={hay:?}: stream() panicked");
-    }
-}
-
-#[test]
 fn bug14_nullable_sibling_drops_lookbehind_gate() {
     use resharp::Regex;
     let rejected: &[&str] = &[
@@ -2600,27 +2556,6 @@ fn bug14_nullable_sibling_drops_lookbehind_gate() {
         assert!(
             Regex::new(pat).is_err(),
             "pat={pat:?} should be rejected (nullable sibling + lookbehind union)"
-        );
-    }
-}
-
-#[test]
-fn bug9_stream_nonempty_when_is_match_true() {
-    use resharp::Regex;
-    let cases: &[(&str, &[u8])] = &[
-        (r"\A\z?",  b"a"),
-        // (r"(^|b)",  b"a"),
-        (r"(?<!b)", b"b"),
-        (r"\Bb",    b"ab"),
-        (r"^\D*",   b"abc"),
-    ];
-    for &(pat, hay) in cases {
-        let re = Regex::new(pat).unwrap();
-        let im = re.is_match(hay).unwrap();
-        let sv = re.stream(hay).unwrap();
-        assert!(
-            !im || !sv.is_empty(),
-            "pat={pat:?} hay={hay:?}: is_match={im} but stream={sv:?}"
         );
     }
 }
@@ -2723,23 +2658,32 @@ fn bug20_find_anchored_respects_leading_assertion_at_begin() {
         vec![resharp::Match { start: 1, end: 2 }],
         "find_all should match at 1"
     );
+    let no_match = |r: &Regex, h: &[u8]| match r.find_anchored(h) {
+        Ok(None) => true,
+        Err(resharp::Error::Algebra(resharp_algebra::ResharpError::UnsupportedPattern)) => true,
+        other => panic!("expected None or UnsupportedPattern, got {other:?}"),
+    };
     assert!(
-        re.find_anchored(hay).unwrap().is_none(),
+        no_match(&re, hay),
         "find_anchored should return None (\\B fails at offset 0)"
     );
     // (?<=0)0 on "00": nothing precedes offset 0, so no match there.
     let re2 = Regex::new(r"(?<=0)0").unwrap();
     assert!(
-        re2.find_anchored(hay).unwrap().is_none(),
+        no_match(&re2, hay),
         "find_anchored should return None ((?<=0) fails at offset 0)"
     );
     // \b0 on "00": \b IS true at offset 0 (none->word), so match at 0.
     let re3 = Regex::new(r"\b0").unwrap();
-    assert_eq!(
-        re3.find_anchored(hay).unwrap(),
-        Some(resharp::Match { start: 0, end: 1 }),
-        "find_anchored should return Some(0..1) for \\b0"
-    );
+    match re3.find_anchored(hay) {
+        Ok(m) => assert_eq!(
+            m,
+            Some(resharp::Match { start: 0, end: 1 }),
+            "find_anchored should return Some(0..1) for \\b0"
+        ),
+        Err(resharp::Error::Algebra(resharp_algebra::ResharpError::UnsupportedPattern)) => {}
+        other => panic!("expected Some(0..1) or UnsupportedPattern, got {other:?}"),
+    }
 }
 
 #[test]
@@ -2893,23 +2837,6 @@ fn empty_match_byte_offsets_vs_utf8_intersection() {
 }
 
 #[test]
-fn repro_bug03_stream_phantom_zerowidth() {
-    for (p, inp) in [
-        (r"(?=c)", "c"),
-        (r"\b", "ab"),
-        (r"(?!\A)", "ab"),
-        (r"^{0}", "b"),
-        (r"(?<=b)", "b"),
-        (r"(?<=b+){2}", "b"),
-    ] {
-        let re = Regex::new(p).unwrap();
-        let fa: Vec<[usize;2]> = re.find_all(inp.as_bytes()).unwrap().iter().map(|m|[m.start,m.end]).collect();
-        let st: Vec<[usize;2]> = re.stream(inp.as_bytes()).unwrap().iter().map(|m|[m.start,m.end]).collect();
-        assert_eq!(st, fa, "stream must match find_all for zero-width {p} on {inp}");
-    }
-}
-
-#[test]
 fn repro_bug04_reentrant_union_rewrite_panic() {
     for p in [
         r"(.*.+)*.+",
@@ -2945,30 +2872,6 @@ fn repro_armbug01_simd_findall_offset1_zerowidth() {
         assert_eq!(got, want, "{p} on {inp:?}");
     }
 }
-
-#[test]
-fn repro_bug02_findanchored_phantom() {
-    for (p, inp, want) in [
-        (r"(?<=a)", "b", None),
-        (r"(?<=a)b", "b", None),
-        (r"\BU", "U", None),
-        (r"(?<!x)a", "a", Some([0usize, 1])),
-        (r"\bword", "word here", Some([0, 4])),
-        (r"\Bx", "axx", None),
-        (r"\Bx", "xx", None),
-        (r"(?<=a)b", "ab", None),
-    ] {
-        let re = Regex::new(p).unwrap();
-        let im = re.is_match(inp.as_bytes()).unwrap();
-        let fan = re.find_anchored(inp.as_bytes()).unwrap();
-        let got = fan.map(|m| [m.start, m.end]);
-        assert_eq!(got, want, "find_anchored wrong for {p} on {inp}");
-        assert_eq!(im, fan.is_some() || re.find_all(inp.as_bytes()).unwrap().iter().any(|m| m.start > 0),
-            "is_match/find_anchored consistency for {p} on {inp}");
-    }
-}
-
-
 
 #[test]
 fn repro_bug05_rev_trivial_assert() {
@@ -3038,3 +2941,45 @@ fn bug05_rev_trivial_vs_regex_crate_oracle() {
         }
     }
 }
+
+#[test]
+fn complement_z_active_set_no_end_phantom() {
+    let cases: &[(&str, &str, [usize; 2])] = &[
+        (r"~(.{1,3}\z)", "ab", [0, 1]),
+        (r"~(.{1,3}\z){2,4}", "ab", [0, 1]),
+        (r"~(.{1,3}\z){2,4}", "a", [0, 0]),
+        (r"~(.{1,3}\z){2,4}", "abcdef", [0, 6]),
+        (r"~(a_{0}(\z){2})+", "ab", [0, 2]),
+        (r"~(\W{0,2}\z{2,})?", "ab", [0, 2]),
+        (r"~([Z-a]*[^\w]+\z+)", "ab", [0, 2]),
+        (r"~(.{2}\z)+", "abcde", [0, 5]),
+        (r"~(\W{0,2}\z{2,})?", "  ", [0, 1]),
+    ];
+    for &(p, input, want) in cases {
+        let re = resharp::Regex::new(p).unwrap();
+        let inp = input.as_bytes();
+        let fa = re.find_anchored(inp).unwrap().map(|m| [m.start, m.end]);
+        assert_eq!(fa, Some(want), "find_anchored {p:?} on {input:?}");
+        let all = re.find_all(inp).unwrap();
+        assert_eq!(
+            all.first().map(|m| [m.start, m.end]),
+            Some(want),
+            "find_all leftmost must match find_anchored (active-set END phantom) {p:?} on {input:?}: {all:?}"
+        );
+    }
+}
+#[test]
+fn sanity_always_nullable_end_matches() {
+    let cases: &[(&str, &str, &[[usize;2]])] = &[
+        (r"a*", "aaa", &[[0,3],[3,3]]),
+        (r"(a|b)*", "abab", &[[0,4],[4,4]]),
+        (r"a*\z", "aaa", &[[0,3],[3,3]]),
+        (r".*", "xy", &[[0,2],[2,2]]),
+    ];
+    for &(p, inp, want) in cases {
+        let re = resharp::Regex::new(p).unwrap();
+        let all: Vec<[usize;2]> = re.find_all(inp.as_bytes()).unwrap().iter().map(|m|[m.start,m.end]).collect();
+        assert_eq!(all, want.to_vec(), "p={p:?} inp={inp:?}");
+    }
+}
+

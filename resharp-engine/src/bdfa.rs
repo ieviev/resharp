@@ -668,6 +668,7 @@ pub(crate) fn bdfa_scan<const PREFIX: u8, const ISMATCH: bool>(
 
 impl Regex {
     pub(crate) fn find_all_fwd_bounded(&self, input: &[u8]) -> Result<Vec<Match>, Error> {
+        debug_assert!(!input.is_empty());
         let crate::RegexInner {
             b,
             bounded,

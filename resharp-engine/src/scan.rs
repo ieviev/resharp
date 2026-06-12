@@ -378,6 +378,7 @@ pub(crate) fn scan_fwd_verify<const SKIP: bool>(
 /// Like `scan_fwd_verify` but stops at the first potentially CENTER-nullable state.
 /// Class skip is safe: self-looping non-nullable states produce identical transitions.
 #[inline(never)]
+#[cfg_attr(not(feature = "stream"), allow(dead_code))]
 pub(crate) fn scan_fwd_first_null<const SKIP: bool>(
     t: &ScanTables,
     effects_id: *const u16,

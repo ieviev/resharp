@@ -3,6 +3,13 @@ earliest matches for streaming
 '''
 
 [[test]]
+name = "endanch"
+pattern = "$"
+input = "\n"
+matches = [[0, 0],[1, 1]]
+
+
+[[test]]
 name = "basic_ab"
 pattern = "ab"
 input = "abxxabab"

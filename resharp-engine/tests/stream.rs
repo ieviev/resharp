@@ -1,7 +1,82 @@
+#![cfg(feature = "stream")]
 mod common;
 use common::schemas::EngineFile;
 use resharp::Regex;
 use std::path::Path;
+
+#[test]
+fn stream_matches_find_all_for_zero_rep_group_intersection() {
+    for (pat, hay) in [
+        (r"(?<=b)&(a){0}", &b"b"[..]),
+        (r"(?<=b)&^{0}", &b"b"[..]),
+        (r"((?<=b+){2}&(\n{2,}\w{1,3}){0}^{0})", &b"b"[..]),
+    ] {
+        let re = Regex::new(pat).unwrap();
+        let fa: Vec<[usize; 2]> = re.find_all(hay).unwrap().iter().map(|m| [m.start, m.end]).collect();
+        let st: Vec<[usize; 2]> = re.stream(hay).unwrap().iter().map(|m| [m.start, m.end]).collect();
+        assert_eq!(st, fa, "stream vs find_all diverge for {pat:?} on {hay:?}");
+    }
+}
+
+#[test]
+fn bug15_direct_no_catch() {
+    let re = resharp::Regex::new("a&b").unwrap();
+    let _ = re.stream(b"aaa");
+}
+
+#[test]
+fn bug15_stream_no_panic_on_extended_operators() {
+    let cases: &[(&str, &[u8])] = &[
+        ("a&b",             b"aaa"),
+        ("(a*&b)",          b"aaa"),
+        ("( &c)",           b"aaa"),
+        ("((?<! )\\D)",     b"abc"),
+        ("((?![\\w])1)",    b"111"),
+        ("((?!a) )+",       b"   "),
+        ("\\z\\A.*",        b"abc"),
+    ];
+    for &(pat, hay) in cases {
+        let re = Regex::new(pat).unwrap();
+        let result = std::panic::catch_unwind(|| re.stream(hay));
+        assert!(result.is_ok(), "pat={pat:?} hay={hay:?}: stream() panicked");
+    }
+}
+
+#[test]
+fn bug9_stream_nonempty_when_is_match_true() {
+    let cases: &[(&str, &[u8])] = &[
+        (r"\A\z?",  b"a"),
+        (r"(?<!b)", b"b"),
+        (r"\Bb",    b"ab"),
+        (r"^\D*",   b"abc"),
+    ];
+    for &(pat, hay) in cases {
+        let re = Regex::new(pat).unwrap();
+        let im = re.is_match(hay).unwrap();
+        let sv = re.stream(hay).unwrap();
+        assert!(
+            !im || !sv.is_empty(),
+            "pat={pat:?} hay={hay:?}: is_match={im} but stream={sv:?}"
+        );
+    }
+}
+
+#[test]
+fn repro_bug03_stream_phantom_zerowidth() {
+    for (p, inp) in [
+        (r"(?=c)", "c"),
+        (r"\b", "ab"),
+        (r"(?!\A)", "ab"),
+        (r"^{0}", "b"),
+        (r"(?<=b)", "b"),
+        (r"(?<=b+){2}", "b"),
+    ] {
+        let re = Regex::new(p).unwrap();
+        let fa: Vec<[usize;2]> = re.find_all(inp.as_bytes()).unwrap().iter().map(|m|[m.start,m.end]).collect();
+        let st: Vec<[usize;2]> = re.stream(inp.as_bytes()).unwrap().iter().map(|m|[m.start,m.end]).collect();
+        assert_eq!(st, fa, "stream must match find_all for zero-width {p} on {inp}");
+    }
+}
 
 #[test]
 fn stream_toml() {

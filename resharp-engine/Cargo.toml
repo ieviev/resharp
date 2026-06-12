@@ -17,6 +17,9 @@ doctest = false
 
 [features]
 default = []
+# experimental, off by default: zero-width / anchored patterns can report phantom
+# matches (see TODO.md). do not enable in production.
+stream = []
 debug = ["resharp-algebra/debug"]
 diag = []
 precompile-tests = []
@@ -48,6 +51,14 @@ schemars = "0.8"
 # rayon doesn't compile on wasi
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 criterion = "0.5"
+
+[[example]]
+name = "test_seek"
+required-features = ["stream"]
+
+[[example]]
+name = "bench_stream"
+required-features = ["stream"]
 
 [[bench]]
 name = "comparison"

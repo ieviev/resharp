@@ -38,7 +38,7 @@ pub fn has_simd() -> bool {
     {
         std::arch::is_x86_feature_detected!("avx2")
     }
-    #[cfg(target_arch = "aarch64")]
+    #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
     {
         true
     }

@@ -39,11 +39,11 @@
 
 #[cfg(not(any(
     target_arch = "x86_64",
-    target_arch = "aarch64",
+    all(target_arch = "aarch64", target_feature = "neon"),
     all(target_arch = "wasm32", target_feature = "simd128")
 )))]
 compile_error!(
-    "resharp requires a SIMD-capable target: x86_64, aarch64, or wasm32 with target_feature=simd128"
+    "resharp requires a SIMD-capable target: x86_64, aarch64 with target_feature=neon, or wasm32 with target_feature=simd128"
 );
 
 pub(crate) mod accel;
@@ -55,7 +55,9 @@ pub(crate) mod fwd;
 pub(crate) mod ismatch;
 pub(crate) mod prefix;
 pub(crate) mod scan;
+#[cfg(feature = "stream")]
 pub(crate) mod stream;
+#[cfg(feature = "stream")]
 pub use stream::StreamState;
 
 #[cfg(feature = "serialize")]
@@ -274,8 +276,10 @@ pub(crate) struct RegexInner {
     pub(crate) b: RegexBuilder,
     pub(crate) fwd: ldfa::LDFA,
     pub(crate) fwd_ts: ldfa::LDFA,
+    #[cfg_attr(not(feature = "stream"), allow(dead_code))]
     pub(crate) rev: Option<ldfa::LDFA>,
     pub(crate) rev_ts: ldfa::LDFA,
+    #[cfg(feature = "stream")]
     pub(crate) stream: stream::StreamInit,
     pub(crate) nulls: Vec<usize>,
     pub(crate) matches: Vec<Match>,
@@ -316,6 +320,7 @@ pub struct Regex {
     pub(crate) has_lb: bool,
     pub(crate) has_la: bool,
     pub(crate) find_all: FindAll,
+    #[cfg(feature = "stream")]
     pub(crate) stream_cache: stream::StreamCache,
 }
 
@@ -1027,10 +1032,10 @@ impl Regex {
             .has(Nullability::EMPTYSTRING);
         let initial_nullability = b.nullability(node);
 
-        let node = b.simplify_fwd_initial(node);
-        let fwd_start = b.strip_lb(node)?;
+        let node_fwd_simpl = b.simplify_fwd_initial(node);
+        let fwd_start = b.strip_lb(node_fwd_simpl)?;
         let fwd_end_nullable = b.nullability(fwd_start).has(Nullability::END);
-        let ts_rev_start = b.ts_rev_start(node)?;
+        let ts_rev_start = b.ts_rev_start(node_fwd_simpl)?;
         // ensure_supported_rec(&mut b, ts_rev_start, true, false)?;
         #[cfg(feature = "debug")]
         {
@@ -1038,22 +1043,22 @@ impl Regex {
             eprintln!("[ts_rev]: {:.70}", b.pp(ts_rev_start));
         }
 
-        let is_empty_lang = node == NodeId::BOT;
+        let is_empty_lang = node_fwd_simpl == NodeId::BOT;
         // TODO: make it configurable to actually check and reject empty lang entriely
         let body_after_begin = {
-            let mut cur = node;
+            let mut cur = node_fwd_simpl;
             while b.get_kind(cur) == resharp_algebra::Kind::Concat && cur.left(&b) == NodeId::BEGIN {
                 cur = cur.right(&b);
             }
             cur
         };
         let lb_stripped = fwd_start != body_after_begin;
-        let fwd_begin_anchored = b.is_begin_anchored(node) && !lb_stripped;
-        let has_look = b.contains_look(node);
-        let rev_node = b.reverse(node)?;
+        let fwd_begin_anchored = b.is_begin_anchored(node_fwd_simpl) && !lb_stripped;
+        let has_look = b.contains_look(node_fwd_simpl);
+        let rev_node = b.reverse(node_fwd_simpl)?;
         let rev_end_anchored = b.is_begin_anchored(rev_node) && !fwd_end_nullable;
-        let fixed_length = b.get_fixed_length(node);
-        let (min_len, max_len) = b.get_min_max_length(node);
+        let fixed_length = b.get_fixed_length(node_fwd_simpl);
+        let (min_len, max_len) = b.get_min_max_length(node_fwd_simpl);
         let max_length = if max_len != u32::MAX {
             Some(max_len)
         } else {
@@ -1061,14 +1066,14 @@ impl Regex {
         };
         let max_cap = opts.max_dfa_capacity.min(u16::MAX as usize);
         let mut opts = opts;
-        let has_anchors_pre = b.contains_anchors(node);
+        let has_anchors_pre = b.contains_anchors(node_fwd_simpl);
         let ah = auto_harden(&mut b, fwd_start, has_anchors_pre);
         if !opts.hardened && ah.full {
             opts.hardened = true;
         }
         let (selected, rev_skip) = prefix::select_prefix(
             &mut b,
-            node,
+            node_fwd_simpl,
             ts_rev_start,
             has_look,
             min_len,
@@ -1095,8 +1100,12 @@ impl Regex {
 
         let ts_fwd_start = {
             let with_ts = b.mk_concat(NodeId::TS, node);
-            b.simplify_fwd_initial(with_ts)
+            // b.simplify_fwd_initial(with_ts)
+            with_ts
         };
+        // println!("{:?}", b.pp(node));
+        // println!("{:?}", b.pp(ts_fwd_start));
+        #[allow(unused_mut)]
         let mut ts_fwd = ldfa::LDFA::new_fwd(&mut b, ts_fwd_start, max_cap)?;
 
         let mut rev_ts = ldfa::LDFA::new_rev(&mut b, ts_rev_start, max_cap)?;
@@ -1106,11 +1115,12 @@ impl Regex {
             rev_ts.ensure_dead_skip();
         }
 
+        #[cfg(feature = "stream")]
         let stream_init = {
             let fwd_pruned = b.prune_begin_eps(ts_fwd_start);
             let rev_pruned = b.prune_begin_eps(ts_rev_start);
             stream::StreamInit {
-                start_node: node,
+                start_node: node_fwd_simpl,
                 seek_fwd: ts_fwd.get_or_register(&mut b, fwd_pruned).into(),
                 seek_rev: rev_ts.get_or_register(&mut b, rev_pruned).into(),
             }
@@ -1118,7 +1128,7 @@ impl Regex {
 
         let (fwd_lb_begin_nullable, fwd_lb_body_nullable, lb_check_bytes) =
             if matches!(selected, Some(prefix::PrefixKind::AnchoredFwdLb(_))) {
-                let lb_inner = b.get_lookbehind_inner(node.left(&b));
+                let lb_inner = b.get_lookbehind_inner(node_fwd_simpl.left(&b));
                 let lb_nonbegin = b.nonbegins(lb_inner);
                 let mut lb_stripped = lb_nonbegin;
                 loop {
@@ -1143,9 +1153,9 @@ impl Regex {
         let use_bounded = !has_fwd_prefix
             && max_length.is_some()
             && max_len <= 100
-            && !b.contains_lookbehind(node)
-            && !node.contains_lookahead(&b)
-            && !b.contains_anchors(node)
+            && !b.contains_lookbehind(node_fwd_simpl)
+            && !node_fwd_simpl.contains_lookahead(&b)
+            && !b.contains_anchors(node_fwd_simpl)
             && pattern_len <= 150 // a guess..
             && !empty_nullable;
 
@@ -1157,16 +1167,16 @@ impl Regex {
 
         let has_bounded = bounded.is_some();
         let bounded_safe_find_all = if has_bounded {
-            let inner_match = b.mk_concat(node, resharp_algebra::NodeId::TOPPLUS);
+            let inner_match = b.mk_concat(node_fwd_simpl, resharp_algebra::NodeId::TOPPLUS);
             let interior = b.mk_concat(resharp_algebra::NodeId::TOPPLUS, inner_match);
-            let overlap = b.mk_inter(node, interior);
+            let overlap = b.mk_inter(node_fwd_simpl, interior);
             b.is_empty_lang(overlap) == Some(true)
         } else {
             false
         };
-        let has_anchors = b.contains_anchors(node);
-        let has_lb = b.contains_lookbehind(node);
-        let has_la = node.contains_lookahead(&b);
+        let has_anchors = b.contains_anchors(node_fwd_simpl);
+        let has_lb = b.contains_lookbehind(node_fwd_simpl);
+        let has_la = node_fwd_simpl.contains_lookahead(&b);
 
         let hardened = if opts.hardened && !has_bounded && fixed_length.is_none() && max_cap >= 64 {
             fwd.has_nonnullable_cycle(&mut b, 256)
@@ -1193,6 +1203,7 @@ impl Regex {
                 fwd_ts: ts_fwd,
                 rev: None,
                 rev_ts,
+                #[cfg(feature = "stream")]
                 stream: stream_init,
                 nulls: Vec::new(),
                 matches: Vec::new(),
@@ -1225,6 +1236,7 @@ impl Regex {
             has_anchors,
             has_lb,
             has_la,
+            #[cfg(feature = "stream")]
             stream_cache: Default::default(),
         })
     }
@@ -1321,6 +1333,12 @@ impl Regex {
         (fwd, rev)
     }
 
+    // sole verdict for empty input: a zero-width match at 0 iff the empty
+    // string is in the language.
+    pub(crate) fn empty_input_match(&self) -> Option<Match> {
+        (self.empty_nullable && !self.is_empty_lang).then_some(Match { start: 0, end: 0 })
+    }
+
     /// all non-overlapping leftmost-first matches as `[start, end)` byte ranges.
     ///
     /// ```
@@ -1331,11 +1349,7 @@ impl Regex {
     /// ```
     pub fn find_all(&self, input: &[u8]) -> Result<Vec<Match>, Error> {
         if input.is_empty() {
-            return if self.empty_nullable && !self.is_empty_lang {
-                Ok(vec![Match { start: 0, end: 0 }])
-            } else {
-                Ok(vec![])
-            };
+            return Ok(self.empty_input_match().into_iter().collect());
         }
 
         #[cfg(all(feature = "debug", debug_assertions))]
@@ -1884,16 +1898,13 @@ impl Regex {
     /// returns `None` if the pattern does not match at position 0.
     pub fn find_anchored(&self, input: &[u8]) -> Result<Option<Match>, Error> {
         if input.is_empty() {
-            return if self.empty_nullable {
-                Ok(Some(Match { start: 0, end: 0 }))
-            } else {
-                Ok(None)
-            };
-        }
-        if (self.has_lb || self.has_anchors) && self.find_all != FindAll::Anchored {
-            return Ok(self.find_all(input)?.into_iter().next().filter(|m| m.start == 0));
+            return Ok(self.empty_input_match());
         }
         let inner = &mut *self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        if self.has_lb {
+            // ugly scenario for find_anchored, easier to reject it than to special case it
+            return Err(Error::Algebra(resharp_algebra::ResharpError::UnsupportedPattern))
+        }
         Ok(inner.fwd.scan_fwd_optional(&mut inner.b, 0, input)?.map(|end| Match { start: 0, end }))
     }
 
@@ -1901,6 +1912,7 @@ impl Regex {
     ///
     /// returns `None` if the pattern does not match ending at the string end.
     pub(crate) fn find_end_anchored(&self, input: &[u8]) -> Result<Option<Match>, Error> {
+        debug_assert!(!input.is_empty());
         let len = input.len();
         let inner = &mut *self.inner.lock().unwrap_or_else(|e| e.into_inner());
         Ok(inner

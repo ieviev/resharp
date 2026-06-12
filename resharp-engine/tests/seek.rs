@@ -1,3 +1,4 @@
+#![cfg(feature = "stream")]
 use resharp::Regex;
 
 fn build_input() -> (Vec<u8>, Vec<usize>) {

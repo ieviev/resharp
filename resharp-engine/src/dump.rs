@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use crate::bdfa::BDFA;
 use crate::ldfa::{DFA_DEAD, LDFA};
 use crate::prefix::PrefixKind;
+#[cfg(feature = "stream")]
 use crate::stream::{StreamCache, StreamInit};
 use crate::{Error, FindAll, Match, Regex, RegexInner};
 
@@ -227,6 +228,7 @@ impl Regex {
                 fwd_ts: empty_ldfa(),
                 rev: None,
                 rev_ts: dump.rev_ts.unwrap_or_else(empty_ldfa),
+                #[cfg(feature = "stream")]
                 stream: StreamInit {
                     start_node: NodeId::MISSING,
                     seek_fwd: 0,
@@ -256,6 +258,7 @@ impl Regex {
             lb_check_bytes: dump.lb_check_bytes,
             fwd_lb_begin_nullable: dump.fwd_lb_begin_nullable,
             has_anchors: dump.has_anchors,
+            #[cfg(feature = "stream")]
             stream_cache: StreamCache::default(),
         })
     }

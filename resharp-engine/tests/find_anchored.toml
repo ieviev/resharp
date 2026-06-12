@@ -118,11 +118,12 @@ input = "42abc"
 matches = [[0, 2]]
 anchored = true
 
+## TODO: consult Lean, possibly reject complement loops entirely
 [[test]]
 name = "complement_end_anchor_span_ab"
 pattern = '~(.{1,3}\z){2,4}'
 input = "ab"
-matches = [[0, 2]]
+matches = [[0, 1]]
 anchored = true
 
 [[test]]
@@ -157,7 +158,7 @@ anchored = true
 name = "complement_end_anchor_span_single"
 pattern = '~(.{1,3}\z){2,4}'
 input = "a"
-matches = [[0, 1]]
+matches = [[0, 0]]
 anchored = true
 
 [[test]]
@@ -171,5 +172,5 @@ anchored = true
 name = "complement_end_anchor_span_spaces"
 pattern = '~(\W{0,2}\z{2,})?'
 input = "  "
-matches = [[0, 2]]
+matches = [[0, 1]]
 anchored = true

@@ -711,6 +711,8 @@ impl LDFA {
 
         let mt = self.mt_lookup[data[pos_begin] as usize];
         let mut curr = self.begin_table[mt as usize] as u32;
+        #[cfg(feature = "debug")]
+        eprintln!("[sfo] begin curr={curr} max_end={max_end}");
         if curr <= DFA_DEAD as u32 {
             return Ok(found(max_end));
         }
@@ -735,6 +737,8 @@ impl LDFA {
             let (state, new_pos, new_max, cache_miss) =
                 self.dispatch_scan_fwd(&tables, curr, pos, end, max_end);
             max_end = new_max;
+            #[cfg(feature = "debug")]
+            eprintln!("[sfo] dispatch state={state} new_pos={new_pos} new_max={new_max} miss={cache_miss}");
 
             if !cache_miss {
                 break;
@@ -744,7 +748,10 @@ impl LDFA {
             self.create_state(b, sid)?;
 
             let mt = self.mt_lookup[data[new_pos] as usize] as u32;
-            curr = self.center_table[self.dfa_delta(sid, mt)] as u32;
+            // build a MISSING target instead of reading center_table directly:
+            // DFA_MISSING (0) <= DFA_DEAD (1), so an uncreated final state would
+            // otherwise break before the END-context collect below.
+            curr = self.lazy_transition(b, sid, mt)? as u32;
             pos = new_pos + 1;
             if curr <= DFA_DEAD as u32 {
                 break;
@@ -760,11 +767,15 @@ impl LDFA {
                 center_or_end(pos == end),
                 &mut max_end,
             );
+            #[cfg(feature = "debug")]
+            eprintln!("[sfo] miss-step curr={curr} pos={pos} end={end} max_end={max_end}");
 
             if pos == end {
                 break;
             }
         }
+        #[cfg(feature = "debug")]
+        eprintln!("[sfo] return max_end={max_end}");
 
         Ok(found(max_end))
     }
@@ -950,6 +961,7 @@ impl LDFA {
     /// Advance the DFA from `state`/`pos_begin` until a CENTER-nullable state or end of input.
     /// Returns `(state, pos, hit_null)`: `hit_null=true` means CENTER-nullable (verify with
     /// `has_any_null`); `hit_null=false` means either DFA_DEAD or input exhausted.
+    #[cfg_attr(not(feature = "stream"), allow(dead_code))]
     pub(crate) fn scan_fwd_first_null_from(
         &mut self,
         b: &mut RegexBuilder,
@@ -996,6 +1008,7 @@ impl LDFA {
     }
 
     #[inline(always)]
+    #[cfg_attr(not(feature = "stream"), allow(dead_code))]
     fn dispatch_scan_fwd_first_null(
         &self,
         tables: &ScanTables,

@@ -156,6 +156,7 @@ impl Regex {
         fwd_prefix: &FwdPrefixSearch,
         input: &[u8],
     ) -> Result<Vec<Match>, Error> {
+        debug_assert!(!input.is_empty());
         let inner = &mut *self.inner.lock().unwrap();
         inner.matches.clear();
         fwd_prefix_impl(
@@ -176,6 +177,7 @@ impl Regex {
         fwd_prefix: &FwdPrefixSearch,
         input: &[u8],
     ) -> Result<Vec<Match>, Error> {
+        debug_assert!(!input.is_empty());
         let inner = &mut *self.inner.lock().unwrap();
         inner.matches.clear();
         fwd_lb_prefix_impl(

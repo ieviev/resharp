@@ -34,7 +34,7 @@ impl Regex {
                 "[is_match] path=empty_input empty_nullable={}",
                 self.empty_nullable
             );
-            return Ok(self.empty_nullable && !self.is_empty_lang);
+            return Ok(self.empty_input_match().is_some());
         }
         #[cfg(all(feature = "debug", debug_assertions))]
         eprintln!("[is_match] path={:?}", self.find_all);
