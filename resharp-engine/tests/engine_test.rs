@@ -155,7 +155,7 @@ fn normal_anchors() {
 
 #[test]
 #[ignore = "takes a long time; run only for releases"]
-fn is_match_agrees_with_find_all() {
+fn is_match_and_find_anchored_agree_with_find_all() {
     let files = [
         "anchors.toml",
         "basic.toml",
@@ -191,6 +191,31 @@ fn is_match_agrees_with_find_all() {
                 tc.pattern,
                 tc.input
             );
+
+            // find_anchored is the leftmost-longest match anchored at offset 0, so it
+            // equals find_all's first match iff that match starts at 0, else None.
+            // lb-anchored patterns are not supported by find_anchored; accept that.
+            match re.find_anchored(tc.input.as_bytes()) {
+                Ok(anchored) => {
+                    let expected = tc
+                        .matches
+                        .first()
+                        .filter(|m| m[0] == 0)
+                        .map(|m| resharp::Match { start: m[0], end: m[1] });
+                    assert_eq!(
+                        anchored, expected,
+                        "find_anchored disagrees with find_all: file={}, name={:?}, pattern={:?}, input={:?}",
+                        filename, tc.name, tc.pattern, tc.input
+                    );
+                }
+                Err(resharp::Error::Algebra(
+                    resharp_algebra::ResharpError::UnsupportedPattern,
+                )) => {}
+                Err(e) => panic!(
+                    "find_anchored error: file={}, name={:?}, pattern={:?}: {e:?}",
+                    filename, tc.name, tc.pattern
+                ),
+            }
         }
     }
 }

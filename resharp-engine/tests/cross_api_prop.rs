@@ -81,24 +81,28 @@ fn cross_api_consistency() {
             for &inp in INPUTS {
                 let find_all = re.find_all(inp).unwrap();
                 let is_match = re.is_match(inp).unwrap();
-                let anchored = re.find_anchored(inp).ok().flatten();
 
                 if is_match != !find_all.is_empty() {
                     fails.push(format!(
                         "is_match vs find_all: {p:?} {mode:?} {inp:?} is_match={is_match} find_all={find_all:?}"
                     ));
                 }
-                if let Some(am) = anchored {
-                    if !is_match {
-                        fails.push(format!(
-                            "find_anchored=Some but !is_match: {p:?} {mode:?} {inp:?}"
-                        ));
+
+                match re.find_anchored(inp) {
+                    Ok(anchored) => {
+                        let expected = find_all.first().copied().filter(|m| m.start == 0);
+                        if anchored != expected {
+                            fails.push(format!(
+                                "find_anchored vs find_all leftmost-at-0: {p:?} {mode:?} {inp:?} anchored={anchored:?} expected={expected:?} find_all={find_all:?}"
+                            ));
+                        }
                     }
-                    if find_all.first().copied() != Some(am) {
-                        fails.push(format!(
-                            "find_anchored vs find_all leftmost: {p:?} {mode:?} {inp:?} anchored={am:?} find_all={find_all:?}"
-                        ));
-                    }
+                    Err(resharp::Error::Algebra(
+                        resharp_algebra::ResharpError::UnsupportedPattern,
+                    )) => {}
+                    Err(e) => fails.push(format!(
+                        "find_anchored error: {p:?} {mode:?} {inp:?} err={e:?}"
+                    )),
                 }
             }
         }
