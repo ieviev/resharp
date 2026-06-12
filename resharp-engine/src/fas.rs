@@ -29,6 +29,19 @@ pub struct FwdAction {
 }
 
 const FAS_NOT_NULLABLE: u32 = u32::MAX;
+pub const NO_END: usize = usize::MAX;
+
+// max where NO_END is -inf: an unset end never wins, a real end always does.
+#[inline]
+fn max_end(a: usize, b: usize) -> usize {
+    if a == NO_END {
+        b
+    } else if b == NO_END || a >= b {
+        a
+    } else {
+        b
+    }
+}
 
 #[derive(Clone, Copy)]
 pub struct SlotEntries {
@@ -70,15 +83,13 @@ impl SlotEntries {
         } else {
             linker[self.tail as usize] = idx;
             self.tail = idx;
-            if e > self.max_e {
-                self.max_e = e;
-            }
+            self.max_e = max_end(self.max_e, e);
         }
     }
     #[inline]
     pub fn extend_e(&mut self, ce: usize) {
-        if !self.is_empty() && ce > self.max_e {
-            self.max_e = ce;
+        if !self.is_empty() {
+            self.max_e = max_end(self.max_e, ce);
         }
     }
     fn merge_from(&mut self, other: &mut Self, ce: Option<usize>, linker: &mut [u32]) {
@@ -94,9 +105,7 @@ impl SlotEntries {
         }
         linker[self.tail as usize] = other.head;
         self.tail = other.tail;
-        if other.max_e > self.max_e {
-            self.max_e = other.max_e;
-        }
+        self.max_e = max_end(self.max_e, other.max_e);
         other.clear();
     }
     pub fn drain_to_max(&mut self, linker: &[u32], max: &mut [usize]) {
@@ -104,8 +113,8 @@ impl SlotEntries {
         let mut cur = self.head;
         while cur != SLOT_NIL {
             let i = cur as usize;
-            if e >= i && e > max[i] {
-                max[i] = e;
+            if e != NO_END && e >= i {
+                max[i] = max_end(max[i], e);
             }
             cur = linker[i];
         }
@@ -346,6 +355,46 @@ fn fas_apply(
     }
 }
 
+#[inline]
+fn fas_step(
+    ldfa: &mut LDFA,
+    b: &mut RegexBuilder,
+    fas: &mut FwdDFA,
+    data: &[u8],
+    pos: usize,
+    asid: &mut u32,
+    regs: &mut Vec<SlotEntries>,
+    new_regs: &mut Vec<SlotEntries>,
+    linker: &mut [u32],
+    max: &mut [usize],
+    spawn_allowed: bool,
+) -> Result<(), Error> {
+    let mt = ldfa.mt_lookup[data[pos] as usize] as u32;
+    let trans_idx = (*asid as usize) * fas.stride | mt as usize;
+    let cached = unsafe { *fas.trans.get_unchecked(trans_idx) };
+    let action_id = if cached != FAS_ACTION_MISSING {
+        cached
+    } else {
+        let id = fas.compute_action(b, ldfa, *asid, mt)?;
+        fas.trans[trans_idx] = id;
+        id
+    };
+    let act = &fas.actions[action_id as usize];
+    fas_apply(
+        act,
+        regs,
+        new_regs,
+        linker,
+        max,
+        pos,
+        fas.keep_spawn_on_merge,
+        spawn_allowed,
+    );
+    std::mem::swap(regs, new_regs);
+    *asid = act.next_asid;
+    Ok(())
+}
+
 impl LDFA {
     pub fn scan_fwd_active_set<const ALWAYS_NULLABLE: bool>(
         &mut self,
@@ -367,10 +416,25 @@ impl LDFA {
         // max[i] = best end position seen for any spawn at pos i.
         max.clear();
         if ALWAYS_NULLABLE {
-            // ALWAYS_NULLABLE: pre-fill with i so max[i] >= i holds
+            // every position is nullable in every context: seed the zero-width floor everywhere.
             max.extend(0..=data_end);
         } else {
-            max.resize(data_end + 1, 0);
+            max.resize(data_end + 1, NO_END);
+            let null_begin = self.initial_nullability.has(Nullability::BEGIN);
+            let null_center = self.initial_nullability.has(Nullability::CENTER);
+            let null_end = self.initial_nullability.has(Nullability::END);
+            for &i in nulls.iter() {
+                let nullable_here = if i == 0 {
+                    null_begin
+                } else if i == data_end {
+                    null_end
+                } else {
+                    null_center
+                };
+                if nullable_here {
+                    max[i] = i;
+                }
+            }
         }
         // linker[i] = next spawn-pos in the same slot's list, or SLOT_NIL.
         linker.clear();
@@ -398,13 +462,13 @@ impl LDFA {
                             .map(|n| n.rel)
                             .unwrap_or(FAS_NOT_NULLABLE),
                     };
-                    let candidate_end = if rel != FAS_NOT_NULLABLE {
+                    let me = if rel != FAS_NOT_NULLABLE {
                         1usize.saturating_sub(rel as usize)
-                    } else {
+                    } else if self.initial_nullability.has(Nullability::BEGIN) {
                         0
+                    } else {
+                        NO_END
                     };
-                    let me = candidate_end;
-                    regs.clear();
                     let mut s0 = SlotEntries::default();
                     s0.push_spawn(&mut linker, 0u32, me);
                     regs.push(s0);
@@ -439,29 +503,7 @@ impl LDFA {
                 }
                 continue;
             }
-            let mt = self.mt_lookup[data[pos] as usize] as u32;
-            let trans_idx = (asid as usize) * fas.stride | mt as usize;
-            let cached = unsafe { *fas.trans.get_unchecked(trans_idx) };
-            let action_id = if cached != FAS_ACTION_MISSING {
-                cached
-            } else {
-                let id = fas.compute_action(b, self, asid, mt)?;
-                fas.trans[trans_idx] = id;
-                id
-            };
-            let act = &fas.actions[action_id as usize];
-            fas_apply(
-                act,
-                &mut regs,
-                &mut new_regs,
-                &mut linker,
-                &mut max,
-                pos,
-                fas.keep_spawn_on_merge,
-                spawn_allowed,
-            );
-            std::mem::swap(&mut regs, &mut new_regs);
-            asid = act.next_asid;
+            fas_step(self, b, fas, data, pos, &mut asid, &mut regs, &mut new_regs, &mut linker, &mut max, spawn_allowed)?;
             pos += 1;
         }
         // process remaining bytes only as long as some slot is still alive
@@ -470,29 +512,7 @@ impl LDFA {
                 if regs.iter().all(|r| r.is_empty()) {
                     break;
                 }
-                let mt = self.mt_lookup[data[pos] as usize] as u32;
-                let trans_idx = (asid as usize) * fas.stride | mt as usize;
-                let cached = unsafe { *fas.trans.get_unchecked(trans_idx) };
-                let action_id = if cached != FAS_ACTION_MISSING {
-                    cached
-                } else {
-                    let id = fas.compute_action(b, self, asid, mt)?;
-                    fas.trans[trans_idx] = id;
-                    id
-                };
-                let act = &fas.actions[action_id as usize];
-                fas_apply(
-                    act,
-                    &mut regs,
-                    &mut new_regs,
-                    &mut linker,
-                    &mut max,
-                    pos,
-                    fas.keep_spawn_on_merge,
-                    false,
-                );
-                std::mem::swap(&mut regs, &mut new_regs);
-                asid = act.next_asid;
+                fas_step(self, b, fas, data, pos, &mut asid, &mut regs, &mut new_regs, &mut linker, &mut max, false)?;
                 pos += 1;
             }
         }
@@ -522,13 +542,6 @@ impl LDFA {
         for entries in regs.iter_mut() {
             entries.drain_to_max(&linker, &mut max);
         }
-        if !ALWAYS_NULLABLE {
-            for &i in nulls.iter() {
-                if max[i] < i {
-                    max[i] = i;
-                }
-            }
-        }
         let mut skip_until = 0usize;
         let mut emit = |i: usize, e: usize, skip_until: &mut usize| {
             matches.push(Match { start: i, end: e });
@@ -544,6 +557,9 @@ impl LDFA {
         } else {
             for &i in nulls.iter().rev() {
                 if i < skip_until {
+                    continue;
+                }
+                if max[i] == NO_END {
                     continue;
                 }
                 emit(i, max[i], &mut skip_until);

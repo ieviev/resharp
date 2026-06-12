@@ -117,3 +117,59 @@ pattern = '[0-9]+'
 input = "42abc"
 matches = [[0, 2]]
 anchored = true
+
+[[test]]
+name = "complement_end_anchor_span_ab"
+pattern = '~(.{1,3}\z){2,4}'
+input = "ab"
+matches = [[0, 2]]
+anchored = true
+
+[[test]]
+name = "complement_end_anchor_span_concat"
+pattern = '~(a_{0}(\z){2})+'
+input = "ab"
+matches = [[0, 2]]
+anchored = true
+
+[[test]]
+name = "complement_end_anchor_span_optional"
+pattern = '~(\W{0,2}\z{2,})?'
+input = "ab"
+matches = [[0, 2]]
+anchored = true
+
+[[test]]
+name = "complement_end_anchor_span_class"
+pattern = '~([Z-a]*[^\w]+\z+)'
+input = "ab"
+matches = [[0, 2]]
+anchored = true
+
+[[test]]
+name = "complement_end_anchor_span_long"
+pattern = '~(.{1,3}\z){2,4}'
+input = "abcdef"
+matches = [[0, 6]]
+anchored = true
+
+[[test]]
+name = "complement_end_anchor_span_single"
+pattern = '~(.{1,3}\z){2,4}'
+input = "a"
+matches = [[0, 1]]
+anchored = true
+
+[[test]]
+name = "complement_end_anchor_span_plus"
+pattern = '~(.{2}\z)+'
+input = "abcde"
+matches = [[0, 5]]
+anchored = true
+
+[[test]]
+name = "complement_end_anchor_span_spaces"
+pattern = '~(\W{0,2}\z{2,})?'
+input = "  "
+matches = [[0, 2]]
+anchored = true

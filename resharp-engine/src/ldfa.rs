@@ -1039,19 +1039,11 @@ impl LDFA {
             &self.effects,
             curr,
             pos,
-            Nullability::CENTER,
+            center_or_end(pos >= end),
             &mut max_end,
         );
 
         if pos >= end {
-            collect_max_fwd(
-                &self.effects_id,
-                &self.effects,
-                curr,
-                pos,
-                Nullability::END,
-                &mut max_end,
-            );
             return Ok(found(max_end));
         }
 

@@ -254,3 +254,33 @@ name = "lazy_intersection_complement_minimal"
 pattern = "x(_*b&~(b_+))"
 input = "xab"
 matches = [[0, 3]]
+
+[[test]]
+name = "nullable_intersection_no_leftmost_drop_ab"
+pattern = '((?!b)|ba)&(aa)?'
+input = "ab"
+matches = [[0, 0], [2, 2]]
+
+[[test]]
+name = "nullable_intersection_no_leftmost_drop_abab"
+pattern = '((?!b)|ba)&(aa)?'
+input = "abab"
+matches = [[0, 0], [2, 2], [4, 4]]
+
+[[test]]
+name = "nullable_intersection_no_leftmost_drop_aba"
+pattern = '((?!b)|ba)&(aa)?'
+input = "aba"
+matches = [[0, 0], [2, 2], [3, 3]]
+
+[[test]]
+name = "nullable_intersection_no_leftmost_drop_star"
+pattern = '((?!b)|ba)&(aa)*'
+input = "abab"
+matches = [[0, 0], [2, 2], [4, 4]]
+
+[[test]]
+name = "nullable_intersection_complement_no_drop"
+pattern = '((?!a)|b)&(~((c)))'
+input = "abab"
+matches = [[1, 2], [3, 4], [4, 4]]

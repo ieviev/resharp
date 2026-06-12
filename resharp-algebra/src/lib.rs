@@ -20,6 +20,8 @@ use crate::nulls::{NullState, Nullability, NullsBuilder, NullsId};
 pub mod nulls;
 pub mod solver;
 
+const IS_EMPTY_LANG_NODE_BUDGET: usize = 10_000;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ResharpError {
     AnchorLimit,
@@ -1839,13 +1841,11 @@ impl RegexBuilder {
             Kind::Concat => {
                 let lhs = node_id.left(self);
                 let rhs = node_id.right(self);
-                if let Some(pred) = lhs.is_pred_star(self) {
+                if let Some(_) = lhs.is_pred_star(self) {
                     if let Some(opttail) = rhs.is_opt_v(self) {
                         let (_, max) = self.get_min_max_length(node_id);
                         if max < u32::MAX {
-                            let c = pred.pred_tset(self);
-                            // structural; der-based subsumes here is non-terminating mid-construction
-                            if self.lang_subset_pred_star(c, opttail) {
+                            if let Some(true) = self.subsumes(lhs, opttail) {
                                 return Some(lhs);
                             }
                         }
@@ -1913,60 +1913,6 @@ impl RegexBuilder {
             }
             _ => false,
         }
-    }
-
-    fn lang_subset_pred_star(&mut self, c: TSetId, node: NodeId) -> bool {
-        let mut memo: FxHashMap<NodeId, bool> = FxHashMap::default();
-        self.lang_subset_pred_star_rec(c, node, &mut memo)
-    }
-
-    fn lang_subset_pred_star_rec(
-        &mut self,
-        c: TSetId,
-        node: NodeId,
-        memo: &mut FxHashMap<NodeId, bool>,
-    ) -> bool {
-        if node == NodeId::EPS || node == NodeId::BOT {
-            return true;
-        }
-        if node == NodeId::TS {
-            return self.solver().is_full_id(c);
-        }
-        if let Some(&v) = memo.get(&node) {
-            return v;
-        }
-        let result = match self.get_kind(node) {
-            Kind::Pred => {
-                let p = node.pred_tset(self);
-                let nc = self.solver().not_id(c);
-                let d = self.solver().and_id(p, nc);
-                self.solver().is_empty_id(d)
-            }
-            Kind::Star => {
-                let body = node.left(self);
-                self.lang_subset_pred_star_rec(c, body, memo)
-            }
-            Kind::Concat | Kind::Union => {
-                let l = node.left(self);
-                let r = node.right(self);
-                self.lang_subset_pred_star_rec(c, l, memo)
-                    && self.lang_subset_pred_star_rec(c, r, memo)
-            }
-            Kind::Inter => {
-                let l = node.left(self);
-                let r = node.right(self);
-                self.lang_subset_pred_star_rec(c, l, memo)
-                    || self.lang_subset_pred_star_rec(c, r, memo)
-            }
-            Kind::Begin
-            | Kind::End
-            | Kind::Compl
-            | Kind::Lookbehind
-            | Kind::Lookahead
-            | Kind::Ordered => false,
-        };
-        memo.insert(node, result);
-        result
     }
 
     pub fn num_nodes(&self) -> u32 {
@@ -4462,7 +4408,24 @@ impl RegexBuilder {
             Kind::Inter => {
                 let l = self.simplify_fwd_initial_rec(node_id.left(self), memo);
                 let r = self.simplify_fwd_initial_rec(node_id.right(self), memo);
-                if let Some(look) = self.eps_inter_look(l, r) {
+                let mut distributed = None;
+                for (u, other) in [(l, r), (r, l)] {
+                    if self.get_kind(u) == Kind::Union && u.contains_lookahead(self) {
+                        let mut branches: Vec<NodeId> = Vec::new();
+                        self.iter_unions_b(u, &mut |_, v| branches.push(v));
+                        let mut acc = NodeId::BOT;
+                        for &br in branches.iter().rev() {
+                            let arm = self.mk_inter(br, other);
+                            let arm = self.simplify_fwd_initial_rec(arm, memo);
+                            acc = self.mk_union(arm, acc);
+                        }
+                        distributed = Some(acc);
+                        break;
+                    }
+                }
+                if let Some(acc) = distributed {
+                    acc
+                } else if let Some(look) = self.eps_inter_look(l, r) {
                     look
                 } else {
                     self.mk_inter(l, r)
@@ -5116,9 +5079,10 @@ impl RegexBuilder {
         } else {
             self.try_elim_lookarounds(node)?
         };
-        let isempty_flag = self.is_empty_lang_internal(node);
-
-        Some(isempty_flag == Ok(NodeFlags::IS_EMPTY))
+        match self.is_empty_lang_internal(node) {
+            Ok(flag) => Some(flag == NodeFlags::IS_EMPTY),
+            Err(_) => None,
+        }
     }
 
     fn is_empty_lang_internal(&mut self, initial_node: NodeId) -> Result<NodeFlags, ResharpError> {
@@ -5151,6 +5115,9 @@ impl RegexBuilder {
         let mut found_node = NodeId::BOT;
 
         loop {
+            if visited.len() > IS_EMPTY_LANG_NODE_BUDGET {
+                return Err(ResharpError::StateSpaceExplosion);
+            }
             match worklist.pop_front() {
                 None => {
                     isempty_flag = NodeFlags::IS_EMPTY;

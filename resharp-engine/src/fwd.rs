@@ -90,6 +90,7 @@ fn try_emit_zero_width<const IS_MATCH: bool>(
             return Ok(true);
         }
         matches.push(Match { start: at, end: at });
+        return Ok(true);
     }
     Ok(false)
 }
@@ -115,13 +116,21 @@ fn fwd_lb_prefix_impl<const IS_MATCH: bool>(
                 start: 0,
                 end: max_end,
             });
+            let mut emitted_zw = false;
             if max_end > 0 && body_nullable {
                 if try_emit_zero_width::<IS_MATCH>(fwd, b, lb_len, fwd_prefix, input, max_end, matches)? {
-                    return Ok(true);
+                    if IS_MATCH {
+                        return Ok(true);
+                    }
+                    emitted_zw = true;
                 }
             }
-            // resume at the begin match's end; lb_len >= 1 prevents re-emitting it.
-            search_start = max_end;
+            // back up lb_len so it can be re-checked for next match
+            search_start = if emitted_zw {
+                (max_end + 1).saturating_sub(lb_len)
+            } else {
+                max_end.saturating_sub(lb_len)
+            };
         }
     }
 
@@ -140,12 +149,24 @@ fn fwd_lb_prefix_impl<const IS_MATCH: bool>(
                 start: body_start,
                 end: max_end,
             });
+            let mut emitted_zw = false;
             if max_end > body_start && body_nullable {
                 if try_emit_zero_width::<IS_MATCH>(fwd, b, lb_len, fwd_prefix, input, max_end, matches)? {
-                    return Ok(true);
+                    if IS_MATCH {
+                        return Ok(true);
+                    }
+                    emitted_zw = true;
                 }
             }
-            search_start = if max_end > body_start { max_end - lb_len } else { body_start };
+            search_start = if max_end > body_start {
+                if emitted_zw {
+                    (max_end + 1).saturating_sub(lb_len)
+                } else {
+                    max_end - lb_len
+                }
+            } else {
+                body_start
+            };
         } else {
             search_start = body_start;
         }

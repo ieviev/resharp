@@ -313,6 +313,10 @@ fn hardened_zero_width_interior_null_matches_default() {
     for (pat, hay) in [
         (r"~(\A|\n+){2}", &b"\n\n"[..]),
         (r"[\x00-\x10]*(Z){2,}|(?!_{0}\A{3} {0,2}){3}", &b"\n\n"[..]),
+        (r"1?a~(~((1?){2,}\z+){2}){2}", &b"a"[..]),
+        (r"^{3}([\w]{2,}0{3}|_?)", &b"\n\n"[..]),
+        (r"^_?", &b"\nb"[..]),
+        (r"^_?", &b"\n\n"[..]),
     ] {
         let def = Regex::new(pat).unwrap();
         let hard = Regex::with_options(pat, RegexOptions::default().hardened(true)).unwrap();
@@ -320,6 +324,25 @@ fn hardened_zero_width_interior_null_matches_default() {
             def.find_all(hay).unwrap(),
             hard.find_all(hay).unwrap(),
             "default vs hardened find_all diverge for {pat:?} on {hay:?}"
+        );
+    }
+}
+
+#[test]
+fn fwd_lb_prefix_line_anchor_find_all_is_exact() {
+    let m = |s: usize, e: usize| resharp::Match { start: s, end: e };
+    for (pat, hay, expected) in [
+        (r"^_?", &b"\nb"[..], vec![m(0, 1), m(1, 2)]),
+        (r"^_?", &b"\n\n"[..], vec![m(0, 1), m(1, 2), m(2, 2)]),
+        (r"^_?", &b"\n\nb"[..], vec![m(0, 1), m(1, 2), m(2, 3)]),
+        (r"^{3}([\w]{2,}0{3}|_?)", &b"\n\n"[..], vec![m(0, 1), m(1, 2), m(2, 2)]),
+        (r"(?<=\n)_?", &b"\n\n"[..], vec![m(1, 2), m(2, 2)]),
+    ] {
+        let re = Regex::new(pat).unwrap();
+        assert_eq!(
+            re.find_all(hay).unwrap(),
+            expected,
+            "find_all wrong for {pat:?} on {hay:?}"
         );
     }
 }
@@ -2393,6 +2416,129 @@ fn find_all_lb_prefix_keeps_offset1_zero_width() {
 }
 
 #[test]
+fn fullmode_dot_literal_concat_compile_bounded() {
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    let t = std::time::Instant::now();
+    let opts = RegexOptions::default().unicode(UnicodeMode::Full);
+    let re = Regex::with_options(".n.................  n.", opts).unwrap();
+    let el = t.elapsed();
+    assert!(el.as_secs_f64() < 6.0, "compile blew up: {el:?}");
+    assert_eq!(re.find_all(b"xn................. zn.").unwrap().len(), 0);
+}
+
+#[test]
+fn inter_optional_lookahead_no_width_leak() {
+    use resharp::{Regex, RegexOptions};
+    let check = |pat: &str, hay: &[u8], want: &[(usize, usize)], anchored: Option<(usize, usize)>| {
+        let re = Regex::with_options(pat, RegexOptions::default()).unwrap();
+        let fa: Vec<(usize, usize)> =
+            re.find_all(hay).unwrap().iter().map(|m| (m.start, m.end)).collect();
+        assert_eq!(fa, want, "find_all {pat} on {hay:?}");
+        assert_eq!(
+            re.find_anchored(hay).unwrap().map(|m| (m.start, m.end)),
+            anchored,
+            "find_anchored {pat} on {hay:?}"
+        );
+    };
+    check(r"a?&(?=a)?", b"ab", &[(0, 0), (1, 1), (2, 2)], Some((0, 0)));
+    check(r"a?&(?!b)?", b"ab", &[(0, 0), (1, 1), (2, 2)], Some((0, 0)));
+    check(r"a?&(?=c)?", b"ab", &[(0, 0), (1, 1), (2, 2)], Some((0, 0)));
+    check(r"(\W|(?!c))&a", b"a", &[], None);
+    check(r"(\d|(?!c))&a", b"a", &[], None);
+    check(r"(\W|(?=a))&a", b"a", &[], None);
+}
+
+#[test]
+fn lookahead_union_inter_complement_no_crash() {
+    use resharp::{Regex, RegexOptions};
+    let re = Regex::with_options(r"((?!a)|b)&(~((c)))", RegexOptions::default()).unwrap();
+    let cases: &[(&[u8], &[(usize, usize)])] = &[
+        (b"ca", &[(0, 0), (2, 2)]),
+        (b"c", &[(0, 0), (1, 1)]),
+        (b"abca", &[(1, 2), (2, 2), (4, 4)]),
+        (b"", &[(0, 0)]),
+    ];
+    for &(hay, want) in cases {
+        let fa: Vec<(usize, usize)> =
+            re.find_all(hay).unwrap().iter().map(|m| (m.start, m.end)).collect();
+        assert_eq!(fa, want, "find_all on {hay:?}");
+        assert_eq!(
+            re.is_match(hay).unwrap(),
+            !fa.is_empty(),
+            "is_match vs find_all on {hay:?}"
+        );
+    }
+}
+
+#[test]
+fn is_match_findall_agree_complement_end_anchor() {
+    let mk = |full: bool| -> resharp::RegexOptions {
+        if full {
+            resharp::RegexOptions::default()
+                .case_insensitive(true)
+                .ignore_whitespace(true)
+                .dot_matches_new_line(true)
+                .multiline(false)
+        } else {
+            resharp::RegexOptions::default()
+        }
+    };
+    let cases: &[(&str, &[u8], bool)] = &[
+        (r"[0-9]{2}~(\z{1,3}|^{2}\W{0})+", b"00", true),
+        (r"a~(\z)", b"a", false),
+        (r"a~(\z|b)", b"a", false),
+        (r"a~(\z)", b"ab", false),
+        (r"ab~(\z)c", b"abXc", false),
+    ];
+    for &(pat, hay, full) in cases {
+        let re = resharp::Regex::with_options(pat, mk(full)).unwrap();
+        let im = re.is_match(hay).unwrap();
+        let fa = re.find_all(hay).unwrap();
+        assert_eq!(
+            im,
+            !fa.is_empty(),
+            "{pat} on {hay:?}: is_match={im} but find_all={fa:?} (must agree)"
+        );
+    }
+    let re = resharp::Regex::with_options(r"a~(\z)", resharp::RegexOptions::default()).unwrap();
+    assert_eq!(re.is_match(b"a").unwrap(), false, "a~(\\z) on a: end is in z, complement empty");
+    assert_eq!(re.find_all(b"a").unwrap().len(), 0);
+}
+
+#[test]
+fn find_all_anchor_in_consumed_region() {
+    let spans = |pat: &str, hay: &[u8]| -> Vec<(usize, usize)> {
+        let def = resharp::Regex::new(pat).unwrap();
+        let hard = resharp::Regex::with_options(
+            pat,
+            resharp::RegexOptions::default().hardened(true),
+        )
+        .unwrap();
+        let d: Vec<(usize, usize)> =
+            def.find_all(hay).unwrap().iter().map(|m| (m.start, m.end)).collect();
+        let h: Vec<(usize, usize)> =
+            hard.find_all(hay).unwrap().iter().map(|m| (m.start, m.end)).collect();
+        assert_eq!(d, h, "{pat}: default={d:?} hardened={h:?} must agree");
+        d
+    };
+    assert_eq!(
+        spans("^\n", b"\n\n\n"),
+        vec![(0, 1), (1, 2), (2, 3)],
+        "^\\n on \\n\\n\\n: ^ at offset 1 is anchored by the \\n the prior match consumed"
+    );
+    assert_eq!(
+        spans("^a\n", b"a\na\n"),
+        vec![(0, 2), (2, 4)],
+        "^a\\n on a\\na\\n: ^ at offset 2 is anchored by the \\n the prior match consumed"
+    );
+    assert_eq!(
+        spans("^a", b"a\na"),
+        vec![(0, 1), (2, 3)],
+        "control: anchoring \\n sits between matches, not inside one"
+    );
+}
+
+#[test]
 fn bug12_neg_lookahead_class_not_nullable() {
     use resharp::Regex;
     let cases: &[&str] = &[
@@ -2730,21 +2876,6 @@ fn bug28_not_word_boundary_drops_consecutive_matches() {
         let ms2: Vec<[usize; 2]> = re2.find_all(b"README").unwrap().iter().map(|m| [m.start, m.end]).collect();
         assert_eq!(ms2, vec![[1, 2], [2, 3], [3, 4], [4, 5], [5, 6]], "\\B[A-Z] on 'README' mode={mode:?}");
     }
-}
-
-#[test]
-fn wb_leading_optional_nonword_no_silent_miscompile() {
-    let r1 = Regex::new(r"\b(`?\w+)\.(\w+)\b");
-    assert!(
-        matches!(r1.as_ref(), Err(Error::Algebra(resharp_algebra::ResharpError::UnsupportedPattern))),
-        "leading-optional-nonword \\b needs general-wb support; must fail loud, got ok={}",
-        r1.is_ok()
-    );
-    let r2 = Regex::new(r"\b(\w+`?)\.(\w+)\b").unwrap();
-    let inp = b"a.b foo.bar";
-    let got: Vec<String> = r2.find_all(inp).unwrap().iter()
-        .map(|m| String::from_utf8_lossy(&inp[m.start..m.end]).into_owned()).collect();
-    assert_eq!(got, vec!["a.b", "foo.bar"]);
 }
 
 #[test]

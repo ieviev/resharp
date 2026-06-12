@@ -327,3 +327,79 @@ name = "wb_ci_script_tag_no_match"
 pattern = '(?i)<script\b[^<]*'
 input = "<scripts!</script>)<"
 matches = []
+
+[[test]]
+name = "wb_leading_optional_nonword_unsupported"
+pattern = '\b(`?\w+)\.(\w+)\b'
+input = "a.b"
+expect_error = true
+
+[[test]]
+name = "wb_trailing_optional_nonword_supported"
+pattern = '\b(\w+`?)\.(\w+)\b'
+input = "a.b foo.bar"
+matches = [[0, 3], [4, 11]]
+
+[[test]]
+name = "wb_leading_optional_apostrophe_unsupported"
+pattern = "\\b'?\\w+"
+input = "foo"
+expect_error = true
+
+[[test]]
+name = "wb_leading_optional_apostrophe_both_unsupported"
+pattern = "\\b'?\\w+\\b"
+input = "foo"
+expect_error = true
+
+[[test]]
+name = "wb_nonboundary_optional_apostrophe_unsupported"
+pattern = "\\B'?\\w+"
+input = "foo"
+expect_error = true
+
+[[test]]
+name = "wb_leading_optional_nonword_class_unsupported"
+pattern = '\b\W?\w+\b'
+input = "foo"
+expect_error = true
+
+[[test]]
+name = "wb_leading_union_optional_apostrophe_unsupported"
+pattern = "\\b(a|'b)\\b"
+input = "ab"
+expect_error = true
+
+[[test]]
+name = "wb_leading_star_apostrophe_unsupported"
+pattern = "\\b'*x\\b"
+input = "x"
+expect_error = true
+
+[[test]]
+name = "wb_leading_optional_word_head_supported_xy"
+pattern = '\bx?y\b'
+input = "xy"
+matches = [[0, 2]]
+ascii = true
+
+[[test]]
+name = "wb_leading_optional_word_head_supported_y"
+pattern = '\bx?y\b'
+input = "y"
+matches = [[0, 1]]
+ascii = true
+
+[[test]]
+name = "wb_leading_optional_word_head_no_match_apostrophe"
+pattern = '\bx?y\b'
+input = "a'b"
+matches = []
+ascii = true
+
+[[test]]
+name = "wb_leading_optional_word_head_no_match_x"
+pattern = '\bx?y\b'
+input = "''x"
+matches = []
+ascii = true
