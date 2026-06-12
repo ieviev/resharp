@@ -61,7 +61,7 @@ Lazy quantifiers (`*?`, `+?`, ...) are parse errors; rewrite with complement whe
 let opts = resharp::RegexOptions {
     max_dfa_capacity: 65535,    // max automata states (default: u16::MAX)
     lookahead_context_max: 800, // max lookahead context distance (default: 800)
-    hardened: false,            // linear find_all worst-case (~10x slower average)
+    hardened: false,            // linear find_all worst-case (slower but safer)
     unicode: resharp::UnicodeMode::Default, // Ascii | Default | Full | Javascript
     ..Default::default()
 };
