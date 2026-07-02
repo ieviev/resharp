@@ -15,7 +15,7 @@ use crate::ldfa::{DFA_DEAD, LDFA};
 use crate::prefix::PrefixKind;
 #[cfg(feature = "stream")]
 use crate::stream::{StreamCache, StreamInit};
-use crate::{Error, FindAll, Match, NullRuns, Regex, RegexInner};
+use crate::{Error, FindAll, Match, Regex, RegexInner, StartPositions};
 
 pub(crate) mod array256 {
     use serde::{Deserialize, Deserializer, Serializer};
@@ -263,7 +263,7 @@ impl Regex {
                     seek_fwd: 0,
                     seek_rev: 0,
                 },
-                nulls: NullRuns::new(),
+                nulls: StartPositions::new(),
                 matches: Vec::<Match>::new(),
                 bounded: dump.bounded,
                 fas: None,
