@@ -147,7 +147,7 @@ const rows = parse(run());
 if (rows.length === 0) throw new Error("no benchmark rows parsed");
 
 const md = [
-    "resharp uses `UnicodeMode::Full` and `multiline(false)` for apples-to-apples semantics with `regex`, `fancy-regex`, and PCRE2. Ratios in parentheses are relative to the fastest engine per row (1.00x = fastest; higher = that many times slower).",
+    "resharp runs with `UnicodeMode::Full` and `multiline(false)` to match the other engines. Ratios are vs the fastest per row.",
     "",
     "### Scan (find_all over a 1 MiB haystack), throughput",
     "",

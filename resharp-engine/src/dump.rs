@@ -51,6 +51,7 @@ struct RegexDump {
     has_la: bool,
     neg_lb: Option<crate::prefix::NegLb>,
     find_all: FindAll,
+    class_plus: Option<[u64; 4]>,
     lb_check_bytes: u8,
     fwd_lb_begin_nullable: bool,
     has_anchors: bool,
@@ -195,6 +196,7 @@ impl Regex {
             prefix: self.prefix.clone(),
             fwd_begin_anchored: self.fwd_begin_anchored,
             find_all: self.find_all,
+            class_plus: self.class_plus,
             fwd: if uses_fwd {
                 Some(std::mem::replace(&mut inner.fwd, empty_ldfa()))
             } else {
@@ -276,6 +278,7 @@ impl Regex {
             is_empty_lang: dump.is_empty_lang,
             fwd_begin_anchored: dump.fwd_begin_anchored,
             find_all: dump.find_all,
+            class_plus: dump.class_plus,
             initial_nullability: dump.initial_nullability,
             fwd_end_nullable: dump.fwd_end_nullable,
             hardened: false,
