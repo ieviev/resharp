@@ -521,18 +521,30 @@ impl RevLiteralInner {
         let confirm_idx = self.confirm.0;
         let confirm_byte = self.confirm.1;
         let vrare = vdupq_n_u8(rare_byte);
+        let vconf = vdupq_n_u8(confirm_byte);
+        let confirm_off = confirm_idx as isize - rare_idx as isize;
+        let dual = nlen > 1;
         let min_rare_pos = rare_idx;
         let mut pos = end - (nlen - 1) + rare_idx;
         while pos >= min_rare_pos + 16 {
-            let chunk = vld1q_u8(ptr.add(pos - 15));
-            let mut mask = neon::neon_movemask(vceqq_u8(chunk, vrare));
-            while mask != 0 {
-                let bit = 15 - (mask.leading_zeros() as usize);
-                let start = pos - 15 + bit - rare_idx;
-                if *ptr.add(start + confirm_idx) == confirm_byte && self.verify(haystack, start) {
-                    return Some(start + nlen - 1);
+            let base = pos - 15;
+            let rare_hit = vceqq_u8(vld1q_u8(ptr.add(base)), vrare);
+            if vmaxvq_u8(rare_hit) != 0 {
+                let hit = if dual {
+                    let cchunk = vld1q_u8(ptr.offset(base as isize + confirm_off));
+                    vandq_u8(rare_hit, vceqq_u8(cchunk, vconf))
+                } else {
+                    rare_hit
+                };
+                let mut mask = neon::neon_movemask(hit);
+                while mask != 0 {
+                    let bit = 15 - (mask.leading_zeros() as usize);
+                    let start = base + bit - rare_idx;
+                    if self.verify(haystack, start) {
+                        return Some(start + nlen - 1);
+                    }
+                    mask &= !(1u16 << bit);
                 }
-                mask &= !(1u16 << bit);
             }
             pos -= 16;
         }
@@ -570,19 +582,25 @@ impl RevLiteralInner {
         let confirm_idx = self.confirm.0;
         let confirm_byte = self.confirm.1;
         let vrare = u8x16_splat(rare_byte);
+        let vconf = u8x16_splat(confirm_byte);
+        let confirm_off = confirm_idx as isize - rare_idx as isize;
+        let dual = nlen > 1;
         let min_rare_pos = rare_idx;
         let mut pos = end - (nlen - 1) + rare_idx;
         while pos >= min_rare_pos + 16 {
-            let chunk = unsafe { v128_load(ptr.add(pos - 15) as *const v128) };
+            let base = pos - 15;
+            let chunk = unsafe { v128_load(ptr.add(base) as *const v128) };
             let mut mask = i8x16_bitmask(u8x16_eq(chunk, vrare)) as u16;
+            if dual && mask != 0 {
+                let cchunk =
+                    unsafe { v128_load(ptr.offset(base as isize + confirm_off) as *const v128) };
+                mask &= i8x16_bitmask(u8x16_eq(cchunk, vconf)) as u16;
+            }
             while mask != 0 {
                 let bit = 15 - (mask.leading_zeros() as usize);
-                let start = pos - 15 + bit - rare_idx;
-                unsafe {
-                    if *ptr.add(start + confirm_idx) == confirm_byte && self.verify(haystack, start)
-                    {
-                        return Some(start + nlen - 1);
-                    }
+                let start = base + bit - rare_idx;
+                if self.verify(haystack, start) {
+                    return Some(start + nlen - 1);
                 }
                 mask &= !(1u16 << bit);
             }

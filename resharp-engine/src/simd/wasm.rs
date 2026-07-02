@@ -178,13 +178,16 @@ impl FwdLiteralSearch {
         let confirm_byte = self.confirm.1;
         let end = haystack.len() - nlen + rare_idx;
         let vrare = u8x16_splat(rare_byte);
+        let vconf = u8x16_splat(confirm_byte);
+        let confirm_off = confirm_idx as isize - rare_idx as isize;
+        let dual = nlen > 1;
         let mut last_end: usize = 0;
 
         let mut handle = |this: &Self, start: usize| -> Option<usize> {
             if COLLECT_ALL && start < last_end {
                 return None;
             }
-            if *ptr.add(start + confirm_idx) != confirm_byte || !this.verify(haystack, start) {
+            if !this.verify(haystack, start) {
                 return None;
             }
             if COLLECT_ALL {
@@ -201,6 +204,10 @@ impl FwdLiteralSearch {
         while pos + 16 <= end + 1 {
             let chunk = v128_load(ptr.add(pos) as *const v128);
             let mut mask = u8x16_bitmask(u8x16_eq(chunk, vrare));
+            if dual && mask != 0 {
+                let cchunk = v128_load(ptr.offset(pos as isize + confirm_off) as *const v128);
+                mask &= u8x16_bitmask(u8x16_eq(cchunk, vconf));
+            }
             while mask != 0 {
                 let bit = mask.trailing_zeros() as usize;
                 let start = pos + bit - rare_idx;

@@ -49,7 +49,7 @@ impl Regex {
             FindAll::Anchored => Ok(self.find_anchored(input)?.is_some()),
             FindAll::EndAnchored => Ok(self.find_end_anchored(input)?.is_some()),
             FindAll::Hardened | FindAll::Dfa => self.is_match_dfa(input),
-            FindAll::Bounded | FindAll::FwdPrefix | FindAll::FwdLbPrefix => {
+            FindAll::ClassPlus | FindAll::Bounded | FindAll::FwdPrefix | FindAll::FwdLbPrefix => {
                 self.is_match_fwd_ts(input)
             }
         }

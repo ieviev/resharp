@@ -4251,3 +4251,39 @@ fn conv_forced_differential_vs_regex_crate() {
         }
     }
 }
+
+#[test]
+fn class_plus_fast_path() {
+    let class_plus_pats = [r"\s+", r"[a-z]+"];
+    for p in class_plus_pats {
+        let re = Regex::new(p).unwrap_or_else(|e| panic!("{p:?}: {e}"));
+        assert_eq!(re.find_all_kind_name(), "ClassPlus", "pat={p:?}");
+    }
+    let other_pats = [r".+", r"[\s\S]+", r"\d+", r"[-_.]+", r"a+", r"\s*", r"abc", r"\bx"];
+    for p in other_pats {
+        let re = Regex::new(p).unwrap_or_else(|e| panic!("{p:?}: {e}"));
+        assert_ne!(re.find_all_kind_name(), "ClassPlus", "pat={p:?}");
+    }
+
+    let mut state: u64 = 0x243f6a88;
+    let mut rng = || {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        state
+    };
+    let alpha: &[u8] = b"ab z\t\n9-_.XY";
+    for p in [r"\s+", r".+", r"[a-z]+", r"[\s\S]+"] {
+        let rs = Regex::new(p).unwrap();
+        let rx = regex::bytes::Regex::new(p).unwrap();
+        for _ in 0..20_000 {
+            let len = (rng() % 60) as usize;
+            let hay: Vec<u8> = (0..len).map(|_| alpha[(rng() as usize) % alpha.len()]).collect();
+            let a: Vec<(usize, usize)> =
+                rs.find_all(&hay).unwrap().iter().map(|m| (m.start, m.end)).collect();
+            let b: Vec<(usize, usize)> =
+                rx.find_iter(&hay).map(|m| (m.start(), m.end())).collect();
+            assert_eq!(a, b, "pat={p:?} hay={:?}", String::from_utf8_lossy(&hay));
+        }
+    }
+}

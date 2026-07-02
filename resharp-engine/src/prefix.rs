@@ -590,16 +590,18 @@ pub fn build_fwd_prefix(
 fn try_build_fwd_search(
     b: &mut RegexBuilder,
     sets: &[TSetId],
+    allow_common: bool,
 ) -> Result<Option<crate::accel::FwdPrefixSearch>, crate::Error> {
     let byte_sets_raw: Vec<Vec<u8>> = sets
         .iter()
         .map(|&set| b.solver().collect_bytes(set))
         .collect();
-    try_build_fwd_search_raw(&byte_sets_raw)
+    try_build_fwd_search_raw(&byte_sets_raw, allow_common)
 }
 
 fn try_build_fwd_search_raw(
     byte_sets_raw: &[Vec<u8>],
+    allow_common: bool,
 ) -> Result<Option<crate::accel::FwdPrefixSearch>, crate::Error> {
     let lit_len = byte_sets_raw.iter().take_while(|bs| bs.len() == 1).count();
     if lit_len >= 3 {
@@ -662,17 +664,17 @@ fn try_build_fwd_search_raw(
                 rarest_freq_sum, TEDDY_MEMCHR_MAX_FREQ_F, narrow_positions
             );
         }
-        return try_build_fwd_range_prefix(byte_sets_raw, rarest_idx).map(|r| r.0);
+        return try_build_fwd_range_prefix(byte_sets_raw, rarest_idx, allow_common).map(|r| r.0);
     }
 
     if rarest_len > 16 {
-        return try_build_fwd_range_prefix(byte_sets_raw, rarest_idx).map(|r| r.0);
+        return try_build_fwd_range_prefix(byte_sets_raw, rarest_idx, false).map(|r| r.0);
     }
 
     // Reject Teddy when the rarest position is too common (high false-positive
     // rate). Try a range-based prefix first; if that also fails, skip entirely.
     if rarest_freq_sum > TEDDY_MAX_FREQ_SUM {
-        return try_build_fwd_range_prefix(byte_sets_raw, rarest_idx).map(|r| r.0);
+        return try_build_fwd_range_prefix(byte_sets_raw, rarest_idx, false).map(|r| r.0);
     }
 
     let freq_order: Vec<usize> = freqs.iter().map(|&(i, _)| i).collect();
@@ -717,11 +719,32 @@ fn rarest_freq(b: &mut RegexBuilder, sets: &[TSetId]) -> u64 {
 fn build_fwd_prefix_from_sets(
     b: &mut RegexBuilder,
     full_sets: &[TSetId],
+    allow_common: bool,
 ) -> Result<Option<crate::accel::FwdPrefixSearch>, crate::Error> {
     if !full_sets.is_empty() {
-        return try_build_fwd_search(b, full_sets);
+        return try_build_fwd_search(b, full_sets, allow_common);
     }
     Ok(None)
+}
+
+fn every_first_byte_is_full_match(b: &mut RegexBuilder, node: NodeId) -> bool {
+    let der = match b.der(node, Nullability::CENTER) {
+        Ok(d) => d,
+        Err(_) => return false,
+    };
+    let mut targets: Vec<(NodeId, TSetId)> = Vec::new();
+    b.collect_der_targets(der, TSetId::FULL, &mut targets);
+    let mut any = false;
+    for (t, _) in targets {
+        if t == NodeId::BOT {
+            continue;
+        }
+        any = true;
+        if !b.nullability(t).has(Nullability::CENTER) {
+            return false;
+        }
+    }
+    any
 }
 
 fn build_fwd_prefix_simd(
@@ -729,7 +752,8 @@ fn build_fwd_prefix_simd(
     node: NodeId,
 ) -> Result<Option<crate::accel::FwdPrefixSearch>, crate::Error> {
     let full_sets = calc_potential_start(b, node, 16, 64, false)?;
-    build_fwd_prefix_from_sets(b, &full_sets)
+    let allow_common = every_first_byte_is_full_match(b, node);
+    build_fwd_prefix_from_sets(b, &full_sets, allow_common)
 }
 
 const MAX_RANGE_SETS: usize = 3;
@@ -737,6 +761,7 @@ const MAX_RANGE_SETS: usize = 3;
 fn try_build_fwd_range_prefix(
     byte_sets_raw: &[Vec<u8>],
     anchor_pos: usize,
+    allow_common: bool,
 ) -> Result<(Option<crate::accel::FwdPrefixSearch>, bool), crate::Error> {
     let anchor_bytes = &byte_sets_raw[anchor_pos];
     let freq_sum: u32 = anchor_bytes
@@ -746,7 +771,7 @@ fn try_build_fwd_range_prefix(
     // Space (0x20) is saturated at u16::MAX (65535); we want to reject it as
     // a sole anchor since it's the most common byte in typical text.
     const RANGE_FREQ_THRESHOLD: u32 = 65_535;
-    if freq_sum >= RANGE_FREQ_THRESHOLD {
+    if !allow_common && freq_sum >= RANGE_FREQ_THRESHOLD {
         if cfg!(feature = "debug") {
             eprintln!(
                 "  [fwd-prefix-range] reject: {} bytes, freq_sum={} >= {}",
@@ -1293,7 +1318,8 @@ fn select_prefix_simd(
                     }
                 }
             } else {
-                build_fwd_prefix_from_sets(b, &sets.fwd_potential.sets)?
+                let allow_common = every_first_byte_is_full_match(b, node);
+                build_fwd_prefix_from_sets(b, &sets.fwd_potential.sets, allow_common)?
                     .map(PrefixKind::AnchoredFwd)
             }
         } else {
@@ -1305,7 +1331,8 @@ fn select_prefix_simd(
             None => try_build_fwd_neg_lb(b, node)?.map(|(fp, _)| PrefixKind::AnchoredFwd(fp)),
         }
     } else {
-        let fp = build_fwd_prefix_from_sets(b, &sets.fwd_potential.sets)?;
+        let allow_common = every_first_byte_is_full_match(b, node);
+        let fp = build_fwd_prefix_from_sets(b, &sets.fwd_potential.sets, allow_common)?;
         match fp {
             Some(fp) => Some(PrefixKind::AnchoredFwd(fp)),
             None if b.is_infinite(node) => {

@@ -70,39 +70,34 @@ let re = resharp::Regex::with_options(r"pattern", opts).unwrap();
 
 ## Benchmarks
 
-Throughput comparison with `regex` and `fancy-regex`, compiled with `--release`. Compile time is excluded; only matching is measured. Uses SIMD intrinsics (AVX2, NEON, WASM). Run with `cargo bench -- 'readme/' --list`.
+RE# against `regex`, `fancy-regex`, and PCRE2 on a few popular patterns from crates.io. Regenerate with:
 
-### AMD Ryzen 7 5800X (105W TDP)
+```sh
+node scripts/bench-popular-table.mts
+```
 
-| Benchmark | resharp | regex | fancy-regex |
-|---|---|---|---|
-| dictionary 2663 words (900KB, ~15 matches) | **633 MiB/s** | 541 MiB/s | 531 MiB/s |
-| dictionary 2663 words (944KB, ~2678 matches) | **535 MiB/s** | 58 MiB/s | 20 MiB/s |
-| dictionary `(?i)` 2663 words (900KB) | **632 MiB/s** | 0.03 MiB/s | 0.03 MiB/s |
-| lookaround `(?<=\s)[A-Z][a-z]+(?=\s)` (900KB) | **460 MiB/s** | -- | 25 MiB/s |
-| `Sherlock\|Holmes\|Watson\|...` (900KB) | **12.0 GiB/s** | 11.2 GiB/s | 10.1 GiB/s |
-| literal `"Sherlock Holmes"` (900KB) | 33.2 GiB/s | 34.0 GiB/s | 30.3 GiB/s |
+<!-- POPULAR-BENCH:BEGIN -->
+resharp uses `UnicodeMode::Full` and `multiline(false)` for apples-to-apples semantics with `regex`, `fancy-regex`, and PCRE2. Ratios in parentheses are relative to the fastest engine per row (1.00x = fastest; higher = that many times slower).
 
-<details>
-<summary>Rockchip RK3588 ARM (5-10W TDP), also runs well on low-power chips</summary>
+### Scan (find_all over a 1 MiB haystack), throughput
 
+| Pattern | resharp | regex | fancy-regex | pcre2 |
+|---|---|---|---|---|
+| `\s+` | **414.94 MiB/s (1.00x)** | 391.82 MiB/s (1.06x) | 155.91 MiB/s (2.66x) | 184.44 MiB/s (2.25x) |
+| `\d+` | **1012.4 MiB/s (1.00x)** | 503.52 MiB/s (2.01x) | 304.87 MiB/s (3.32x) | 362.47 MiB/s (2.79x) |
+| `.*` | **2.42 GiB/s (1.00x)** | 326.02 MiB/s (7.60x) | 166.82 MiB/s (14.86x) | 303.4 MiB/s (8.17x) |
+| `[0-9a-f]{64}` | **1.3 GiB/s (1.00x)** | 718 MiB/s (1.86x) | 597.23 MiB/s (2.23x) | 180.28 MiB/s (7.39x) |
+| `https?://\S+` | **4.58 GiB/s (1.00x)** | 2.35 GiB/s (1.95x) | 1.34 GiB/s (3.41x) | 1.81 GiB/s (2.53x) |
+| `Version/([.0-9]+)` | 7.09 GiB/s (1.04x) | **7.38 GiB/s (1.00x)** | 3.68 GiB/s (2.01x) | 3.96 GiB/s (1.86x) |
+| `\n{3,}` | **11.66 GiB/s (1.00x)** | 11.24 GiB/s (1.04x) | 5.15 GiB/s (2.27x) | 1.79 GiB/s (6.53x) |
+| `[-_.]+` | **1.74 GiB/s (1.00x)** | 1008.6 MiB/s (1.77x) | 481.64 MiB/s (3.71x) | 480.85 MiB/s (3.71x) |
 
-| Benchmark | resharp | regex | fancy-regex |
-|---|---|---|---|
-| dictionary 2663 words (900KB, ~15 matches) | 271 MiB/s | 315 MiB/s | 317 MiB/s |
-| dictionary 2663 words (944KB, ~2678 matches) | **214 MiB/s** | 25 MiB/s | 9 MiB/s |
-| dictionary `(?i)` 2663 words (900KB) | **271 MiB/s** | 0.01 MiB/s | 0.01 MiB/s |
-| lookaround `(?<=\s)[A-Z][a-z]+(?=\s)` (900KB) | **198 MiB/s** | -- | 10 MiB/s |
-| `Sherlock\|Holmes\|Watson\|...` (900KB) | 1.73 GiB/s | 2.00 GiB/s | 1.95 GiB/s |
-| literal `"Sherlock Holmes"` (900KB) | 6.74 GiB/s | 7.05 GiB/s | 6.78 GiB/s |
+### Validate (is_match on a single value), latency
 
-</details>
+| Pattern | resharp | regex | fancy-regex | pcre2 |
+|---|---|---|---|---|
+| `^\d{4}-\d{2}-\d{2}$` | 23.42 ns (1.05x) | 24.32 ns (1.09x) | **22.3 ns (1.00x)** | 59.97 ns (2.69x) |
+| `^([a-zA-Z][a-zA-Z0-9_-]+)$` | 34.62 ns (1.05x) | 34.84 ns (1.06x) | **32.86 ns (1.00x)** | 77.11 ns (2.35x) |
+| `^[0-9]+$` | 24.53 ns (1.25x) | 22.86 ns (1.16x) | **19.64 ns (1.00x)** | 56.37 ns (2.87x) |
 
-**Notes:**
-
-- **Sparse matches (~15 in 900KB)**: roughly tied. Everyone spends most of their time scanning past non-matching bytes in a tiny purpose-built automaton, so the DFA size barely matters here.
-- **Dense matches (~2678 in 944KB)**: the other engines degrade sharply because they must construct more of the lazy state machine. RE# stays at 535 MiB/s vs 58 MiB/s for `regex` on x86.
-- **`(?i)` case-insensitive**: `regex` falls back to a slower engine and drops to 0.01 MiB/s. RE# folds case into the DFA and stays at full speed.
-- **Lookarounds**: RE# compiles them directly into the automaton. `regex` doesn't support them (except anchors); `fancy-regex` backtracks, which can be orders of magnitude slower.
-- See also the [rebar](https://github.com/ieviev/rebar) comparison: not apples-to-apples (different match semantics, short repeated inputs), but a useful ballpark.
-- Found a pattern where RE# is >5x slower than `regex` or `fancy-regex`? Please [open an issue](https://github.com/ieviev/resharp/issues).
+<!-- POPULAR-BENCH:END -->

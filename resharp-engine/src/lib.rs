@@ -337,6 +337,7 @@ pub struct Regex {
     /// body-literal prefix; verifies the lookbehind the SIMD prefix cannot.
     pub(crate) neg_lb: Option<prefix::NegLb>,
     pub(crate) find_all: FindAll,
+    pub(crate) class_plus: Option<[u64; 4]>,
     #[cfg(feature = "stream")]
     pub(crate) stream_cache: stream::StreamCache,
 }
@@ -361,6 +362,8 @@ pub enum FindAll {
     Bounded,
     /// generic rev-collect + fwd-verify.
     Dfa,
+    /// language is `CLASS+` for one frequent byte class; emit maximal runs.
+    ClassPlus,
 }
 
 // not a security measure. only flags obvious cases where hardening results in better performance
@@ -1244,6 +1247,19 @@ impl Regex {
         let has_lb = b.contains_lookbehind(node_fwd_simpl);
         let has_la = node_fwd_simpl.contains_lookahead(&b);
 
+        const CLASS_PLUS_FREQ: u64 = 65_535;
+        let class_plus = if !has_lb && !has_la && !has_anchors && !has_look && fixed_length.is_none() {
+            detect_class_plus(&mut b, fwd_start)
+                .filter(|&c| {
+                    let class = class_freq_sum(&mut b, c);
+                    let compl = total_byte_freq().saturating_sub(class);
+                    class >= CLASS_PLUS_FREQ && compl >= CLASS_PLUS_FREQ
+                })
+                .map(|c| class_membership(&mut b, c))
+        } else {
+            None
+        };
+
         let neg_lb = if has_lb && matches!(selected, Some(prefix::PrefixKind::AnchoredFwd(_))) {
             prefix::neg_lb_classes(&mut b, node_fwd_simpl)
         } else {
@@ -1291,8 +1307,10 @@ impl Regex {
                 rev_end_anchored,
                 hardened,
                 has_bounded,
+                class_plus.is_some(),
                 &selected,
             ),
+            class_plus,
             prefix: selected,
             fixed_length,
             empty_nullable,
@@ -1385,6 +1403,7 @@ impl Regex {
             FindAll::EndAnchored => "EndAnchored",
             FindAll::Hardened => "Hardened",
             FindAll::Dfa => "Dfa",
+            FindAll::ClassPlus => "ClassPlus",
             FindAll::Bounded => "Bounded",
             FindAll::FwdPrefix => "FwdPrefix",
             FindAll::FwdLbPrefix => "FwdLbPrefix",
@@ -1449,6 +1468,7 @@ impl Regex {
 
         match self.find_all {
             FindAll::EmptyLang => Ok(vec![]),
+            FindAll::ClassPlus => Ok(self.find_all_class_plus(input)),
             FindAll::Anchored => Ok(self.find_anchored(input)?.into_iter().collect()),
             FindAll::EndAnchored => Ok(self.find_end_anchored(input)?.into_iter().collect()),
             FindAll::Hardened | FindAll::Dfa => self.find_all_dfa(input),
@@ -1481,12 +1501,60 @@ fn push_end_zero_width(matches: &mut Vec<Match>, len: usize) {
     }
 }
 
+fn single_sat_target(b: &mut RegexBuilder, node: NodeId) -> Option<(NodeId, TSetId)> {
+    let der = b.der(node, Nullability::CENTER).ok()?;
+    let mut targets: Vec<(NodeId, TSetId)> = Vec::new();
+    b.collect_der_targets(der, TSetId::FULL, &mut targets);
+    let mut live = targets.into_iter().filter(|(t, _)| *t != NodeId::BOT);
+    let first = live.next()?;
+    if live.next().is_some() {
+        return None;
+    }
+    Some(first)
+}
+
+fn detect_class_plus(b: &mut RegexBuilder, node: NodeId) -> Option<TSetId> {
+    if b.nullability(node).has(Nullability::CENTER) {
+        return None;
+    }
+    let (t1, c1) = single_sat_target(b, node)?;
+    if !b.nullability(t1).has(Nullability::CENTER) {
+        return None;
+    }
+    let (t2, c2) = single_sat_target(b, t1)?;
+    if t2 != t1 || c2 != c1 {
+        return None;
+    }
+    Some(c1)
+}
+
+fn class_freq_sum(b: &mut RegexBuilder, set: TSetId) -> u64 {
+    b.solver()
+        .collect_bytes(set)
+        .iter()
+        .map(|&c| crate::simd::BYTE_FREQ[c as usize] as u64)
+        .sum()
+}
+
+fn total_byte_freq() -> u64 {
+    crate::simd::BYTE_FREQ.iter().map(|&f| f as u64).sum()
+}
+
+fn class_membership(b: &mut RegexBuilder, set: TSetId) -> [u64; 4] {
+    let mut table = [0u64; 4];
+    for &c in b.solver().collect_bytes(set).iter() {
+        table[(c >> 6) as usize] |= 1u64 << (c & 63);
+    }
+    table
+}
+
 fn compute_find_all(
     is_empty_lang: bool,
     fwd_begin_anchored: bool,
     rev_end_anchored: bool,
     hardened: bool,
     has_bounded: bool,
+    class_plus: bool,
     prefix: &Option<prefix::PrefixKind>,
 ) -> FindAll {
     if is_empty_lang {
@@ -1497,6 +1565,9 @@ fn compute_find_all(
     }
     if hardened {
         return FindAll::Hardened;
+    }
+    if class_plus {
+        return FindAll::ClassPlus;
     }
     if rev_end_anchored {
         return FindAll::EndAnchored;
@@ -1899,6 +1970,30 @@ impl Regex {
         } else {
             writeln!(out, "  dfa_effects = (none, eid=0)").unwrap();
         }
+    }
+
+    /// streamlined [X]+ for very common regexes like [a-z]+ etc
+    fn find_all_class_plus(&self, input: &[u8]) -> Vec<Match> {
+        let table = self
+            .class_plus
+            .expect("FindAll::ClassPlus requires a materialized class membership table");
+        let member = |byte: u8| table[(byte >> 6) as usize] & (1u64 << (byte & 63)) != 0;
+        let mut matches = Vec::new();
+        let n = input.len();
+        let mut i = 0usize;
+        while i < n {
+            if member(input[i]) {
+                let start = i;
+                i += 1;
+                while i < n && member(input[i]) {
+                    i += 1;
+                }
+                matches.push(Match { start, end: i });
+            } else {
+                i += 1;
+            }
+        }
+        matches
     }
 
     /// `Y·_*` shape: emit single match at leftmost Y start.
