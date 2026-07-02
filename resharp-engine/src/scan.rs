@@ -1,11 +1,11 @@
 use std::collections::HashMap;
 
 use resharp_algebra::nulls::{
-    push_null_desc, EID_BEGIN0, EID_CENTER0, EID_END0, EID_NONE, NullState, Nullability,
+    push_null_desc, StartPositions, EID_BEGIN0, EID_CENTER0, EID_END0, EID_NONE, NullState, Nullability,
 };
 use resharp_algebra::{NodeId, RegexBuilder};
 
-use crate::accel::MintermSearchValue;
+use crate::accel::{MintermSearchValue, Skipper};
 use crate::ldfa::{dfa_delta, DFA_DEAD, DFA_MISSING, NO_MATCH};
 
 pub(crate) struct ScanTables {
@@ -23,7 +23,7 @@ fn collect_rev_center_simple(
     effects: *const Vec<NullState>,
     eid: u32,
     pos: usize,
-    nulls: &mut Vec<usize>,
+    nulls: &mut StartPositions,
 ) {
     unsafe {
         let v = &*effects.add(eid as usize); // bounds: see `register_state`
@@ -40,7 +40,7 @@ pub(crate) fn collect_rev_complex(
     eid: u32,
     pos: usize,
     mask: Nullability,
-    nulls: &mut Vec<usize>,
+    nulls: &mut StartPositions,
 ) {
     unsafe {
         let effects_vec = &*effects.add(eid as usize); // bounds: see `register_state`
@@ -118,71 +118,147 @@ pub(crate) fn collect_max_rev(
     collect_max::<true>(effects_id, effects, state, pos, mask, best);
 }
 
+enum SkipStep {
+    Continue,
+    Fall,
+    Done,
+}
+
+#[inline(always)]
+#[allow(clippy::too_many_arguments)]
+fn skip_rev(
+    t: &ScanTables,
+    skipper: &Skipper,
+    data: &[u8],
+    curr: &mut u32,
+    pos: &mut usize,
+    prev_entry: &mut usize,
+    nulls: &mut StartPositions,
+    b: &mut RegexBuilder,
+    conv_b: &mut Option<&mut crate::ldfa::LDFA>,
+) -> Result<SkipStep, crate::Error> {
+    match skipper {
+        Skipper::Inner { search, resume } => {
+            let resume = *resume;
+            match search.find_rev(data, *pos) {
+                Some(skip_pos) if skip_pos >= *prev_entry => {
+                    *prev_entry = usize::MAX;
+                    if skip_pos == 0 {
+                        return Ok(SkipStep::Done);
+                    }
+                    *pos = skip_pos - 1;
+                    Ok(SkipStep::Continue)
+                }
+                Some(skip_pos) => {
+                    let cb = conv_b.as_deref_mut().unwrap();
+                    if cb.conv_start_matches(b, skip_pos + 1, data)? {
+                        *prev_entry = skip_pos;
+                        *curr = resume;
+                        *pos = skip_pos + 1;
+                        if skip_pos == 0 {
+                            Ok(SkipStep::Continue)
+                        } else {
+                            Ok(SkipStep::Fall)
+                        }
+                    } else if skip_pos == 0 {
+                        Ok(SkipStep::Done)
+                    } else {
+                        *pos = skip_pos - 1;
+                        Ok(SkipStep::Continue)
+                    }
+                }
+                None => {
+                    *pos = 0;
+                    Ok(SkipStep::Continue)
+                }
+            }
+        }
+        Skipper::Prefix(search) => match search.find_rev(data, *pos) {
+            Some(skip_pos) => {
+                if skip_pos != *pos {
+                    *pos = skip_pos + 1;
+                    let eid = unsafe { *t.center_effect_id.add(*curr as usize) };
+                    if eid != EID_NONE as _ {
+                        if eid == EID_CENTER0 as _ {
+                            nulls.add(*pos + 1);
+                        } else {
+                            collect_rev_center_simple(t.effects, eid as u32, *pos + 1, nulls);
+                        }
+                    }
+                    if skip_pos == 0 {
+                        return Ok(SkipStep::Continue);
+                    }
+                }
+                Ok(SkipStep::Fall)
+            }
+            None => {
+                *pos = 0;
+                Ok(SkipStep::Continue)
+            }
+        },
+        Skipper::State(searcher) => {
+            let lo = searcher.find_rev(&data[..*pos]).unwrap_or(0);
+            let eid = unsafe { *t.center_effect_id.add(*curr as usize) };
+            if eid == EID_NONE as _ {
+            } else if eid == EID_CENTER0 as _ {
+                nulls.add_range(lo + 1, *pos);
+            } else {
+                let v = unsafe { &*t.effects.add(eid as usize) };
+                if v.len() == 1 {
+                    let rel = v[0].rel as usize;
+                    nulls.add_range(lo + 1 + rel, *pos + rel);
+                } else {
+                    for p in (lo + 1..*pos).rev() {
+                        collect_rev_center_simple(t.effects, eid as u32, p, nulls);
+                    }
+                }
+            }
+            *pos = lo + 1;
+            if lo == 0 {
+                Ok(SkipStep::Continue)
+            } else {
+                Ok(SkipStep::Fall)
+            }
+        }
+    }
+}
+
 #[inline(never)]
-pub(crate) fn collect_rev<const EARLY_EXIT: bool, const SKIP: bool, const INITIAL_SKIP: bool>(
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn collect_rev<const EARLY_EXIT: bool, const SKIP: bool>(
     t: &ScanTables,
     skip_ids: &[u8],
-    skip_searchers: &[MintermSearchValue],
-    prefix_ptr: *const crate::accel::RevTeddySearch,
+    skip_searchers: &[Skipper],
     mut curr: u32,
     mut pos: usize,
     data: &[u8],
-    nulls: &mut Vec<usize>,
-    pruned_id: u32,
-) -> (u32, usize, bool) {
+    nulls: &mut StartPositions,
+    b: &mut RegexBuilder,
+    mut conv_b: Option<&mut crate::ldfa::LDFA>,
+) -> Result<(u32, usize, bool), crate::Error> {
     let center_table = t.center_table;
     let center_effect_id = t.center_effect_id;
     let minterms_lookup = t.minterms_lookup;
     let mt_log = t.mt_log;
+    let mut prev_entry = usize::MAX;
     while pos > 1 {
         if SKIP {
             let sid = skip_ids[curr as usize];
             if sid != 0 {
-                if INITIAL_SKIP && curr == pruned_id {
-                    // SAFETY: unreachable unless prefix_ptr is non-null
-                    match unsafe { &*prefix_ptr }.find_rev(data, pos) {
-                        Some(skip_pos) => {
-                            if pos != skip_pos {
-                                pos = skip_pos + 1;
-                                let eid = unsafe { *center_effect_id.add(curr as usize) }; // bounds: see `register_state`
-                                if eid != EID_NONE as _ {
-                                    if eid == EID_CENTER0 as _ {
-                                        nulls.push(pos + 1);
-                                    } else {
-                                        collect_rev_center_simple(
-                                            t.effects,
-                                            eid as u32,
-                                            pos + 1,
-                                            nulls,
-                                        );
-                                    }
-                                }
-                                if skip_pos == 0 {
-                                    continue;
-                                }
-                            }
-                        }
-                        None => {
-                            pos = 0;
-                            continue;
-                        }
-                    }
-                } else {
-                    let searcher = &skip_searchers[sid as usize - 1];
-                    let lo = searcher.find_rev(&data[..pos]).unwrap_or(0);
-                    let eid = unsafe { *center_effect_id.add(curr as usize) }; // bounds: see `register_state`
-                    if eid == EID_NONE as _ {
-                    } else if eid == EID_CENTER0 as _ {
-                        nulls.extend((lo + 1..pos).rev());
-                    } else {
-                        for p in (lo + 1..pos).rev() {
-                            collect_rev_center_simple(t.effects, eid as u32, p, nulls);
-                        }
-                    }
-                    pos = lo + 1;
-                    if lo == 0 {
-                        continue;
-                    }
+                match skip_rev(
+                    t,
+                    skipper(skip_searchers, sid),
+                    data,
+                    &mut curr,
+                    &mut pos,
+                    &mut prev_entry,
+                    nulls,
+                    b,
+                    &mut conv_b,
+                )? {
+                    SkipStep::Continue => continue,
+                    SkipStep::Fall => {}
+                    SkipStep::Done => return Ok((curr, 1, false)),
                 }
             }
         }
@@ -191,27 +267,27 @@ pub(crate) fn collect_rev<const EARLY_EXIT: bool, const SKIP: bool, const INITIA
             let mt = *minterms_lookup.add(*data.as_ptr().add(pos) as usize) as u32;
             let next = *center_table.add(dfa_delta(curr, mt, mt_log));
             if next == DFA_MISSING {
-                return (curr, pos, true);
+                return Ok((curr, pos, true));
             }
             curr = next as u32;
             let eid = *center_effect_id.add(curr as usize); // bounds: see `register_state`
             if eid != EID_NONE as _ {
                 if eid == EID_CENTER0 as _ {
-                    nulls.push(pos);
+                    nulls.add(pos);
                     if EARLY_EXIT {
-                        return (curr, pos, false);
+                        return Ok((curr, pos, false));
                     }
                 } else {
                     collect_rev_center_simple(t.effects, eid as u32, pos, nulls);
                     if EARLY_EXIT && !nulls.is_empty() {
-                        return (curr, pos, false);
+                        return Ok((curr, pos, false));
                     }
                 }
             }
         }
     }
 
-    (curr, 1, false)
+    Ok((curr, 1, false))
 }
 
 #[inline(always)]
@@ -263,12 +339,25 @@ unsafe fn skip_find_fwd(
     searcher.find_fwd(std::slice::from_raw_parts(data.add(pos), end - pos))
 }
 
+#[inline(always)]
+pub(crate) fn skipper(skips: &[Skipper], sid: u8) -> &Skipper {
+    &skips[sid as usize - 1]
+}
+
+#[inline(always)]
+pub(crate) fn state_searcher(skips: &[Skipper], sid: u8) -> &MintermSearchValue {
+    match skipper(skips, sid) {
+        Skipper::State(s) => s,
+        _ => unreachable!(),
+    }
+}
+
 #[inline(never)]
 pub(crate) fn scan_fwd_verify<const SKIP: bool>(
     t: &ScanTables,
     effects_id: *const u16,
     skip_ids: &[u8],
-    skip_searchers: &[MintermSearchValue],
+    skip_searchers: &[Skipper],
     mut curr: u32,
     mut pos: usize,
     end: usize,
@@ -286,7 +375,7 @@ pub(crate) fn scan_fwd_verify<const SKIP: bool>(
             {
                 let sid = skip_ids[curr as usize];
                 if sid != 0 {
-                    let searcher = &skip_searchers[sid as usize - 1];
+                    let searcher = state_searcher(skip_searchers, sid);
                     match unsafe { skip_find_fwd(searcher, data, pos, end) } {
                         Some(offset) => {
                             if offset > 0 {
@@ -383,7 +472,7 @@ pub(crate) fn scan_fwd_first_null<const SKIP: bool>(
     t: &ScanTables,
     effects_id: *const u16,
     skip_ids: &[u8],
-    skip_searchers: &[MintermSearchValue],
+    skip_searchers: &[Skipper],
     mut curr: u32,
     mut pos: usize,
     end: usize,
@@ -397,7 +486,7 @@ pub(crate) fn scan_fwd_first_null<const SKIP: bool>(
         if SKIP {
             let sid = skip_ids[curr as usize];
             if sid != 0 {
-                let searcher = &skip_searchers[sid as usize - 1];
+                let searcher = state_searcher(skip_searchers, sid);
                 match unsafe { skip_find_fwd(searcher, data, pos, end) } {
                     Some(offset) => {
                         pos += offset;
@@ -442,7 +531,7 @@ pub(crate) fn scan_fwd<const SKIP: bool>(
     t: &ScanTables,
     effects_id: *const u16,
     skip_ids: &[u8],
-    skip_searchers: &[MintermSearchValue],
+    skip_searchers: &[Skipper],
     mut l_state: u32,
     mut l_pos: usize,
     end: usize,
@@ -464,7 +553,7 @@ pub(crate) fn scan_fwd<const SKIP: bool>(
                 {
                     let sid = skip_ids[l_state as usize];
                     if sid != 0 {
-                        let searcher = &skip_searchers[sid as usize - 1];
+                        let searcher = state_searcher(skip_searchers, sid);
                         match skip_find_fwd(searcher, data, l_pos, end) {
                             Some(offset) => {
                                 if offset > 0 {

@@ -55,6 +55,7 @@ pub(crate) mod fwd;
 pub(crate) mod ismatch;
 pub(crate) mod prefix;
 pub(crate) mod scan;
+
 #[cfg(feature = "stream")]
 pub(crate) mod stream;
 #[cfg(feature = "stream")]
@@ -75,7 +76,7 @@ pub use prefix::calc_prefix_sets;
 pub use prefix::PrefixSets;
 #[cfg(feature = "diag")]
 pub use simd::{force_scalar_scope, ForceScalarGuard};
-pub(crate) use resharp_algebra::nulls::Nullability;
+pub(crate) use resharp_algebra::nulls::{Nullability, StartPositions};
 pub(crate) use resharp_algebra::solver::TSetId;
 use resharp_algebra::Kind;
 #[doc(hidden)]
@@ -204,6 +205,8 @@ pub struct RegexOptions {
     pub hardened: bool,
     /// remove the default pattern size limit for very large regexes (default: false).
     pub unbounded_size: bool,
+    #[doc(hidden)]
+    pub force_convergence: bool,
 }
 
 impl Default for RegexOptions {
@@ -218,6 +221,7 @@ impl Default for RegexOptions {
             ignore_whitespace: false,
             hardened: false,
             unbounded_size: false,
+            force_convergence: false,
         }
     }
 }
@@ -253,6 +257,11 @@ impl RegexOptions {
         self.hardened = yes;
         self
     }
+    #[doc(hidden)]
+    pub fn force_convergence(mut self, yes: bool) -> Self {
+        self.force_convergence = yes;
+        self
+    }
     /// disable parser and algebra size caps.
     /// the defaults are generous; if you hit them, splitting the pattern into
     /// several smaller regexes is almost always the better fix than raising the limit.
@@ -279,9 +288,11 @@ pub(crate) struct RegexInner {
     #[cfg_attr(not(feature = "stream"), allow(dead_code))]
     pub(crate) rev: Option<ldfa::LDFA>,
     pub(crate) rev_ts: ldfa::LDFA,
+    #[cfg(feature = "convergence_prefix")]
+    pub(crate) conv_b: Option<ldfa::LDFA>,
     #[cfg(feature = "stream")]
     pub(crate) stream: stream::StreamInit,
-    pub(crate) nulls: Vec<usize>,
+    pub(crate) nulls: StartPositions,
     pub(crate) matches: Vec<Match>,
     pub(crate) bounded: Option<bdfa::BDFA>,
     pub(crate) fas: Option<fas::FwdDFA>,
@@ -295,6 +306,7 @@ pub struct Regex {
     pub(crate) fixed_length: Option<u32>,
     pub(crate) empty_nullable: bool,
     pub(crate) always_nullable: bool,
+    pub(crate) star_loop: bool,
     /// node = ⊥
     /// found to be trivially unmatchable, not guaranteed before full expansion
     pub(crate) is_empty_lang: bool,
@@ -319,6 +331,11 @@ pub struct Regex {
     pub(crate) has_anchors: bool,
     pub(crate) has_lb: bool,
     pub(crate) has_la: bool,
+    #[cfg(feature = "convergence_prefix")]
+    pub(crate) conv_prefix: bool,
+    /// fixed-length negative lookbehind reject test paired with an `AnchoredFwd`
+    /// body-literal prefix; verifies the lookbehind the SIMD prefix cannot.
+    pub(crate) neg_lb: Option<prefix::NegLb>,
     pub(crate) find_all: FindAll,
     #[cfg(feature = "stream")]
     pub(crate) stream_cache: stream::StreamCache,
@@ -368,7 +385,7 @@ fn auto_harden(b: &mut RegexBuilder, start: NodeId, has_anchors: bool) -> Harden
     if graph
         .nodes
         .iter()
-        .any(|&n| b.get_kind(n) == resharp_algebra::Kind::Compl)
+        .any(|&n| n.is_compl(b))
     {
         return Hardening::default();
     }
@@ -448,7 +465,8 @@ fn auto_harden(b: &mut RegexBuilder, start: NodeId, has_anchors: bool) -> Harden
             .filter(|e| e.dst == i)
             .fold(TSetId::EMPTY, |acc, e| b.solver().or_id(acc, e.set));
         let entry_wide = b.solver().byte_count(start_to_i) >= ENTRY_BYTES;
-        if !has_anchors && min_len <= SHORT_PREFIX && entry_wide {
+        let start_is_union = start.is_union(b);
+        if !has_anchors && min_len <= SHORT_PREFIX && entry_wide && start_is_union {
             return Hardening {
                 full: true,
                 no_fwd_prefix: true,
@@ -525,7 +543,7 @@ fn auto_harden(b: &mut RegexBuilder, start: NodeId, has_anchors: bool) -> Harden
         if start_escapes_scc && !start_in_cycle {
             continue;
         }
-        if sticky && opener_wide && (start_branches || scc_branches) {
+        if min_len <= SHORT_PREFIX && sticky && opener_wide && (start_branches || scc_branches) {
             return Hardening {
                 full: true,
                 no_fwd_prefix: true,
@@ -648,7 +666,7 @@ fn opener_class(b: &mut RegexBuilder, start: NodeId) -> TSetId {
 }
 
 fn collect_union_branches(b: &RegexBuilder, node: NodeId, out: &mut Vec<NodeId>) {
-    if b.get_kind(node) == Kind::Union {
+    if node.is_union(b) {
         collect_union_branches(b, node.left(b), out);
         collect_union_branches(b, node.right(b), out);
     } else {
@@ -657,10 +675,10 @@ fn collect_union_branches(b: &RegexBuilder, node: NodeId, out: &mut Vec<NodeId>)
 }
 
 fn first_lb_in_branch(b: &RegexBuilder, node: NodeId) -> Option<NodeId> {
-    if b.get_kind(node) == Kind::Lookbehind {
+    if node.is_lookbehind(b) {
         return Some(node);
     }
-    if b.get_kind(node) == Kind::Concat {
+    if node.is_concat(b) {
         return first_lb_in_branch(b, node.left(b));
     }
     None
@@ -680,7 +698,7 @@ fn any_unbounded_lookback(b: &RegexBuilder, node: NodeId) -> bool {
     if !node.contains_lookbehind(b) {
         return false;
     }
-    if b.get_kind(node) == Kind::Lookbehind && lb_is_unbounded(b, node) {
+    if node.is_lookbehind(b) && lb_is_unbounded(b, node) {
         return true;
     }
     [node.left(b), node.right(b)]
@@ -707,7 +725,8 @@ fn union_branches_distinguishable(b: &mut RegexBuilder, union_node: NodeId) -> b
     if b.get_fixed_length(union_node).is_some() {
         return true;
     }
-    let mut firsts: Vec<(bool, TSetId, Option<NodeId>)> = Vec::with_capacity(branches.len());
+    let mut firsts: Vec<(bool, TSetId, Option<NodeId>, Option<u32>)> =
+        Vec::with_capacity(branches.len());
     for &br in &branches {
         let has_lb = br.contains_lookbehind(b);
         let lb_node = if has_lb {
@@ -723,17 +742,18 @@ fn union_branches_distinguishable(b: &mut RegexBuilder, union_node: NodeId) -> b
             Ok(s) => s,
             Err(_) => return false,
         };
+        let (bmin, bmax) = b.get_min_max_length(br);
         let first = match sets.first() {
             Some(&s) => s,
             None => {
-                let (min, _) = b.get_min_max_length(br);
-                if min == 0 {
+                if bmin == 0 {
                     return false;
                 }
                 continue;
             }
         };
-        firsts.push((has_lb, first, lb_node));
+        let fixed_len = if bmin == bmax { Some(bmin) } else { None };
+        firsts.push((has_lb, first, lb_node, fixed_len));
     }
     for i in 0..firsts.len() {
         if !firsts[i].0 {
@@ -747,16 +767,21 @@ fn union_branches_distinguishable(b: &mut RegexBuilder, union_node: NodeId) -> b
             if inter == TSetId::EMPTY {
                 continue;
             }
-            let lb_disjoint = match (firsts[i].2, firsts[j].2) {
+            let lb_same = match (firsts[i].2, firsts[j].2) {
                 (Some(ni), Some(nj)) => {
-                    let bi = b.get_lookbehind_inner(ni);
-                    let bj = b.get_lookbehind_inner(nj);
-                    let inter = b.mk_inter(bi, bj);
-                    b.subsumes(NodeId::BOT, inter) == Some(true)
+                    b.get_lookbehind_inner(ni) == b.get_lookbehind_inner(nj)
                 }
+                (None, None) => true,
                 _ => false,
             };
-            if !lb_disjoint {
+            if lb_same {
+                continue;
+            }
+            let same_fixed = matches!(
+                (firsts[i].3, firsts[j].3),
+                (Some(a), Some(c)) if a == c
+            );
+            if !same_fixed {
                 return false;
             }
         }
@@ -781,8 +806,12 @@ fn ensure_supported_rec(
     node: NodeId,
     at_start: bool,
     strict_lb_start: bool,
+    memo: &mut std::collections::HashSet<(NodeId, bool, bool)>,
 ) -> Result<Option<Compatibility>, resharp_algebra::ResharpError> {
     if !node.contains_lookaround(b) {
+        return Ok(None);
+    }
+    if !memo.insert((node, at_start, strict_lb_start)) {
         return Ok(None);
     }
     match b.get_kind(node) {
@@ -792,8 +821,8 @@ fn ensure_supported_rec(
             if has_lb && !union_branches_distinguishable(b, node) {
                 return Err(resharp_algebra::ResharpError::UnsupportedPattern);
             }
-            let left = ensure_supported_rec(b, l, at_start, strict_lb_start)?;
-            let right = ensure_supported_rec(b, r, at_start, strict_lb_start)?;
+            let left = ensure_supported_rec(b, l, at_start, strict_lb_start, memo)?;
+            let right = ensure_supported_rec(b, r, at_start, strict_lb_start, memo)?;
             let union = if has_lb {
                 Some(Compatibility::LookaroundUnion)
             } else {
@@ -809,7 +838,7 @@ fn ensure_supported_rec(
             // distributing (A|B) & C eagerly to (A&C)|(B&C)
             // to unlock some patterns outside of RE# fragment like `(^abc|def)&.*`
             for (u, other) in [(l, r), (r, l)] {
-                if b.get_kind(u) == Kind::Union && u.contains_lookbehind(b) {
+                if u.is_union(b) && u.contains_lookbehind(b) {
                     if strict_lb_start && !at_start {
                         return Err(resharp_algebra::ResharpError::UnsupportedPattern);
                     }
@@ -824,25 +853,25 @@ fn ensure_supported_rec(
                         return Err(resharp_algebra::ResharpError::UnsupportedPattern);
                     }
                     let other_compatibility =
-                        ensure_supported_rec(b, other, at_start, strict_lb_start)?;
+                        ensure_supported_rec(b, other, at_start, strict_lb_start, memo)?;
                     return Ok(combine_compatibility(
                         Some(Compatibility::LookaroundUnion),
                         other_compatibility,
                     ));
                 }
             }
-            let left = ensure_supported_rec(b, l, at_start, strict_lb_start)?;
-            let right = ensure_supported_rec(b, r, at_start, strict_lb_start)?;
+            let left = ensure_supported_rec(b, l, at_start, strict_lb_start, memo)?;
+            let right = ensure_supported_rec(b, r, at_start, strict_lb_start, memo)?;
             Ok(combine_compatibility(left, right))
         }
         Kind::Concat => {
             let left = node.left(b);
             let right = node.right(b);
             let (_, left_max) = b.get_min_max_length(left);
-            if left_max > 0 && b.get_kind(right) == Kind::Union && right.contains_lookbehind(b) {
+            if left_max > 0 && right.is_union(b) && right.contains_lookbehind(b) {
                 return Err(resharp_algebra::ResharpError::UnsupportedPattern);
             }
-            if b.get_kind(left) == Kind::Union && left.contains_lookbehind(b) {
+            if left.is_union(b) && left.contains_lookbehind(b) {
                 if strict_lb_start && !at_start {
                     return Err(resharp_algebra::ResharpError::UnsupportedPattern);
                 }
@@ -855,7 +884,7 @@ fn ensure_supported_rec(
                 }
                 if union_branches_distinguishable(b, distributed) {
                     let right_compatibility =
-                        ensure_supported_rec(b, right, at_start, strict_lb_start)?;
+                        ensure_supported_rec(b, right, at_start, strict_lb_start, memo)?;
                     return Ok(combine_compatibility(
                         Some(Compatibility::LookaroundUnion),
                         right_compatibility,
@@ -864,10 +893,10 @@ fn ensure_supported_rec(
                     return Err(resharp_algebra::ResharpError::UnsupportedPattern);
                 }
             }
-            let left_compatibility = ensure_supported_rec(b, left, at_start, strict_lb_start)?;
+            let left_compatibility = ensure_supported_rec(b, left, at_start, strict_lb_start, memo)?;
             let (_, left_max) = b.get_min_max_length(left);
             let right_compatibility =
-                ensure_supported_rec(b, right, at_start && left_max == 0, strict_lb_start)?;
+                ensure_supported_rec(b, right, at_start && left_max == 0, strict_lb_start, memo)?;
             Ok(combine_compatibility(
                 left_compatibility,
                 right_compatibility,
@@ -877,10 +906,10 @@ fn ensure_supported_rec(
             if node.left(b).contains_lookaround(b) {
                 return Err(resharp_algebra::ResharpError::UnsupportedPattern);
             }
-            ensure_supported_rec(b, node.left(b), at_start, strict_lb_start)
+            ensure_supported_rec(b, node.left(b), at_start, strict_lb_start, memo)
         }
-        Kind::Ordered => ensure_supported_rec(b, node.left(b), at_start, strict_lb_start),
-        Kind::Compl => ensure_supported_rec(b, node.left(b), at_start, strict_lb_start),
+        Kind::Ordered => ensure_supported_rec(b, node.left(b), at_start, strict_lb_start, memo),
+        Kind::Compl => ensure_supported_rec(b, node.left(b), at_start, strict_lb_start, memo),
         Kind::Lookbehind => {
             let prev = node.right(b);
             let (_, prev_max) = if prev == NodeId::MISSING {
@@ -891,13 +920,13 @@ fn ensure_supported_rec(
             if !at_start || prev_max > 0 {
                 return Err(resharp_algebra::ResharpError::UnsupportedPattern);
             }
-            let left = ensure_supported_rec(b, node.left(b), at_start, strict_lb_start)?;
-            let right = ensure_supported_rec(b, prev, at_start, strict_lb_start)?;
+            let left = ensure_supported_rec(b, node.left(b), at_start, strict_lb_start, memo)?;
+            let right = ensure_supported_rec(b, prev, at_start, strict_lb_start, memo)?;
             Ok(combine_compatibility(left, right))
         }
         Kind::Lookahead => {
-            let left = ensure_supported_rec(b, node.left(b), at_start, strict_lb_start)?;
-            let right = ensure_supported_rec(b, node.right(b), at_start, strict_lb_start)?;
+            let left = ensure_supported_rec(b, node.left(b), at_start, strict_lb_start, memo)?;
+            let right = ensure_supported_rec(b, node.right(b), at_start, strict_lb_start, memo)?;
             Ok(combine_compatibility(left, right))
         }
         Kind::Pred => Ok(None),
@@ -910,8 +939,12 @@ fn ensure_begin_leading(
     b: &RegexBuilder,
     node: NodeId,
     at_start: bool,
+    memo: &mut std::collections::HashSet<(NodeId, bool)>,
 ) -> Result<(), resharp_algebra::ResharpError> {
     if !b.contains_anchors(node) {
+        return Ok(());
+    }
+    if !memo.insert((node, at_start)) {
         return Ok(());
     }
     match b.get_kind(node) {
@@ -925,15 +958,15 @@ fn ensure_begin_leading(
         Kind::End | Kind::Pred => Ok(()),
         Kind::Concat => {
             let l = node.left(b);
-            ensure_begin_leading(b, l, at_start)?;
+            ensure_begin_leading(b, l, at_start, memo)?;
             let (lmin, _) = b.get_min_max_length(l);
-            ensure_begin_leading(b, node.right(b), at_start && lmin == 0)
+            ensure_begin_leading(b, node.right(b), at_start && lmin == 0, memo)
         }
         Kind::Union | Kind::Inter => {
-            ensure_begin_leading(b, node.left(b), at_start)?;
-            ensure_begin_leading(b, node.right(b), at_start)
+            ensure_begin_leading(b, node.left(b), at_start, memo)?;
+            ensure_begin_leading(b, node.right(b), at_start, memo)
         }
-        Kind::Star | Kind::Ordered => ensure_begin_leading(b, node.left(b), false),
+        Kind::Star | Kind::Ordered => ensure_begin_leading(b, node.left(b), false, memo),
         Kind::Compl => Ok(()),
         Kind::Lookbehind | Kind::Lookahead => Ok(()),
     }
@@ -943,8 +976,8 @@ fn ensure_supported(
     b: &mut RegexBuilder,
     node: NodeId,
 ) -> Result<Option<Compatibility>, resharp_algebra::ResharpError> {
-    ensure_begin_leading(b, node, true)?;
-    ensure_supported_rec(b, node, true, true)
+    ensure_begin_leading(b, node, true, &mut std::collections::HashSet::new())?;
+    ensure_supported_rec(b, node, true, true, &mut std::collections::HashSet::new())
 }
 
 impl Regex {
@@ -1035,7 +1068,10 @@ impl Regex {
         let node_fwd_simpl = b.simplify_fwd_initial(node);
         let fwd_start = b.strip_lb(node_fwd_simpl)?;
         let fwd_end_nullable = b.nullability(fwd_start).has(Nullability::END);
-        let ts_rev_start = b.ts_rev_start(node_fwd_simpl)?;
+        let rev_basis = b
+            .strip_trailing_redundant_lookahead(node_fwd_simpl)
+            .unwrap_or(node_fwd_simpl);
+        let ts_rev_start = b.ts_rev_start(rev_basis)?;
         // ensure_supported_rec(&mut b, ts_rev_start, true, false)?;
         #[cfg(feature = "debug")]
         {
@@ -1047,7 +1083,7 @@ impl Regex {
         // TODO: make it configurable to actually check and reject empty lang entriely
         let body_after_begin = {
             let mut cur = node_fwd_simpl;
-            while b.get_kind(cur) == resharp_algebra::Kind::Concat && cur.left(&b) == NodeId::BEGIN {
+            while cur.is_concat(&b) && cur.left(&b) == NodeId::BEGIN {
                 cur = cur.right(&b);
             }
             cur
@@ -1071,7 +1107,7 @@ impl Regex {
         if !opts.hardened && ah.full {
             opts.hardened = true;
         }
-        let (selected, rev_skip) = prefix::select_prefix(
+        let (selected, rev_skip, _fwd_prefix_wins) = prefix::select_prefix(
             &mut b,
             node_fwd_simpl,
             ts_rev_start,
@@ -1079,6 +1115,8 @@ impl Regex {
             min_len,
             max_cap,
             ah.no_fwd_prefix,
+            opts.hardened,
+            opts.force_convergence,
         )?;
         #[cfg(feature = "debug")]
         {
@@ -1087,6 +1125,8 @@ impl Regex {
                 (Some(prefix::PrefixKind::AnchoredFwdLb(_)), _) => "AnchoredFwdLb",
                 (Some(prefix::PrefixKind::AnchoredRev), _) => "AnchoredRev",
                 (Some(prefix::PrefixKind::PotentialStart), _) => "PotentialStart",
+                #[cfg(feature = "convergence_prefix")]
+                (Some(prefix::PrefixKind::Convergence), _) => "Convergence",
                 (None, Some(_)) => "<none> (rev prefix_skip)",
                 (None, None) => "<none>",
             };
@@ -1109,11 +1149,41 @@ impl Regex {
         let mut ts_fwd = ldfa::LDFA::new_fwd(&mut b, ts_fwd_start, max_cap)?;
 
         let mut rev_ts = ldfa::LDFA::new_rev(&mut b, ts_rev_start, max_cap)?;
-        rev_ts.prefix_skip = rev_skip;
-        rev_ts.ensure_pruned_skip();
-        if b.is_begin_anchored(ts_rev_start) {
+        #[cfg(feature = "convergence_prefix")]
+        let mut conv_b: Option<ldfa::LDFA> = None;
+        #[cfg(feature = "convergence_prefix")]
+        let mut conv_prefix = false;
+        if let Some((search, resume_node, b_node)) = rev_skip {
+            #[cfg(not(feature = "convergence_prefix"))]
+            let _ = b_node;
+            let resume = match resume_node {
+                Some(node) => {
+                    let pruned_node = rev_ts.state_nodes[rev_ts.pruned as usize];
+                    let union = b.mk_union(node, pruned_node);
+                    rev_ts.get_or_register(&mut b, union)
+                }
+                None => 0,
+            };
+            #[cfg(feature = "convergence_prefix")]
+            if resume != 0 {
+                let b_node = b_node.expect(
+                    "convergence prefix (resume != 0) must carry its right-side `b` node",
+                );
+                conv_b = Some(ldfa::LDFA::new_fwd(&mut b, b_node, max_cap)?);
+                conv_prefix = true;
+            }
+            rev_ts.install_prefix(&mut b, search, resume as u32)?;
+        }
+        if !b.starts_with_ts(ts_rev_start) {
             rev_ts.ensure_dead_skip();
         }
+
+        let rev_anchored = if rev_end_anchored {
+            let rev_no_ts = b.normalize_rev(rev_node, 0)?;
+            Some(ldfa::LDFA::new_rev(&mut b, rev_no_ts, max_cap)?)
+        } else {
+            None
+        };
 
         #[cfg(feature = "stream")]
         let stream_init = {
@@ -1128,19 +1198,9 @@ impl Regex {
 
         let (fwd_lb_begin_nullable, fwd_lb_body_nullable, lb_check_bytes) =
             if matches!(selected, Some(prefix::PrefixKind::AnchoredFwdLb(_))) {
-                let lb_inner = b.get_lookbehind_inner(node_fwd_simpl.left(&b));
-                let lb_nonbegin = b.nonbegins(lb_inner);
-                let mut lb_stripped = lb_nonbegin;
-                loop {
-                    let after_strip = b.strip_prefix_safe(lb_stripped);
-                    let after_nb = b.nonbegins(after_strip);
-                    if after_nb == lb_stripped {
-                        break;
-                    }
-                    lb_stripped = after_nb;
-                }
-                let lb_fixed = b
-                    .get_fixed_length(lb_stripped)
+                let lb_node = node_fwd_simpl.left(&b);
+                let lb_inner = b.get_lookbehind_inner(lb_node);
+                let (_, lb_fixed) = prefix::fwd_lb_class(&mut b, lb_node)
                     .ok_or(Error::InternalError("AnchoredFwdLb requires fixed-length lb"))?;
                 let begin_nullable = b.nullability(lb_inner).has(Nullability::BEGIN);
                 let body_nullable = b.nullability(fwd_start) != Nullability::NEVER;
@@ -1150,14 +1210,16 @@ impl Regex {
             };
 
         // lots of conditions when something else is better.. possibly removing it entirely
+        let always_nullable = initial_nullability == Nullability::ALWAYS;
+        let max_len_limit = if always_nullable { 512 } else { 100 };
         let use_bounded = !has_fwd_prefix
             && max_length.is_some()
-            && max_len <= 100
+            && max_len <= max_len_limit
             && !b.contains_lookbehind(node_fwd_simpl)
             && !node_fwd_simpl.contains_lookahead(&b)
             && !b.contains_anchors(node_fwd_simpl)
             && pattern_len <= 150 // a guess..
-            && !empty_nullable;
+            && (!empty_nullable || always_nullable);
 
         let bounded = if use_bounded {
             Some(bdfa::BDFA::new(&mut b, fwd_start)?)
@@ -1167,10 +1229,14 @@ impl Regex {
 
         let has_bounded = bounded.is_some();
         let bounded_safe_find_all = if has_bounded {
-            let inner_match = b.mk_concat(node_fwd_simpl, resharp_algebra::NodeId::TOPPLUS);
-            let interior = b.mk_concat(resharp_algebra::NodeId::TOPPLUS, inner_match);
-            let overlap = b.mk_inter(node_fwd_simpl, interior);
-            b.is_empty_lang(overlap) == Some(true)
+            if always_nullable {
+                true
+            } else {
+                let inner_match = b.mk_concat(node_fwd_simpl, resharp_algebra::NodeId::TOPPLUS);
+                let interior = b.mk_concat(resharp_algebra::NodeId::TOPPLUS, inner_match);
+                let overlap = b.mk_inter(node_fwd_simpl, interior);
+                b.is_empty_lang(overlap) == Some(true)
+            }
         } else {
             false
         };
@@ -1178,11 +1244,18 @@ impl Regex {
         let has_lb = b.contains_lookbehind(node_fwd_simpl);
         let has_la = node_fwd_simpl.contains_lookahead(&b);
 
-        let hardened = if opts.hardened && !has_bounded && fixed_length.is_none() && max_cap >= 64 {
-            fwd.has_nonnullable_cycle(&mut b, 256)
+        let neg_lb = if has_lb && matches!(selected, Some(prefix::PrefixKind::AnchoredFwd(_))) {
+            prefix::neg_lb_classes(&mut b, node_fwd_simpl)
         } else {
-            false
+            None
         };
+
+        let need_nn_cycle = (opts.hardened && !has_bounded && fixed_length.is_none() && max_cap >= 64)
+            || initial_nullability == Nullability::ALWAYS;
+        let nn_cycle = need_nn_cycle && fwd.has_nonnullable_cycle(&mut b, 256);
+        let hardened = opts.hardened && !has_bounded && fixed_length.is_none() && max_cap >= 64 && nn_cycle;
+        let star_loop =
+            initial_nullability == Nullability::ALWAYS && !has_lb && !nn_cycle;
 
         let fas = if hardened || initial_nullability == Nullability::ALWAYS {
             let ksm = if hardened {
@@ -1201,14 +1274,16 @@ impl Regex {
                 b,
                 fwd,
                 fwd_ts: ts_fwd,
-                rev: None,
+                rev: rev_anchored,
                 rev_ts,
                 #[cfg(feature = "stream")]
                 stream: stream_init,
-                nulls: Vec::new(),
+                nulls: StartPositions::new(),
                 matches: Vec::new(),
                 bounded,
                 fas,
+                #[cfg(feature = "convergence_prefix")]
+                conv_b,
             }),
             find_all: compute_find_all(
                 is_empty_lang,
@@ -1222,6 +1297,7 @@ impl Regex {
             fixed_length,
             empty_nullable,
             always_nullable: initial_nullability == Nullability::ALWAYS,
+            star_loop,
             is_empty_lang,
             fwd_begin_anchored,
             rev_end_anchored,
@@ -1236,6 +1312,9 @@ impl Regex {
             has_anchors,
             has_lb,
             has_la,
+            #[cfg(feature = "convergence_prefix")]
+            conv_prefix,
+            neg_lb,
             #[cfg(feature = "stream")]
             stream_cache: Default::default(),
         })
@@ -1260,6 +1339,12 @@ impl Regex {
         self.hardened
     }
 
+    #[cfg(feature = "convergence_prefix")]
+    #[allow(missing_docs)]
+    pub fn uses_convergence_prefix(&self) -> bool {
+        self.conv_prefix
+    }
+
     #[cfg(feature = "diag")]
     #[allow(missing_docs)]
     pub fn has_fwd_prefix(&self) -> bool {
@@ -1267,6 +1352,12 @@ impl Regex {
             self.prefix,
             Some(prefix::PrefixKind::AnchoredFwd(_) | prefix::PrefixKind::AnchoredFwdLb(_))
         )
+    }
+
+    #[cfg(feature = "diag")]
+    #[allow(missing_docs)]
+    pub fn has_prefix(&self) -> bool {
+        self.prefix.is_some()
     }
 
     #[cfg(feature = "diag")]
@@ -1309,6 +1400,8 @@ impl Regex {
             Some(prefix::PrefixKind::AnchoredFwdLb(_)) => Some("AnchoredFwdLb"),
             Some(prefix::PrefixKind::AnchoredRev) => Some("AnchoredRev"),
             Some(prefix::PrefixKind::PotentialStart) => Some("PotentialStart"),
+            #[cfg(feature = "convergence_prefix")]
+            Some(prefix::PrefixKind::Convergence) => Some("Convergence"),
         }
     }
 
@@ -1328,7 +1421,6 @@ impl Regex {
         let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         let fwd = self.prefix.as_ref().is_some_and(|p| p.is_fwd());
         let rev = self.prefix.as_ref().is_some_and(|p| p.is_rev())
-            || inner.rev_ts.prefix_skip.is_some()
             || inner.rev_ts.can_skip();
         (fwd, rev)
     }
@@ -1368,7 +1460,9 @@ impl Regex {
                 }
             }
             FindAll::FwdPrefix => match &self.prefix {
-                Some(prefix::PrefixKind::AnchoredFwd(fp)) => self.find_all_fwd_prefix(fp, input),
+                Some(prefix::PrefixKind::AnchoredFwd(fp)) => {
+                    self.find_all_fwd_prefix(fp, self.neg_lb.as_ref(), input)
+                }
                 _ => Err(Error::InternalError("FwdPrefix without AnchoredFwd prefix")),
             },
             FindAll::FwdLbPrefix => match &self.prefix {
@@ -1410,6 +1504,9 @@ fn compute_find_all(
     match prefix {
         Some(prefix::PrefixKind::AnchoredFwd(_)) => FindAll::FwdPrefix,
         Some(prefix::PrefixKind::AnchoredFwdLb(_)) => FindAll::FwdLbPrefix,
+        Some(prefix::PrefixKind::AnchoredRev | prefix::PrefixKind::PotentialStart) => {
+            FindAll::Dfa
+        }
         _ => {
             if has_bounded {
                 FindAll::Bounded
@@ -1421,138 +1518,145 @@ fn compute_find_all(
 }
 
 #[cfg(feature = "convergence_prefix")]
-pub(crate) fn find_strict_convergence_node(
+pub(crate) fn find_inner_literal(
     b: &mut resharp_algebra::RegexBuilder,
-    ts: &mut ldfa::LDFA,
-    rev_start: resharp_algebra::NodeId,
-    max_depth: u32,
-) -> Option<(resharp_algebra::NodeId, u32)> {
-    use resharp_algebra::{Kind, NodeId};
-    use std::collections::HashSet;
+    search_start: resharp_algebra::NodeId,
+) -> Option<(
+    resharp_algebra::NodeId,
+    Vec<resharp_algebra::solver::TSetId>,
+    resharp_algebra::solver::TSetId,
+)> {
+    use resharp_algebra::NodeId;
+    use resharp_algebra::solver::TSetId;
 
-    // strip leading `_*` skip + `\A`
-    let stripped = b.nonbegins(rev_start);
-    let stripped = b.strip_prefix_safe(stripped);
-    if stripped == NodeId::BOT {
+    if search_start == NodeId::BOT || b.get_min_max_length(search_start).0 == 0 {
         return None;
-    }
-    let (min_len, _) = b.get_min_max_length(stripped);
-    if min_len == 0 {
-        return None;
-    }
-    let stripped_sid = ts.get_or_register(b, stripped);
-    if stripped_sid <= ldfa::DFA_DEAD {
-        return None;
-    }
-    ts.ensure_capacity(stripped_sid);
-    if ts.create_state(b, stripped_sid).is_err() {
-        return None;
-    }
-    let num_mt = ts.minterms.len() as u32;
-    let mut frontier: HashSet<u16> = HashSet::new();
-    frontier.insert(stripped_sid);
-
-    /// Flatten `n` into `Concat(Pred, TAIL)` leaves.
-    fn collect_pred_leaves(
-        b: &mut resharp_algebra::RegexBuilder,
-        n: NodeId,
-        out: &mut Vec<(NodeId, NodeId)>,
-    ) -> bool {
-        let n = b.nonbegins(n);
-        if n == NodeId::BOT {
-            return true;
-        }
-        match b.get_kind(n) {
-            Kind::Union => {
-                collect_pred_leaves(b, n.left(b), out) && collect_pred_leaves(b, n.right(b), out)
-            }
-            Kind::Pred => {
-                out.push((n, NodeId::EPS));
-                true
-            }
-            Kind::Concat => {
-                let head = n.left(b);
-                let tail = n.right(b);
-                match b.get_kind(head) {
-                    Kind::Pred => {
-                        out.push((head, tail));
-                        true
-                    }
-                    Kind::Star => false,
-                    Kind::Union => {
-                        let l = b.mk_concat(head.left(b), tail);
-                        let r = b.mk_concat(head.right(b), tail);
-                        collect_pred_leaves(b, l, out) && collect_pred_leaves(b, r, out)
-                    }
-                    Kind::Concat => {
-                        let inner_l = head.left(b);
-                        let inner_r = head.right(b);
-                        let new_tail = b.mk_concat(inner_r, tail);
-                        let flat = b.mk_concat(inner_l, new_tail);
-                        collect_pred_leaves(b, flat, out)
-                    }
-                    _ => false,
-                }
-            }
-            _ => false,
-        }
     }
 
-    let max_depth = max_depth.min(min_len.saturating_sub(1));
-    for depth in 0..=max_depth {
-        let mut common_tail: Option<NodeId> = None;
-        let mut pred_union: Option<NodeId> = None;
-        let mut ok = true;
-        'state_loop: for &s in &frontier {
-            let node = ts.state_nodes[s as usize];
-            let mut leaves: Vec<(NodeId, NodeId)> = Vec::new();
-            if !collect_pred_leaves(b, node, &mut leaves) || leaves.is_empty() {
-                ok = false;
-                break 'state_loop;
-            }
-            for (head, tail) in leaves {
-                match common_tail {
-                    None => common_tail = Some(tail),
-                    Some(t) if t == tail => {}
-                    _ => {
-                        ok = false;
-                        break 'state_loop;
-                    }
-                }
-                pred_union = Some(match pred_union {
-                    None => head,
-                    Some(p) => b.mk_union(p, head),
-                });
-            }
-        }
-        if ok {
-            if let (Some(head), Some(tail)) = (pred_union, common_tail) {
-                let synth = b.mk_concat(head, tail);
-                return Some((synth, depth));
-            }
-        }
-        // Advance BFS one step.
-        if depth == max_depth {
+    const MAX_SINK_FREQ: u64 = 25_000;
+    fn set_freq(b: &mut resharp_algebra::RegexBuilder, set: TSetId) -> u64 {
+        b.solver()
+            .collect_bytes(set)
+            .iter()
+            .map(|&c| crate::simd::BYTE_FREQ[c as usize] as u64)
+            .sum()
+    }
+
+    let mut spine: Vec<(NodeId, NodeId)> = Vec::new();
+    let mut curr = search_start;
+    loop {
+        let is_concat = curr.is_concat(b);
+        let head = if is_concat { curr.left(b) } else { curr };
+        spine.push((curr, head));
+        if is_concat {
+            curr = curr.right(b);
+        } else {
             break;
         }
-        if frontier.len() > 16 {
-            return None;
-        }
-        let mut next: HashSet<u16> = HashSet::new();
-        for &s in &frontier {
-            for mt in 0..num_mt {
-                let ns = ts.lazy_transition(b, s, mt).unwrap_or(ldfa::DFA_DEAD);
-                if ns > ldfa::DFA_DEAD {
-                    next.insert(ns);
-                }
+    }
+
+    let mut best: Option<(usize, TSetId)> = None;
+    let mut best_score = u64::MAX;
+    let mut needle_union = TSetId::EMPTY;
+    let mut quad = false;
+    for (i, &(_, head)) in spine.iter().enumerate() {
+        if !quad && head.is_pred(b) {
+            let l = head.pred_tset(b);
+            let freq = set_freq(b, l);
+            if freq < MAX_SINK_FREQ && freq < best_score {
+                best = Some((i, l));
+                best_score = freq;
             }
         }
-        if next.is_empty() || next.len() > 256 {
-            return None;
+        if b.get_min_max_length(head).1 == u32::MAX {
+            let lead = match b.der(head, Nullability::CENTER) {
+                Ok(d) => {
+                    let mut stack = vec![(d, TSetId::FULL)];
+                    let mut acc = TSetId::EMPTY;
+                    b.iter_sat(&mut stack, &mut |bb, _n, set| {
+                        acc = bb.solver().or_id(acc, set);
+                    });
+                    acc
+                }
+                Err(_) => b.solver().not_id(TSetId::EMPTY),
+            };
+            if b.solver().is_sat_id(lead, needle_union) {
+                quad = true;
+            }
+        } else if head.is_pred(b) {
+            let s = head.pred_tset(b);
+            if set_freq(b, s) < MAX_SINK_FREQ {
+                needle_union = b.solver().or_id(needle_union, s);
+            }
         }
-        frontier = next;
     }
-    None
+    let (i, _l) = best?;
+
+    let is_byte_lit = |b: &mut RegexBuilder, head: NodeId| {
+        if !head.is_pred(b) {
+            return false;
+        }
+        let ts = head.pred_tset(b);
+        b.solver().collect_bytes(ts).len() == 1
+    };
+    let mut i_lo = i;
+    let mut i_hi = i;
+    if is_byte_lit(b, spine[i].1) {
+        while i_lo > 0 && is_byte_lit(b, spine[i_lo - 1].1) {
+            i_lo -= 1;
+        }
+        while i_hi + 1 < spine.len() && is_byte_lit(b, spine[i_hi + 1].1) {
+            i_hi += 1;
+        }
+    }
+    let run: Vec<TSetId> = (i_lo..=i_hi).map(|k| spine[k].1.pred_tset(b)).collect();
+    let anchor_set = run[0];
+    let l_rep = run
+        .iter()
+        .copied()
+        .min_by_key(|&s| set_freq(b, s))
+        .unwrap();
+
+    let mut j = i_lo;
+    while j > 0 {
+        let prev_head = spine[j - 1].1;
+        if !prev_head.is_star(b) {
+            break;
+        }
+        let body = prev_head.left(b);
+        if !body.is_pred(b) {
+            break;
+        }
+        let body_set = body.pred_tset(b);
+        if !b.solver().is_sat_id(body_set, anchor_set) {
+            break;
+        }
+        j -= 1;
+    }
+    let prefix_result = spine[j].0;
+    Some((prefix_result, run, l_rep))
+}
+
+#[cfg(feature = "convergence_prefix")]
+#[doc(hidden)]
+pub fn detect_inner_literal_bytes(pattern: &str) -> Option<Vec<u8>> {
+    let mut b = resharp_algebra::RegexBuilder::new();
+    let pflags = resharp_parser::PatternFlags::default();
+    let node = resharp_parser::parse_ast_with(&mut b, pattern, &pflags).ok()?;
+    let node_fwd_simpl = b.simplify_fwd_initial(node);
+    let rev_basis = b
+        .strip_trailing_redundant_lookahead(node_fwd_simpl)
+        .unwrap_or(node_fwd_simpl);
+    let ts_rev_start = b.ts_rev_start(rev_basis).ok()?;
+    let rev_stripped = crate::prefix::PrefixSets::compute(&mut b, node_fwd_simpl, ts_rev_start)
+        .ok()?
+        .rev_stripped;
+    let (_c, run, _l) = find_inner_literal(&mut b, rev_stripped)?;
+    let mut bytes: Vec<u8> = Vec::new();
+    for &s in run.iter().rev() {
+        bytes.extend(b.solver().collect_bytes(s));
+    }
+    Some(bytes)
 }
 
 impl Regex {
@@ -1602,11 +1706,19 @@ impl Regex {
     pub fn collect_rev_nulls_debug(&self, input: &[u8]) -> Vec<usize> {
         let inner = &mut *self.inner.lock().unwrap_or_else(|e| e.into_inner());
         inner.nulls.clear();
+        #[cfg(feature = "convergence_prefix")]
+        {
+            let RegexInner { rev_ts, b, nulls, conv_b, .. } = &mut *inner;
+            rev_ts
+                .collect_rev(b, input.len() - 1, input, nulls, conv_b.as_mut())
+                .unwrap();
+        }
+        #[cfg(not(feature = "convergence_prefix"))]
         inner
             .rev_ts
-            .collect_rev(&mut inner.b, input.len() - 1, input, &mut inner.nulls)
+            .collect_rev(&mut inner.b, input.len() - 1, input, &mut inner.nulls, None)
             .unwrap();
-        inner.nulls.clone()
+        inner.nulls.positions_desc().collect()
     }
 
     #[cfg(feature = "diag")]
@@ -1823,6 +1935,30 @@ impl Regex {
         inner.matches.clear();
 
         if self.always_nullable && !self.hardened {
+            if self.star_loop {
+                let RegexInner {
+                    ref mut b,
+                    ref mut fwd,
+                    ref mut matches,
+                    ..
+                } = *inner;
+                let len = input.len();
+                let mut start = 0usize;
+                while start < len {
+                    let end = fwd.scan_fwd_optional(b, start, input)?.expect(
+                        "always-nullable pattern matches (at least empty) at every position",
+                    );
+                    if end > start {
+                        matches.push(Match { start, end });
+                        start = end;
+                    } else {
+                        matches.push(Match { start, end: start });
+                        start += 1;
+                    }
+                }
+                push_end_zero_width(matches, len);
+                return Ok(matches.clone());
+            }
             let RegexInner {
                 ref mut b,
                 ref mut fwd,
@@ -1831,17 +1967,26 @@ impl Regex {
                 ..
             } = *inner;
             let fas = fas.as_mut().expect("fas initialized for always_nullable");
-            fwd.scan_fwd_active_set::<true>(b, fas, input, &[], matches)?;
+            fwd.scan_fwd_active_set::<true>(b, fas, input, &StartPositions::new(), matches)?;
             push_end_zero_width(matches, input.len());
             return Ok(matches.clone());
         }
 
         if self.initial_nullability.has(Nullability::END) {
-            inner.nulls.push(input.len());
+            inner.nulls.add(input.len());
         }
-        inner
-            .rev_ts
-            .collect_rev(&mut inner.b, input.len() - 1, input, &mut inner.nulls)?;
+        {
+            #[cfg(feature = "convergence_prefix")]
+            {
+                let RegexInner { rev_ts, b, nulls, conv_b, .. } = &mut *inner;
+                rev_ts.collect_rev(b, input.len() - 1, input, nulls, conv_b.as_mut())?;
+            }
+            #[cfg(not(feature = "convergence_prefix"))]
+            {
+                let RegexInner { rev_ts, b, nulls, .. } = &mut *inner;
+                rev_ts.collect_rev(b, input.len() - 1, input, nulls, None)?;
+            }
+        }
 
         #[cfg(all(feature = "debug", debug_assertions))]
         eprintln!("[nulls] {:?}", inner.nulls);
@@ -1868,8 +2013,8 @@ impl Regex {
         if let Some(fl) = self.fixed_length {
             let fl = fl as usize;
             let mut last_end = 0;
-            for &start in inner.nulls.iter().rev() {
-                if start >= last_end && start + fl <= input.len() {
+            for start in inner.nulls.positions_asc() {
+                if start >= last_end  {
                     inner.matches.push(Match {
                         start,
                         end: start + fl,
@@ -1915,10 +2060,14 @@ impl Regex {
         debug_assert!(!input.is_empty());
         let len = input.len();
         let inner = &mut *self.inner.lock().unwrap_or_else(|e| e.into_inner());
-        Ok(inner
-            .rev_ts
-            .scan_rev_from(&mut inner.b, len, 0, input)?
+        let RegexInner { b, rev, .. } = &mut *inner;
+        let rev_dfa = rev.as_mut().expect(
+            "find_end_anchored requires the _*-free reverse DFA, built whenever rev_end_anchored holds (the same condition that selects FindAll::EndAnchored)",
+        );
+        Ok(rev_dfa
+            .scan_rev_from(b, len, 0, input)?
             .map(|start| Match { start, end: len }))
     }
 
 }
+

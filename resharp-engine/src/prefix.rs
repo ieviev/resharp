@@ -173,10 +173,10 @@ fn collect_loop_factored_bodies(b: &RegexBuilder, init: NodeId) -> Option<Vec<No
     let mut bodies = Vec::new();
     let mut stack = vec![init];
     while let Some(n) = stack.pop() {
-        if b.get_kind(n) == Kind::Inter {
+        if n.is_inter(b) {
             stack.push(n.left(b));
             stack.push(n.right(b));
-        } else if b.get_kind(n) == Kind::Concat && n.left(b) == NodeId::TS {
+        } else if n.is_concat(b) && n.left(b) == NodeId::TS {
             bodies.push(n.right(b));
         } else {
             return None;
@@ -186,7 +186,7 @@ fn collect_loop_factored_bodies(b: &RegexBuilder, init: NodeId) -> Option<Vec<No
 }
 
 fn synthesize_inter_constraint(b: &mut RegexBuilder, init: NodeId) -> Option<NodeId> {
-    if b.get_kind(init) != Kind::Inter {
+    if !init.is_inter(b) {
         return None;
     }
     let bodies = collect_loop_factored_bodies(b, init)?;
@@ -194,6 +194,59 @@ fn synthesize_inter_constraint(b: &mut RegexBuilder, init: NodeId) -> Option<Nod
         return None;
     }
     Some(b.mk_unions(bodies.into_iter()))
+}
+
+/// Detect a reverse start `[_*] ~(_*X) tail`. Returns `(rc, boundary, tail)`
+/// where `rc` is the begin-relaxed node `~(_*X) tail`, `boundary = [^X]`.
+pub(crate) fn rev_boundary_shape(
+    b: &mut RegexBuilder,
+    rev_start: NodeId,
+) -> Option<(NodeId, TSetId, NodeId)> {
+    let stripped = if rev_start.is_concat(b) && rev_start.left(b) == NodeId::TS {
+        rev_start.right(b)
+    } else {
+        rev_start
+    };
+    let rc = b.prune_begin_eps(stripped);
+    if !rc.is_concat(b) {
+        return None;
+    }
+    let lead = rc.left(b);
+    let tail = rc.right(b);
+    if !lead.is_compl(b) {
+        return None;
+    }
+    let inner = lead.left(b);
+    if !inner.is_concat(b) || inner.left(b) != NodeId::TS {
+        return None;
+    }
+    let pred = inner.right(b);
+    if !pred.is_pred(b) {
+        return None;
+    }
+    let cc = pred.pred_tset(b);
+    let boundary = b.solver().not_id(cc);
+    if boundary == TSetId::EMPTY {
+        return None;
+    }
+    Some((rc, boundary, tail))
+}
+
+fn calc_rev_boundary_prefix(
+    b: &mut RegexBuilder,
+    rev_start: NodeId,
+) -> Result<Option<Vec<TSetId>>, crate::Error> {
+    let Some((_, boundary, tail)) = rev_boundary_shape(b, rev_start) else {
+        return Ok(None);
+    };
+    let tail_sets = calc_potential_start(b, tail, 16, 64, false)?;
+    if tail_sets.is_empty() {
+        return Ok(None);
+    }
+    let mut out = Vec::with_capacity(tail_sets.len() + 1);
+    out.push(boundary);
+    out.extend(tail_sets);
+    Ok(Some(out))
 }
 
 pub(crate) fn calc_combined_prefix(
@@ -243,6 +296,9 @@ pub struct PrefixSets {
     pub rev_anchored: PrefixSet,
     /// Fingerprint head intersected with potential-start tail; narrower than bare potential-start.
     pub rev_potential: PrefixSet,
+    /// `rev_start` with the leading `_*`/begin pruned: the mandatory reverse
+    /// body. This is the canonical node to search for an interior literal.
+    pub rev_stripped: NodeId,
 }
 
 impl PrefixSets {
@@ -263,7 +319,13 @@ impl PrefixSets {
             let n = b.prune_begin(rev_start);
             b.strip_prefix_safe(n)
         };
-        let mut rev_potential_sets = calc_combined_prefix(b, rev_combined_init, 3, 16, 64)?;
+        let rev_stripped = rev_combined_init;
+        let mut rev_potential_sets =
+            if let Some(s) = calc_rev_boundary_prefix(b, rev_start)? {
+                s
+            } else {
+                calc_combined_prefix(b, rev_combined_init, 3, 16, 64)?
+            };
         if rev_potential_sets.is_empty() {
             if let Ok(body) = b.strip_lb(node) {
                 if body != node {
@@ -282,17 +344,16 @@ impl PrefixSets {
             sets,
         };
 
-        // let fwd_anchored = mk(fwd_anchored_sets, Direction::Fwd);
         let fwd_potential = mk(fwd_potential_sets, Direction::Fwd);
         let fwd_potential_stripped = mk(fwd_potential_stripped_sets, Direction::Fwd);
         let rev_anchored = mk(rev_anchored_sets, Direction::Rev);
         let rev_potential = mk(rev_potential_sets, Direction::Rev);
         Ok(Self {
-            // fwd_anchored,
             fwd_potential,
             fwd_potential_stripped,
             rev_anchored,
             rev_potential,
+            rev_stripped,
         })
     }
 
@@ -319,6 +380,10 @@ fn scan_cost(b: &mut RegexBuilder, sets: &[TSetId], dir: Direction, body_shape: 
     if sets.is_empty() {
         return u64::MAX;
     }
+    let counts: Vec<usize> = sets
+        .iter()
+        .map(|&s| b.solver().collect_bytes(s).len())
+        .collect();
     let freqs: Vec<u64> = sets
         .iter()
         .map(|&s| {
@@ -329,25 +394,30 @@ fn scan_cost(b: &mut RegexBuilder, sets: &[TSetId], dir: Direction, body_shape: 
                 .sum()
         })
         .collect();
-    let num_simd = freqs.len().min(3);
-    if num_simd == 0 {
-        return u64::MAX;
-    }
     let total = TOTAL_BYTE_FREQ as f64;
-    let mut best_prod = f64::INFINITY;
-    for off in 0..=freqs.len() - num_simd {
-        let p: f64 = freqs[off..off + num_simd]
-            .iter()
-            .map(|&f| f as f64)
-            .product();
-        if p < best_prod {
-            best_prod = p;
+    let rarest = freqs
+        .iter()
+        .zip(counts.iter())
+        .enumerate()
+        .filter(|&(_, (&f, _))| f > 0)
+        .min_by_key(|&(_, (&f, _))| f);
+    let single_position = matches!(dir, Direction::Fwd)
+        && rarest.is_some_and(|(_, (_, &c))| c > 16);
+    let fire = if single_position {
+        rarest.map(|(_, (&f, _))| f as f64).unwrap_or(total) / total
+    } else {
+        let mut nz: Vec<u64> = freqs.iter().copied().filter(|&f| f > 0).collect();
+        if nz.is_empty() {
+            return u64::MAX;
         }
-    }
-    let fire = best_prod / total.powi(num_simd as i32);
+        nz.sort_unstable();
+        let num_simd = nz.len().min(3);
+        let prod: f64 = nz[..num_simd].iter().map(|&f| f as f64).product();
+        prod / total.powi(num_simd as i32)
+    };
 
     let (scan_per_byte, verify_per_fire) = match dir {
-        Direction::Rev => (0.5, 20.0),
+        Direction::Rev => (0.05, 20.0),
         Direction::Fwd => (
             0.05,
             match body_shape {
@@ -374,6 +444,32 @@ pub(crate) const SKIP_FREQ_THRESHOLD: u32 = 75_000;
 /// Threshold above which a byte set is treated as wildcard-like.
 const WIDE_SET_BYTES: u32 = 200;
 
+fn is_pure_trailing_run(b: &mut RegexBuilder, node: NodeId) -> bool {
+    let mut cur = node;
+    loop {
+        if cur.is_star(b) {
+            return true;
+        }
+        if cur.is_lookahead(b) {
+            cur = cur.right(b);
+            continue;
+        }
+        if cur.is_inter(b) {
+            let (l, r) = (cur.left(b), cur.right(b));
+            cur = if l.is_compl(b) { r } else { l };
+            continue;
+        }
+        if !cur.is_concat(b) {
+            return false;
+        }
+        let left = cur.left(b);
+        if b.get_min_max_length(left).1 == u32::MAX {
+            return false;
+        }
+        cur = cur.right(b);
+    }
+}
+
 /// Classify body shape past the fwd prefix to set verify cost.
 fn classify_body_shape(
     b: &mut RegexBuilder,
@@ -383,19 +479,77 @@ fn classify_body_shape(
     if b.ends_with_ts(fwd_body) {
         return NodeShape::TrailingStar;
     }
+    let rarest_wide = !fwd_potential.is_empty()
+        && fwd_potential
+            .iter()
+            .map(|&s| b.solver().byte_count(s))
+            .min()
+            .is_some_and(|c| c > 16);
+    if is_pure_trailing_run(b, fwd_body) {
+        return NodeShape::TrailingStar;
+    }
+    if rarest_wide && b.get_min_max_length(fwd_body).1 == u32::MAX {
+        return NodeShape::Unbounded;
+    }
     match fwd_potential.last() {
         Some(&last) if b.solver().byte_count(last) > WIDE_SET_BYTES => NodeShape::Unbounded,
         _ => NodeShape::Bounded,
     }
 }
+#[cfg(feature = "convergence_prefix")]
+const CONV_PENALTY: u64 = 8;
+#[cfg(feature = "convergence_prefix")]
+const CONV_WIDE_LOOP_BYTES: u32 = 128;
+#[cfg(feature = "convergence_prefix")]
+const CONV_BOUNDED_MAX: u32 = 12;
+
+#[cfg(feature = "convergence_prefix")]
+fn conv_b_interior_unbounded(b: &mut RegexBuilder, b_node: NodeId) -> bool {
+    use resharp_algebra::nulls::Nullability;
+    let mut seen_wide_unbounded = false;
+    let mut curr = b_node;
+    loop {
+        let is_concat = curr.is_concat(b);
+        let head = if is_concat { curr.left(b) } else { curr };
+        let (hmin, hmax) = b.get_min_max_length(head);
+        if seen_wide_unbounded && hmin > 0 {
+            return true;
+        }
+        if hmax == u32::MAX {
+            let lead = match b.der(head, Nullability::CENTER) {
+                Ok(d) => {
+                    let mut stack = vec![(d, TSetId::FULL)];
+                    let mut acc = TSetId::EMPTY;
+                    b.iter_sat(&mut stack, &mut |bb, _n, set| {
+                        acc = bb.solver().or_id(acc, set);
+                    });
+                    acc
+                }
+                Err(_) => b.solver().not_id(TSetId::EMPTY),
+            };
+            if b.solver().byte_count(lead) >= CONV_WIDE_LOOP_BYTES {
+                seen_wide_unbounded = true;
+            }
+        }
+        if is_concat {
+            curr = curr.right(b);
+        } else {
+            break;
+        }
+    }
+    false
+}
 const TEDDY_MAX_FREQ_SUM: u64 = 25_000;
 // sum of BYTE_FREQ[0..256] in the corpus
 pub(crate) const TOTAL_BYTE_FREQ: u64 = 252_052;
-/// contributes no meaningful filtering
-const TEDDY_WEAK_POSITION_FREQ: u64 = 100_000;
+/// a position must be at least this rare to count as a selective Teddy lane;
+/// a bare multi-class fingerprint with no rare anchor is rejected
+const TEDDY_WEAK_POSITION_FREQ: u64 = 8_000;
 // when to use memchr instead of a full prefix
 const TEDDY_MEMCHR_MAX_FREQ: u64 = 2_500;
 const TEDDY_MEMCHR_MAX_FREQ_F: u64 = 1_500;
+#[cfg(feature = "convergence_prefix")]
+const CONV_MEMCHR_MAX: u64 = 5_000;
 const RARE_BYTE_FREQ_LIMIT: u16 = 25_000;
 
 /// Forward literal prefix for patterns with no `_*` stripping.
@@ -658,6 +812,7 @@ fn try_build_fwd_range_prefix(
 pub(crate) fn build_rev_prefix_search(
     b: &mut RegexBuilder,
     sets: &[TSetId],
+    memchr_max: u64,
 ) -> Option<crate::accel::RevTeddySearch> {
     if sets.len() < 1 {
         return None;
@@ -666,20 +821,6 @@ pub(crate) fn build_rev_prefix_search(
         .iter()
         .map(|&set| b.solver().collect_bytes(set))
         .collect();
-    if cfg!(feature = "debug") {
-        // eprintln!(
-        //     "  [rev-prefix] total={} sets={:?}",
-        //     byte_sets_raw.len(),
-        //     byte_sets_raw
-        //         .iter()
-        //         .map(|bs| if bs.len() <= 4 {
-        //             format!("{:?}", bs)
-        //         } else {
-        //             format!("[{}b]", bs.len())
-        //         })
-        //         .collect::<Vec<_>>()
-        // );
-    }
     let num_simd = sets.len().min(3);
     // per-position freq for every position in the full rev prefix
     let pos_freq: Vec<u64> = byte_sets_raw
@@ -711,7 +852,7 @@ pub(crate) fn build_rev_prefix_search(
         .iter()
         .filter(|&&f| f <= TEDDY_WEAK_POSITION_FREQ)
         .count();
-    if narrow < 2 && rarest_freq_sum > TEDDY_MEMCHR_MAX_FREQ {
+    if narrow < 2 && rarest_freq_sum > memchr_max {
         return None;
     }
     let combined_freq: u128 = freq_sums.iter().map(|&f| f as u128).product();
@@ -743,6 +884,8 @@ pub enum PrefixKind {
     AnchoredFwd(crate::accel::FwdPrefixSearch),
     AnchoredFwdLb(crate::accel::FwdPrefixSearch),
     PotentialStart,
+    #[cfg(feature = "convergence_prefix")]
+    Convergence,
 }
 
 impl PrefixKind {
@@ -756,6 +899,12 @@ impl PrefixKind {
 
     #[cfg(feature = "diag")]
     pub(crate) fn is_rev(&self) -> bool {
+        #[cfg(feature = "convergence_prefix")]
+        return matches!(
+            self,
+            PrefixKind::AnchoredRev | PrefixKind::PotentialStart | PrefixKind::Convergence
+        );
+        #[cfg(not(feature = "convergence_prefix"))]
         matches!(self, PrefixKind::AnchoredRev | PrefixKind::PotentialStart)
     }
 }
@@ -771,13 +920,13 @@ pub(crate) fn try_rev_prefix(
     }
     let anchored = calc_prefix_sets(b, rev_node)?;
     if !anchored.is_empty() {
-        if let Some(s) = build_rev_prefix_search(b, &anchored) {
+        if let Some(s) = build_rev_prefix_search(b, &anchored, TEDDY_MEMCHR_MAX_FREQ) {
             return Ok(Some((PrefixKind::AnchoredRev, s)));
         }
     }
     let potential = calc_potential_start_prune(b, rev_node, 16, 64, true)?;
     if !potential.is_empty() {
-        if let Some(s) = build_rev_prefix_search(b, &potential) {
+        if let Some(s) = build_rev_prefix_search(b, &potential, TEDDY_MEMCHR_MAX_FREQ) {
             return Ok(Some((PrefixKind::PotentialStart, s)));
         }
     }
@@ -792,75 +941,221 @@ pub(crate) fn select_prefix(
     min_len: u32,
     max_cap: usize,
     no_fwd_prefix: bool,
-) -> Result<(Option<PrefixKind>, Option<crate::accel::RevTeddySearch>), Error> {
+    hardened: bool,
+    force_convergence: bool,
+) -> Result<
+    (
+        Option<PrefixKind>,
+        Option<(crate::accel::RevTeddySearch, Option<NodeId>, Option<NodeId>)>,
+        bool,
+    ),
+    Error,
+> {
     if !crate::simd::has_simd() {
-        return Ok((None, None));
+        return Ok((None, None, false));
     }
-    let (kind, skip) = select_prefix_simd(b, node, rev_start, has_look, min_len, no_fwd_prefix)?;
-    let fwd_already = matches!(
-        kind,
-        Some(PrefixKind::AnchoredFwd(_) | PrefixKind::AnchoredFwdLb(_))
-    );
+    let _ = force_convergence;
+    let (kind, skip, fwd_wins, selected_cost, rev_stripped) =
+        select_prefix_simd(b, node, rev_start, has_look, min_len, no_fwd_prefix, hardened)?;
+    #[cfg(not(feature = "convergence_prefix"))]
+    let _ = (selected_cost, rev_stripped);
     #[cfg(feature = "convergence_prefix")]
-    if !fwd_already {
-        let mut conv_ldfa = match crate::ldfa::LDFA::new_rev(b, rev_start, max_cap) {
-            Ok(l) => l,
-            Err(_) => return Ok((kind, skip)),
+    if let Some((conv_kind, conv_skip, conv_node, b_node, conv_cost)) =
+        try_convergence_prefix(b, node, rev_stripped, force_convergence)?
+    {
+        let penalty = if matches!(kind, Some(PrefixKind::PotentialStart)) {
+            1
+        } else {
+            CONV_PENALTY
         };
-        if let Some((conv_kind, conv_skip)) =
-            try_convergence_prefix(b, node, &mut conv_ldfa, rev_start)?
+        if force_convergence
+            || kind.is_none()
+            || conv_cost.saturating_mul(penalty) < selected_cost
         {
-            return Ok((Some(conv_kind), Some(conv_skip)));
+            return Ok((
+                Some(conv_kind),
+                Some((conv_skip, Some(conv_node), Some(b_node))),
+                false,
+            ));
         }
     }
-    let _ = fwd_already;
     let _ = max_cap;
-    Ok((kind, skip))
+    Ok((kind, skip.map(|s| (s, None, None)), fwd_wins))
+}
+
+#[cfg(feature = "convergence_prefix")]
+const RESUME_STOPPER_MIN: u64 = 30_000;
+
+#[cfg(feature = "convergence_prefix")]
+fn loop_stopper_set(b: &mut RegexBuilder, body: NodeId) -> Result<TSetId, Error> {
+    let der = b
+        .der(body, resharp_algebra::nulls::Nullability::CENTER)
+        .map_err(crate::Error::Algebra)?;
+    let mut targets: Vec<(NodeId, TSetId)> = Vec::new();
+    b.collect_der_targets(der, TSetId::FULL, &mut targets);
+    let leading = targets
+        .iter()
+        .filter(|(t, _)| *t != NodeId::BOT)
+        .fold(TSetId::EMPTY, |acc, &(_, cs)| b.solver().or_id(acc, cs));
+    Ok(b.solver().not_id(leading))
+}
+
+#[cfg(feature = "convergence_prefix")]
+fn set_byte_freq(b: &mut RegexBuilder, set: TSetId) -> u64 {
+    b.solver()
+        .collect_bytes(set)
+        .iter()
+        .map(|&c| crate::simd::BYTE_FREQ[c as usize] as u64)
+        .sum()
+}
+
+#[cfg(feature = "convergence_prefix")]
+fn resume_loops_die_fast(
+    b: &mut RegexBuilder,
+    conv_node: NodeId,
+    run: &[TSetId],
+) -> Result<bool, Error> {
+    let run_union = run
+        .iter()
+        .fold(TSetId::EMPTY, |acc, &s| b.solver().or_id(acc, s));
+    let mut spine: Vec<NodeId> = Vec::new();
+    let mut curr = conv_node;
+    loop {
+        let is_concat = curr.is_concat(b);
+        spine.push(if is_concat { curr.left(b) } else { curr });
+        if is_concat {
+            curr = curr.right(b);
+        } else {
+            break;
+        }
+    }
+    let last_mandatory = spine
+        .iter()
+        .rposition(|&h| b.get_min_max_length(h).0 > 0);
+    for (idx, &head) in spine.iter().enumerate() {
+        if !head.is_star(b) {
+            continue;
+        }
+        if last_mandatory.is_none_or(|m| idx > m) {
+            continue;
+        }
+        let stopper = loop_stopper_set(b, head.left(b))?;
+        if b.solver().is_sat_id(stopper, run_union) {
+            continue;
+        }
+        if set_byte_freq(b, stopper) < RESUME_STOPPER_MIN {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+#[cfg(feature = "convergence_prefix")]
+fn convergence_right_node(b: &RegexBuilder, fwd_node: NodeId, run: &[TSetId]) -> Option<NodeId> {
+    fn head_byte(b: &RegexBuilder, h: NodeId) -> Option<u8> {
+        if !h.is_pred(b) {
+            return None;
+        }
+        let bytes = b.solver_ref().collect_bytes(h.pred_tset(b));
+        (bytes.len() == 1).then(|| bytes[0])
+    }
+    let lit: Vec<u8> = run
+        .iter()
+        .rev()
+        .map(|&s| {
+            let bytes = b.solver_ref().collect_bytes(s);
+            (bytes.len() == 1).then(|| bytes[0])
+        })
+        .collect::<Option<Vec<u8>>>()?;
+    let mut spine: Vec<(NodeId, NodeId)> = Vec::new();
+    let mut curr = fwd_node;
+    loop {
+        let is_concat = curr.is_concat(b);
+        let head = if is_concat { curr.left(b) } else { curr };
+        spine.push((curr, head));
+        if is_concat {
+            curr = curr.right(b);
+        } else {
+            break;
+        }
+    }
+    let n = spine.len();
+    if lit.is_empty() || lit.len() > n {
+        return None;
+    }
+    let mut found: Option<usize> = None;
+    for start in 0..=(n - lit.len()) {
+        if (0..lit.len()).all(|k| head_byte(b, spine[start + k].1) == Some(lit[k])) {
+            if found.is_some() {
+                return None;
+            }
+            found = Some(start);
+        }
+    }
+    let end = found? + lit.len();
+    Some(if end >= n { NodeId::EPS } else { spine[end].0 })
 }
 
 #[cfg(feature = "convergence_prefix")]
 fn try_convergence_prefix(
     b: &mut RegexBuilder,
     fwd_node: NodeId,
-    rev_ldfa: &mut crate::ldfa::LDFA,
-    rev_start: NodeId,
-) -> Result<Option<(PrefixKind, crate::accel::RevTeddySearch)>, Error> {
-    const MAX_DEPTH: u32 = 12;
-    let (fwd_min, _) = b.get_min_max_length(fwd_node);
+    rev_stripped: NodeId,
+    force: bool,
+) -> Result<Option<(PrefixKind, crate::accel::RevTeddySearch, NodeId, NodeId, u64)>, Error> {
+    let (fwd_min, fwd_max) = b.get_min_max_length(fwd_node);
     if fwd_min == 0 {
         return Ok(None);
     }
-    let attempt = |conv_node,
-                   peel: u32,
-                   b: &mut RegexBuilder|
-     -> Result<Option<(PrefixKind, crate::accel::RevTeddySearch)>, Error> {
-        let Some((kind, search)) = try_rev_prefix(b, conv_node)? else {
-            return Ok(None);
-        };
-        if let Some(fl) = b.get_fixed_length(fwd_node) {
-            if peel as u64 + search.len() as u64 > fl as u64 {
-                return Ok(None);
-            }
-        }
-        Ok(Some((kind, search.add_tail_offset(peel))))
-    };
-    if let Some((conv_node, peel)) =
-        crate::find_strict_convergence_node(b, rev_ldfa, rev_start, MAX_DEPTH)
+    if !force
+        && fwd_max <= CONV_BOUNDED_MAX
+        && !b.contains_anchors(fwd_node)
+        && !fwd_node.contains_lookaround(b)
     {
-        if let Some(out) = attempt(conv_node, peel, b)? {
-            return Ok(Some(out));
-        }
+        return Ok(None);
     }
-    Ok(None)
+    let Some((conv_node, run, l_rep)) = crate::find_inner_literal(b, rev_stripped)
+    else {
+        return Ok(None);
+    };
+    let Some(b_node) = convergence_right_node(b, fwd_node, &run) else {
+        return Ok(None);
+    };
+    if !force && !resume_loops_die_fast(b, conv_node, &run)? {
+        return Ok(None);
+    }
+    let avoid_l = {
+        let any_non_l = b.mk_pred_not(l_rep);
+        b.mk_star(any_non_l)
+    };
+    let without_l = b.mk_inter(fwd_node, avoid_l);
+    if b.is_empty_lang(without_l) != Some(true) {
+        return Ok(None);
+    }
+    let Some(search) = build_rev_prefix_search(b, &run, CONV_MEMCHR_MAX) else {
+        return Ok(None);
+    };
+    if !force && conv_b_interior_unbounded(b, b_node) {
+        return Ok(None);
+    }
+    let b_potential = calc_potential_start(b, b_node, 16, 64, false)?;
+    let b_shape = classify_body_shape(b, b_node, &b_potential);
+    let conv_cost = scan_cost(b, &run, Direction::Fwd, b_shape);
+    Ok(Some((
+        PrefixKind::Convergence,
+        search,
+        conv_node,
+        b_node,
+        conv_cost,
+    )))
 }
 
 fn strip_leading_lookbehind(b: &RegexBuilder, mut node: NodeId) -> NodeId {
-    use resharp_algebra::Kind;
     loop {
-        if b.get_kind(node) != Kind::Concat {
+        if !node.is_concat(b) {
             break;
         }
-        if b.get_kind(node.left(b)) != Kind::Lookbehind {
+        if !node.left(b).is_lookbehind(b) {
             break;
         }
         node = node.right(b);
@@ -868,27 +1163,86 @@ fn strip_leading_lookbehind(b: &RegexBuilder, mut node: NodeId) -> NodeId {
     node
 }
 
-fn contains_lookahead_rel_max(b: &RegexBuilder, start: NodeId) -> bool {
-    use std::collections::HashSet;
-    let mut visited: HashSet<NodeId> = HashSet::new();
-    let mut stack = vec![start];
-    while let Some(n) = stack.pop() {
-        if n == NodeId::MISSING || !visited.insert(n) {
-            continue;
+fn node_lead_bytes(b: &mut RegexBuilder, node: NodeId) -> TSetId {
+    use resharp_algebra::nulls::Nullability;
+    match b.der(node, Nullability::CENTER) {
+        Ok(d) => {
+            let mut stack = vec![(d, TSetId::FULL)];
+            let mut acc = TSetId::EMPTY;
+            b.iter_sat(&mut stack, &mut |bb, _n, set| {
+                acc = bb.solver().or_id(acc, set);
+            });
+            acc
         }
-        let kind = b.get_kind(n);
-        if kind == Kind::Lookahead && b.get_extra(n) == u32::MAX {
-            return true;
+        Err(_) => b.solver().not_id(TSetId::EMPTY),
+    }
+}
+
+fn loop_body_class(b: &mut RegexBuilder, node: NodeId) -> Option<TSetId> {
+    if node.is_star(b) {
+        return Some(node_lead_bytes(b, node));
+    }
+    if node.is_lookahead(b) {
+        let tail = node.right(b);
+        if let Some(s) = loop_body_class(b, tail) {
+            return Some(s);
         }
-        match kind {
-            Kind::Pred | Kind::Begin | Kind::End => {}
-            Kind::Star | Kind::Compl => {
-                stack.push(n.left(b));
+        return Some(node_lead_bytes(b, node));
+    }
+    if node.is_concat(b) {
+        let left = node.left(b);
+        return loop_body_class(b, left);
+    }
+    if node.is_inter(b) {
+        let (l, r) = (node.left(b), node.right(b));
+        if let Some(s) = loop_body_class(b, l) {
+            return Some(s);
+        }
+        return loop_body_class(b, r);
+    }
+    None
+}
+
+fn fwd_interior_quadratic(b: &mut RegexBuilder, node: NodeId) -> bool {
+    let mut seen_swallowing_loop = false;
+    let mut prior_leads: Vec<TSetId> = Vec::new();
+    let mut mandatory_prefix: Vec<TSetId> = Vec::new();
+    let mut curr = node;
+    loop {
+        let is_concat = curr.is_concat(b);
+        let head = if is_concat { curr.left(b) } else { curr };
+        let (hmin, hmax) = b.get_min_max_length(head);
+        let lead = node_lead_bytes(b, head);
+        let single_position = hmin == 1 && hmax == 1;
+        if seen_swallowing_loop && hmin > 0 {
+            let absorbed = single_position
+                && mandatory_prefix
+                    .iter()
+                    .any(|&m| b.solver().and_id(m, lead) == m);
+            if !absorbed {
+                return true;
             }
-            _ => {
-                stack.push(n.left(b));
-                stack.push(n.right(b));
+        }
+        if hmax == u32::MAX && !prior_leads.is_empty() {
+            let body = loop_body_class(b, head).unwrap_or(lead);
+            let loop_chains_candidates = prior_leads
+                .iter()
+                .all(|&p| b.solver().is_sat_id(p, body));
+            if loop_chains_candidates {
+                if !is_pure_trailing_run(b, head) {
+                    return true;
+                }
+                seen_swallowing_loop = true;
             }
+        }
+        if single_position {
+            mandatory_prefix.push(lead);
+        }
+        prior_leads.push(lead);
+        if is_concat {
+            curr = curr.right(b);
+        } else {
+            break;
         }
     }
     false
@@ -901,36 +1255,19 @@ fn select_prefix_simd(
     has_look: bool,
     min_len: u32,
     no_fwd_prefix: bool,
-) -> Result<(Option<PrefixKind>, Option<crate::accel::RevTeddySearch>), Error> {
+    hardened: bool,
+) -> Result<(Option<PrefixKind>, Option<crate::accel::RevTeddySearch>, bool, u64, NodeId), Error> {
     use resharp_algebra::nulls::NullsId;
     if min_len == 0 {
         if !no_fwd_prefix && has_look && node.contains_lookbehind(b) {
             if let Some(fp) = try_build_fwd_lb(b, node)? {
-                return Ok((Some(PrefixKind::AnchoredFwdLb(fp)), None));
+                return Ok((Some(PrefixKind::AnchoredFwdLb(fp)), None, false, u64::MAX, NodeId::BOT));
             }
         }
-        return Ok((None, None));
+        return Ok((None, None, false, u64::MAX, NodeId::BOT));
     }
     let sets = PrefixSets::compute(b, node, rev_start)?;
-
-    #[cfg(feature = "debug")]
-    {
-        // keeping for debugging
-        // let mut all = vec![
-        //     ("rev anc", &sets.rev_anchored.sets, sets.rev_anchored.cost),
-        //     ("rev pot", &sets.rev_potential.sets, sets.rev_potential.cost),
-        //     ("fwd pot", &sets.fwd_potential.sets, sets.fwd_potential.cost),
-        //     (
-        //         "fwd str",
-        //         &sets.fwd_potential_stripped.sets,
-        //         sets.fwd_potential_stripped.cost,
-        //     ),
-        // ];
-        // all.sort_by_key(|(_, _, c)| *c);
-        // for (name, s, cost) in all {
-        //     println!("  [sets] {} {:?} cost={}", name, pp_sets(b, s), cost);
-        // }
-    }
+    let rev_stripped = sets.rev_stripped;
 
     let fwd_cost = sets
         .fwd_potential
@@ -939,14 +1276,34 @@ fn select_prefix_simd(
     let rev_cost = sets.rev_anchored.cost.min(sets.rev_potential.cost);
     let rev_usable = b.get_nulls_id(rev_start) == NullsId::EMPTY
         && (!sets.rev_anchored.sets.is_empty() || !sets.rev_potential.sets.is_empty());
-    let fwd_wins = fwd_cost < rev_cost;
+    let (_, max_len) = b.get_min_max_length(node);
+    let bounded = max_len != u32::MAX;
+    let fwd_quad = !bounded && fwd_interior_quadratic(b, node);
+    let fwd_wins = !fwd_quad && (bounded || fwd_cost < rev_cost);
 
-    let fwd_candidate = if no_fwd_prefix {
+    let fwd_candidate = if fwd_quad {
         None
+    } else if no_fwd_prefix {
+        if !hardened && fwd_wins {
+            if has_look && node.contains_lookbehind(b) {
+                match try_build_fwd_lb(b, node)? {
+                    Some(fp) => Some(PrefixKind::AnchoredFwdLb(fp)),
+                    None => {
+                        try_build_fwd_neg_lb(b, node)?.map(|(fp, _)| PrefixKind::AnchoredFwd(fp))
+                    }
+                }
+            } else {
+                build_fwd_prefix_from_sets(b, &sets.fwd_potential.sets)?
+                    .map(PrefixKind::AnchoredFwd)
+            }
+        } else {
+            None
+        }
     } else if has_look && node.contains_lookbehind(b) {
-        try_build_fwd_lb(b, node)?.map(PrefixKind::AnchoredFwdLb)
-    } else if has_look && contains_lookahead_rel_max(b, node) {
-        None
+        match try_build_fwd_lb(b, node)? {
+            Some(fp) => Some(PrefixKind::AnchoredFwdLb(fp)),
+            None => try_build_fwd_neg_lb(b, node)?.map(|(fp, _)| PrefixKind::AnchoredFwd(fp)),
+        }
     } else {
         let fp = build_fwd_prefix_from_sets(b, &sets.fwd_potential.sets)?;
         match fp {
@@ -962,46 +1319,40 @@ fn select_prefix_simd(
             return None;
         }
         if !sets.rev_anchored.sets.is_empty() {
-            if let Some(s) = build_rev_prefix_search(b, &sets.rev_anchored.sets) {
+            if let Some(s) = build_rev_prefix_search(b, &sets.rev_anchored.sets, TEDDY_MEMCHR_MAX_FREQ)
+            {
                 return Some((PrefixKind::AnchoredRev, s));
             }
         }
         if !sets.rev_potential.sets.is_empty() {
-            if let Some(s) = build_rev_prefix_search(b, &sets.rev_potential.sets) {
+            if let Some(s) =
+                build_rev_prefix_search(b, &sets.rev_potential.sets, TEDDY_MEMCHR_MAX_FREQ)
+            {
                 return Some((PrefixKind::PotentialStart, s));
             }
         }
         None
     };
 
-    if fwd_wins && !no_fwd_prefix {
+    if fwd_wins || no_fwd_prefix {
         if let Some(kind) = fwd_candidate {
-            return Ok((Some(kind), None));
+            return Ok((Some(kind), None, fwd_wins, fwd_cost, rev_stripped));
         }
     }
     if let Some((kind, s)) = try_rev(b) {
-        return Ok((Some(kind), Some(s)));
+        return Ok((Some(kind), Some(s), false, rev_cost, rev_stripped));
     }
     if let Some(kind) = fwd_candidate {
-        return Ok((Some(kind), None));
+        return Ok((Some(kind), None, fwd_wins, fwd_cost, rev_stripped));
     }
-    Ok((None, None))
+    Ok((None, None, false, u64::MAX, rev_stripped))
 }
 
-fn try_build_fwd_lb(
-    b: &mut RegexBuilder,
-    node: NodeId,
-) -> Result<Option<crate::accel::FwdPrefixSearch>, Error> {
-    use resharp_algebra::Kind;
-    #[cfg(feature = "debug")]
-    eprintln!("  [try_build_fwd_lb] node={:?}", b.pp(node));
-    let body = strip_leading_lookbehind(b, node);
-    if body == node || node.right(b) != body {
-        return Ok(None);
-    }
-    let lb = node.left(b);
-    if b.get_kind(lb) != Kind::Lookbehind {
-        return Ok(None);
+/// The positive byte-class a leading lookbehind contributes to a fwd prefix,
+/// plus the lb length consumed. None when there is no usable fixed-length class.
+pub(crate) fn fwd_lb_class(b: &mut RegexBuilder, lb: NodeId) -> Option<(NodeId, u32)> {
+    if let Some(pred) = b.neg_lookbehind_prev_pred(lb) {
+        return Some((pred, 1));
     }
     let lb_inner = b.get_lookbehind_inner(lb);
     let mut lb_stripped = b.nonbegins(lb_inner);
@@ -1013,14 +1364,29 @@ fn try_build_fwd_lb(
         }
         lb_stripped = after;
     }
+    match b.get_fixed_length(lb_stripped) {
+        Some(len @ 1..=64) => Some((lb_stripped, len)),
+        _ => None,
+    }
+}
+
+fn try_build_fwd_lb(
+    b: &mut RegexBuilder,
+    node: NodeId,
+) -> Result<Option<crate::accel::FwdPrefixSearch>, Error> {
     #[cfg(feature = "debug")]
-    eprintln!("  [try_build_fwd_lb] after strip loop: lb_stripped={:?}", b.pp(lb_stripped));
-    let fixed_len = b.get_fixed_length(lb_stripped);
-    #[cfg(feature = "debug")]
-    eprintln!("  [try_build_fwd_lb] fixed_len={:?}", fixed_len);
-    if !matches!(fixed_len, Some(1..=64)) {
+    eprintln!("  [try_build_fwd_lb] node={:?}", b.pp(node));
+    let body = strip_leading_lookbehind(b, node);
+    if body == node || node.right(b) != body {
         return Ok(None);
     }
+    let lb = node.left(b);
+    if !lb.is_lookbehind(b) {
+        return Ok(None);
+    }
+    let Some((lb_stripped, _)) = fwd_lb_class(b, lb) else {
+        return Ok(None);
+    };
     if body_absorbs_lb(b, body, lb_stripped)? {
         #[cfg(feature = "debug")]
         eprintln!("  [fwd-lb] reject: body's leading star absorbs lb byte(s)");
@@ -1033,6 +1399,160 @@ fn try_build_fwd_lb(
     #[cfg(feature = "debug")]
     eprintln!("  [try_build_fwd_lb] result={:?}", result.as_ref().map(|_| "Some"));
     result
+}
+
+/// One forbidden fixed-length suffix: a sequence of single-byte classes. A
+/// candidate match start at `p` is matched (forbidden) iff `p >= len` and
+/// `input[p-len+i]` is in `classes[i]` for all `i`.
+#[cfg_attr(debug_assertions, derive(Debug))]
+#[cfg_attr(
+    feature = "serialize",
+    derive(serde::Serialize, serde::Deserialize, Clone)
+)]
+pub struct NegLbTerm {
+    pub len: usize,
+    pub classes: Vec<[u64; 4]>,
+}
+
+impl NegLbTerm {
+    #[inline]
+    fn matches(&self, input: &[u8], start: usize) -> bool {
+        if start < self.len {
+            return false;
+        }
+        let base = start - self.len;
+        for (i, set) in self.classes.iter().enumerate() {
+            let byte = input[base + i];
+            if set[(byte >> 6) as usize] & (1u64 << (byte & 63)) == 0 {
+                return false;
+            }
+        }
+        true
+    }
+}
+
+/// Fixed-length negative lookbehind verifier: a candidate start at `p` is
+/// rejected iff any forbidden term matches the bytes before `p`.
+#[cfg_attr(debug_assertions, derive(Debug))]
+#[cfg_attr(
+    feature = "serialize",
+    derive(serde::Serialize, serde::Deserialize, Clone)
+)]
+pub struct NegLb {
+    pub terms: Vec<NegLbTerm>,
+}
+
+impl NegLb {
+    #[inline]
+    pub(crate) fn rejects(&self, input: &[u8], start: usize) -> bool {
+        self.terms.iter().any(|t| t.matches(input, start))
+    }
+}
+
+/// Parse a negative term `\A~(_*X)` into its single-byte class sequence, where
+/// `X` is a `Pred` chain. Anything wider bails to `None`.
+fn parse_neg_term(b: &mut RegexBuilder, term: NodeId) -> Option<Vec<TSetId>> {
+    if !term.is_concat(b) || term.left(b) != NodeId::BEGIN {
+        return None;
+    }
+    let compl = term.right(b);
+    if !compl.is_compl(b) {
+        return None;
+    }
+    let body_ts = compl.left(b);
+    if !body_ts.is_concat(b) || body_ts.left(b) != NodeId::TS {
+        return None;
+    }
+    let mut x = body_ts.right(b);
+    let mut seq = Vec::new();
+    loop {
+        match b.get_kind(x) {
+            Kind::Pred => {
+                seq.push(x.pred_tset(b));
+                break;
+            }
+            Kind::Concat if x.left(b).is_pred(b) => {
+                seq.push(x.left(b).pred_tset(b));
+                x = x.right(b);
+            }
+            _ => return None,
+        }
+    }
+    if seq.is_empty() || seq.len() > 64 {
+        return None;
+    }
+    Some(seq)
+}
+
+/// Detect a leading negative lookbehind `(?<!X)body`, where the lookbehind inner
+/// is one negative term or an intersection `~(_*X1) & ~(_*X2) & ...` (e.g. a
+/// hand-written guard merged with a `\b`). Returns `(body, per-term sequences)`.
+/// Every term must be a single-byte-class chain; otherwise `None`.
+fn neg_lb_body_and_seq(b: &mut RegexBuilder, node: NodeId) -> Option<(NodeId, Vec<Vec<TSetId>>)> {
+    if !node.is_concat(b) {
+        return None;
+    }
+    let lb = node.left(b);
+    let body = node.right(b);
+    if !lb.is_lookbehind(b) {
+        return None;
+    }
+    let inner = b.get_lookbehind_inner(lb);
+    let mut terms = Vec::new();
+    let mut cur = inner;
+    while cur.is_inter(b) {
+        terms.push(parse_neg_term(b, cur.left(b))?);
+        cur = cur.right(b);
+    }
+    terms.push(parse_neg_term(b, cur)?);
+    Some((body, terms))
+}
+
+/// Build a body-literal forward prefix for a leading fixed-length negative
+/// lookbehind. The lookbehind is verified separately by [`NegLb`]; the literal
+/// is a necessary condition on the consumed bytes so the prefilter is sound.
+pub(crate) fn try_build_fwd_neg_lb(
+    b: &mut RegexBuilder,
+    node: NodeId,
+) -> Result<Option<(crate::accel::FwdPrefixSearch, NegLb)>, Error> {
+    let Some((body, terms)) = neg_lb_body_and_seq(b, node) else {
+        return Ok(None);
+    };
+    let Some(search) = build_fwd_prefix(b, body)? else {
+        return Ok(None);
+    };
+    let neg = build_neg_lb(b, &terms);
+    Ok(Some((search, neg)))
+}
+
+fn build_neg_lb(b: &mut RegexBuilder, terms: &[Vec<TSetId>]) -> NegLb {
+    let terms = terms
+        .iter()
+        .map(|seq| {
+            let classes = seq
+                .iter()
+                .map(|&set| {
+                    let mut bits = [0u64; 4];
+                    for byte in b.solver().collect_bytes(set) {
+                        bits[(byte >> 6) as usize] |= 1u64 << (byte & 63);
+                    }
+                    bits
+                })
+                .collect();
+            NegLbTerm {
+                len: seq.len(),
+                classes,
+            }
+        })
+        .collect();
+    NegLb { terms }
+}
+
+/// Recompute the [`NegLb`] verifier for a node already selected for a body-only
+/// forward prefix (used at construction to attach the reject test).
+pub(crate) fn neg_lb_classes(b: &mut RegexBuilder, node: NodeId) -> Option<NegLb> {
+    let (_, terms) = neg_lb_body_and_seq(b, node)?;
+    Some(build_neg_lb(b, &terms))
 }
 
 fn body_absorbs_lb(b: &mut RegexBuilder, body: NodeId, lb: NodeId) -> Result<bool, crate::Error> {

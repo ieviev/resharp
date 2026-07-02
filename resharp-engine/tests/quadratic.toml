@@ -1,15 +1,41 @@
 description = '''
-patterns whose find_all is O(n^2), seeing if they get flagged
+patterns whose find_all is O(n^2) on adversarial input.
+this is to test some preventative measures.
+kind="fwd": quadratic only if a forward prefix is chosen; assert none is picked under hardening.
+kind="dfa": quadratic in the generic Dfa path; assert auto_harden hardens it and keeps it linear.
 '''
-
-[[test]]
-name = "extract_from"
-pattern = 'EXTRACT\s*([^)]*FROM\s+[^)]+)'
-unit = 'EXTRACT x '
-note = ''''''
 
 [[test]]
 name = "op_pushdata"
 pattern = 'OP_PUSHDATA[^\s]+ [^\s]+'
 unit = 'OP_PUSHDATA'
+kind = "fwd"
 note = ''''''
+
+[[test]]
+name = "optional_prefix_quoted_tokenizer"
+pattern = '(([^\s]+:)?\"(?:[^\"\\]|\\.)*\"?)|([^\"\s]+)'
+unit = '"'
+kind = "dfa"
+note = '''optional prefix and trailing quote create nested restarts; generic path is O(n^2) on a quote run.'''
+
+[[test]]
+name = "token_interior_unbounded_then_close"
+pattern = '<Token>([\s\S]+)<\/Token>[\s\S]+'
+unit = '<Token>A'
+kind = "fwd"
+note = '''interior [\s\S]+ swallows the <Token> prefix before the mandatory close, so AnchoredFwd verify re-scans to EOF per hit.'''
+
+[[test]]
+name = "at_ident_then_interior_line_loop"
+pattern = '(@[A-Za-z0-9_0-9\$\_]+)([^\n\r]+\))([^\s])'
+unit = '@x'
+kind = "fwd"
+note = '''only quadratic with a naive forward anchor on @; suppressed here, so it stays linear.'''
+
+[[test]]
+name = "tag_interior_negated_then_close"
+pattern = '</?([a-z]\w*)\b[^>]*>'
+unit = '<a'
+kind = "fwd"
+note = '''\b-fused interior [^>]* swallows the < prefix before the mandatory >, so AnchoredFwd verify re-scans to EOF per hit; loop_body_class catches it.'''

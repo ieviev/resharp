@@ -1,5 +1,5 @@
 use resharp_algebra::nulls::{
-    EID_ALWAYS0, EID_BEGIN0, EID_CENTER0, EID_END0, EID_NONE, Nullability,
+    EID_ALWAYS0, EID_BEGIN0, EID_CENTER0, EID_END0, EID_NONE, Nullability, StartPositions,
 };
 use resharp_algebra::RegexBuilder;
 use rustc_hash::FxHashMap;
@@ -409,13 +409,15 @@ impl LDFA {
         b: &mut RegexBuilder,
         fas: &mut FwdDFA,
         data: &[u8],
-        nulls: &[usize],
+        nulls: &StartPositions,
         matches: &mut Vec<Match>,
     ) -> Result<(), Error> {
         let data_end = data.len();
         if data_end == 0 {
             return Ok(());
         }
+        let nulls: Vec<usize> = nulls.positions_desc().collect();
+        let nulls = nulls.as_slice();
         let mut ni: usize = nulls.len();
         let mut max = std::mem::take(&mut fas.max);
         let mut linker = std::mem::take(&mut fas.linker);

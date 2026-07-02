@@ -16,7 +16,8 @@ readme = "../README.md"
 doctest = false
 
 [features]
-default = []
+default = ["convergence_prefix"]
+# default = []
 # experimental, off by default: zero-width / anchored patterns can report phantom
 # matches (see TODO.md). do not enable in production.
 stream = []

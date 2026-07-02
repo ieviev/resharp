@@ -260,19 +260,15 @@ impl BDFA {
         let sid = self.states.len() as u16;
         let mut match_step = 0u32;
         let mut match_best = 0u32;
-        let mut cur = node;
-        while cur.0 > NodeId::BOT.0 {
-            debug_assert_eq!(b.get_kind(cur), Kind::Ordered);
-            let body = cur.left(b);
-            if body == NodeId::BOT {
-                let best = Self::counted_best(cur, b);
-                if best > match_best {
-                    let packed = b.get_extra(cur);
-                    match_step = packed & 0xFFFF;
+        if node.0 > NodeId::BOT.0 {
+            debug_assert_eq!(b.get_kind(node), Kind::Ordered);
+            if node.left(b) == NodeId::BOT {
+                let best = Self::counted_best(node, b);
+                if best > 0 {
+                    match_step = b.get_extra(node) & 0xFFFF;
                     match_best = best;
                 }
             }
-            cur = cur.right(b);
         }
         if cfg!(feature = "debug") {
             eprintln!(
@@ -315,15 +311,20 @@ impl BDFA {
             let chain = cur.right(b);
             let body = cur.left(b);
             if body == NodeId::BOT {
-                if Self::counted_best(cur, b) > 0 {
-                    result.push(cur);
+                let best = Self::counted_best(cur, b);
+                if best > 0 {
+                    let step = (b.get_extra(cur) & 0xFFFF) + 1;
+                    let bumped = b.mk_ordered(NodeId::BOT, NodeId::MISSING, (best << 16) | step);
+                    result.push(bumped);
                 }
                 cur = chain;
                 continue;
             }
             let der = b.der(cur, Nullability::CENTER).map_err(Error::Algebra)?;
             let next = transition_term(b, der, mt);
-            if next != NodeId::BOT {
+            if next != NodeId::BOT
+                && !(next.left(b) == NodeId::BOT && Self::counted_best(next, b) == 0)
+            {
                 result.push(next);
             }
             cur = chain;
@@ -427,11 +428,11 @@ fn bdfa_inner<const PREFIX: u8>(
                 return (state, pos, mc);
             }
             let rel = entry >> 16;
+            if rel > 0 && mc >= match_cap {
+                return (state, pos, mc);
+            }
             state = (entry & 0xFFFF) as u16;
             if rel > 0 {
-                if mc >= match_cap {
-                    return (state, pos, mc);
-                }
                 let end_off = *match_end_off.add(state as usize);
                 let end = pos + 1 - end_off as usize;
                 *match_buf.add(mc) = Match {
@@ -515,11 +516,13 @@ pub(crate) fn bdfa_scan<const PREFIX: u8, const ISMATCH: bool>(
                     return Ok(true);
                 }
                 let end_off = bounded.match_end_off[state as usize];
+                let end = pos + 1 - end_off as usize;
                 matches.push(Match {
                     start: pos + 1 - rel as usize,
-                    end: pos + 1 - end_off as usize,
+                    end,
                 });
                 state = initial;
+                pos = end;
             } else {
                 pos += 1;
             }
@@ -564,11 +567,13 @@ pub(crate) fn bdfa_scan<const PREFIX: u8, const ISMATCH: bool>(
                                 return Ok(true);
                             }
                             let end_off = bounded.match_end_off[state as usize];
+                            let end = pos - end_off as usize + 1;
                             matches.push(Match {
                                 start: pos - rel as usize + 1,
-                                end: pos - end_off as usize + 1,
+                                end,
                             });
                             state = initial;
+                            pos = end;
                         }
                         continue 'main;
                     }
@@ -599,11 +604,13 @@ pub(crate) fn bdfa_scan<const PREFIX: u8, const ISMATCH: bool>(
                             return Ok(true);
                         }
                         let end_off = *meo.add(state as usize);
+                        let end = pos + 1 - end_off as usize;
                         matches.push(Match {
                             start: pos + 1 - rel as usize,
-                            end: pos + 1 - end_off as usize,
+                            end,
                         });
                         state = initial;
+                        pos = end;
                         continue 'main;
                     }
                     pos += 1;
@@ -638,27 +645,28 @@ pub(crate) fn bdfa_scan<const PREFIX: u8, const ISMATCH: bool>(
     if state != initial {
         let node = bounded.states[state as usize];
         if node != NodeId::MISSING {
-            let mut best_val = 0u32;
-            let mut best_step = 0u32;
+            let mut cands: Vec<(usize, usize)> = Vec::new();
             let mut cur = node;
             while cur.0 > NodeId::BOT.0 {
                 let packed = b.get_extra(cur);
-                let step = packed & 0xFFFF;
-                let best = packed >> 16;
-                if best > best_val {
-                    best_val = best;
-                    best_step = step;
+                let best = (packed >> 16) as usize;
+                if best > 0 {
+                    if ISMATCH {
+                        return Ok(true);
+                    }
+                    let start = len - (packed & 0xFFFF) as usize;
+                    cands.push((start, start + best));
                 }
                 cur = cur.right(b);
             }
-            if best_val > 0 {
-                if ISMATCH {
-                    return Ok(true);
+            cands.sort_by(|a, c| a.0.cmp(&c.0).then(c.1.cmp(&a.1)));
+            let mut last_end = matches.last().map_or(0, |m| m.end);
+            for (start, end) in cands {
+                if start < last_end {
+                    continue;
                 }
-                matches.push(Match {
-                    start: len - best_step as usize,
-                    end: len - best_step as usize + best_val as usize,
-                });
+                matches.push(Match { start, end });
+                last_end = end;
             }
         }
     }
@@ -687,6 +695,22 @@ impl Regex {
             None => {
                 bdfa_scan::<{ Prefix::None as u8 }, false>(bounded, b, input, matches_buf)?;
             }
+        }
+        if self.always_nullable {
+            let len = input.len();
+            let mut filled = Vec::with_capacity(len + 1);
+            let mut cursor = 0usize;
+            for m in matches_buf.iter() {
+                for pos in cursor..m.start {
+                    filled.push(Match { start: pos, end: pos });
+                }
+                filled.push(*m);
+                cursor = m.end.max(m.start + 1);
+            }
+            for pos in cursor..=len {
+                filled.push(Match { start: pos, end: pos });
+            }
+            return Ok(filled);
         }
         Ok(matches_buf.clone())
     }

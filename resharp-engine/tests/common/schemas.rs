@@ -74,6 +74,7 @@ pub struct PrefixCase {
     pub prefix_rev: Option<String>,
     pub potential_rev: Option<String>,
     pub potential_fwd: Option<String>,
+    pub conv_literal: Option<String>,
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -122,6 +123,19 @@ pub struct QuadraticFile {
     pub test: Vec<QuadraticCase>,
 }
 
+#[derive(Deserialize, JsonSchema, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum QuadKind {
+    Fwd,
+    Dfa,
+}
+
+impl Default for QuadKind {
+    fn default() -> Self {
+        QuadKind::Fwd
+    }
+}
+
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct QuadraticCase {
@@ -129,6 +143,8 @@ pub struct QuadraticCase {
     pub name: String,
     pub pattern: String,
     pub unit: String,
+    #[serde(default)]
+    pub kind: QuadKind,
     #[serde(default)]
     pub note: String,
 }

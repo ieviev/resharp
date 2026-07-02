@@ -114,3 +114,21 @@ pattern = 'a*\D'
 input = "0"
 ascii = true
 matches = []
+
+[[test]]
+name = "bounded_eof_survivors_cac"
+pattern = '(?:a|c?|cac)'
+input = "ca"
+matches = [[0, 1], [1, 2], [2, 2]]
+
+[[test]]
+name = "bounded_eof_survivors_cbac_ca"
+pattern = '(?:a|c?|[cb]ac)'
+input = "ca"
+matches = [[0, 1], [1, 2], [2, 2]]
+
+[[test]]
+name = "bounded_eof_survivors_cbac_bca"
+pattern = '(?:a|c?|[cb]ac)'
+input = "bca"
+matches = [[0, 0], [1, 2], [2, 3], [3, 3]]

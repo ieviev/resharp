@@ -1028,3 +1028,9 @@ name = "bug13_nested_lookahead_zero_width_ccc"
 pattern = '(?=(?=c)c{1,3})'
 input = "ccc"
 matches = [[0, 0], [1, 1], [2, 2]]
+
+[[test]]
+name = "convergence_repeated_unit_tail_leftmost"
+pattern = 'a+(?=\W)(?=.*___)'
+input = "aaa ___"
+matches = [[0, 3]]

@@ -29,6 +29,12 @@
         "pattern"
       ],
       "properties": {
+        "conv_literal": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "ignore": {
           "default": false,
           "type": "boolean"

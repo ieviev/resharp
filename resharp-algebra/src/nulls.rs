@@ -115,14 +115,111 @@ pub fn has_any_null(
     effects[eid as usize].iter().any(|n| n.mask.has(mask))
 }
 
-#[inline]
-pub fn push_null_desc(nulls: &mut Vec<usize>, v: usize) {
-    let mut j = nulls.len();
-    nulls.push(v);
-    while j > 0 && nulls[j - 1] < v {
-        nulls.swap(j - 1, j);
-        j -= 1;
+/// Descending, non-overlapping `[lo, hi)` match-start runs (`runs[0]` highest).
+#[derive(Clone, Default, Debug, PartialEq, Eq)]
+pub struct StartPositions {
+    runs: Vec<(usize, usize)>,
+}
+
+impl StartPositions {
+    #[inline]
+    pub fn new() -> Self {
+        StartPositions { runs: Vec::new() }
     }
+
+    #[inline]
+    pub fn clear(&mut self) {
+        self.runs.clear();
+    }
+
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.runs.is_empty()
+    }
+
+    #[inline]
+    pub fn count(&self) -> usize {
+        self.runs.iter().map(|&(lo, hi)| hi - lo).sum()
+    }
+
+    #[inline]
+    pub fn min_pos(&self) -> Option<usize> {
+        self.runs.last().map(|&(lo, _)| lo)
+    }
+
+    #[inline]
+    pub fn runs(&self) -> &[(usize, usize)] {
+        &self.runs
+    }
+
+    /// Insert one position, preserving the descending non-overlapping invariant.
+    #[inline]
+    pub fn add(&mut self, pos: usize) {
+        match self.runs.last_mut() {
+            None => self.runs.push((pos, pos + 1)),
+            Some(last) => {
+                if pos < last.0 {
+                    if pos + 1 == last.0 {
+                        last.0 = pos;
+                    } else {
+                        self.runs.push((pos, pos + 1));
+                    }
+                } else if pos < last.1 {
+                } else {
+                    self.insert_general(pos);
+                }
+            }
+        }
+    }
+
+    /// Append a descending run `[lo, hi)` at or below the current minimum.
+    #[inline]
+    pub fn add_range(&mut self, lo: usize, hi: usize) {
+        if lo >= hi {
+            return;
+        }
+        match self.runs.last_mut() {
+            Some(last) if hi == last.0 => last.0 = lo,
+            Some(last) if hi < last.0 => self.runs.push((lo, hi)),
+            None => self.runs.push((lo, hi)),
+            Some(_) => {
+                for p in (lo..hi).rev() {
+                    self.add(p);
+                }
+            }
+        }
+    }
+
+    #[cold]
+    fn insert_general(&mut self, pos: usize) {
+        let mut i = 0;
+        while i < self.runs.len() && self.runs[i].0 > pos {
+            i += 1;
+        }
+        if i < self.runs.len() {
+            let (lo, hi) = self.runs[i];
+            debug_assert!(lo <= pos);
+            if pos < hi {
+                return;
+            }
+        }
+        self.runs.insert(i, (pos, pos + 1));
+    }
+
+    #[inline]
+    pub fn positions_desc(&self) -> impl Iterator<Item = usize> + '_ {
+        self.runs.iter().flat_map(|&(lo, hi)| (lo..hi).rev())
+    }
+
+    #[inline]
+    pub fn positions_asc(&self) -> impl Iterator<Item = usize> + '_ {
+        self.runs.iter().rev().flat_map(|&(lo, hi)| lo..hi)
+    }
+}
+
+#[inline]
+pub fn push_null_desc(nulls: &mut StartPositions, v: usize) {
+    nulls.add(v);
 }
 
 #[inline(always)]
@@ -132,36 +229,36 @@ pub fn collect_nulls(
     state: u32,
     pos: usize,
     mask: Nullability,
-    nulls: &mut Vec<usize>,
+    nulls: &mut StartPositions,
 ) {
     let eid = effects_id[state as usize] as u32;
     if eid != 0 {
         match eid {
             EID_ALWAYS0 => {
                 if mask.has(Nullability::ALWAYS) {
-                    nulls.push(pos);
+                    nulls.add(pos);
                 }
             }
             EID_CENTER0 => {
                 if mask.has(Nullability::CENTER) {
-                    nulls.push(pos);
+                    nulls.add(pos);
                 }
             }
             EID_BEGIN0 => {
                 if mask.has(Nullability::BEGIN) {
-                    nulls.push(pos);
+                    nulls.add(pos);
                 }
             }
             EID_END0 => {
                 if mask.has(Nullability::END) {
-                    nulls.push(pos);
+                    nulls.add(pos);
                 }
             }
             _ => {
                 for n in &effects[eid as usize] {
                     if n.mask.has(mask) {
                         let resolved = pos + n.rel as usize;
-                        push_null_desc(nulls, resolved);
+                        nulls.add(resolved);
                     }
                 }
             }
@@ -271,9 +368,6 @@ impl NullsBuilder {
         if set1 == NullsId::ALWAYS0 && set2 == NullsId::END0 {
             return NullsId::ALWAYS0;
         }
-        if set1 == NullsId::END0 && set2 == NullsId::ALWAYS0 {
-            return NullsId::ALWAYS0;
-        }
 
         let all = self.get_set_ref(set1) | self.get_set_ref(set2);
         let mut result: BTreeSet<&NullState> = BTreeSet::new();
@@ -295,14 +389,11 @@ impl NullsBuilder {
 
     #[inline]
     pub fn and_id(&mut self, set1: NullsId, set2: NullsId) -> NullsId {
-        if NullsId::EMPTY == set1 {
-            return NullsId::EMPTY;
-        }
-        if NullsId::EMPTY == set2 {
-            return NullsId::EMPTY;
-        }
         if set1 > set2 {
             return self.and_id(set2, set1);
+        }
+        if NullsId::EMPTY == set1 {
+            return NullsId::EMPTY;
         }
         let key = Key {
             op: Operation::Inter,

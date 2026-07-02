@@ -6,6 +6,7 @@ fn fwd_prefix_impl(
     fixed_length: Option<u32>,
     has_anchors: bool,
     has_la: bool,
+    neg_lb: Option<&crate::prefix::NegLb>,
     fwd_prefix: &FwdPrefixSearch,
     input: &[u8],
     matches: &mut Vec<Match>,
@@ -15,7 +16,8 @@ fn fwd_prefix_impl(
     let lang_is_prefix_literal = fwd_prefix.is_literal()
         && fixed_length == Some(prefix_len as u32)
         && !has_anchors
-        && !has_la;
+        && !has_la
+        && neg_lb.is_none();
     if lang_is_prefix_literal {
         fwd_prefix.find_all_literal(input, matches);
         return Ok(());
@@ -40,6 +42,12 @@ fn fwd_prefix_impl(
     }
 
     while let Some(candidate) = fwd_prefix.find_fwd(input, search_start) {
+        if let Some(neg) = neg_lb {
+            if neg.rejects(input, candidate) {
+                search_start = candidate + 1;
+                continue;
+            }
+        }
         let state = fwd.walk_input(b, candidate, prefix_len, input)?;
         if state != 0 {
             if let Some(max_end) = fwd.scan_fwd_from(b, state, candidate + prefix_len, input)? {
@@ -154,6 +162,7 @@ impl Regex {
     pub(crate) fn find_all_fwd_prefix(
         &self,
         fwd_prefix: &FwdPrefixSearch,
+        neg_lb: Option<&crate::prefix::NegLb>,
         input: &[u8],
     ) -> Result<Vec<Match>, Error> {
         debug_assert!(!input.is_empty());
@@ -165,6 +174,7 @@ impl Regex {
             self.fixed_length,
             self.has_anchors,
             self.has_la,
+            neg_lb,
             fwd_prefix,
             input,
             &mut inner.matches,

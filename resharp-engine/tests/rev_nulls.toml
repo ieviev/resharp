@@ -135,11 +135,6 @@ pattern = '.*=.*'
 input = "first\nsecond=line\nthird"
 rev_nulls = [12, 11, 10, 9, 8, 7, 6]
 
-# Regression: a zero-width negative lookahead of a begin anchor lowers to
-# `EPS & ~\A`, whose null-effect set keeps a nullable entry from each operand at
-# the same interior position. collect_nulls must register each position once;
-# before the fix it pushed interior positions twice (got [2, 2, 1, 1] here, which
-# made find_all emit the zero-width span (2, 2) twice).
 [[test]]
 name = "neg_lookahead_begin_anchor_no_duplicate_nulls"
 pattern = '(&~(\A))'
@@ -163,3 +158,75 @@ name = "complement_and_rev_nulls"
 pattern = '~(.*and.*)'
 input = "__A and B"
 rev_nulls = [8, 7, 6, 5, 4, 3, 2, 1, 0]
+
+[[test]]
+name = "nullrun_eq_chain"
+pattern = '[^=]+='
+input = "a=b=c="
+rev_nulls = [4, 2, 0]
+
+[[test]]
+name = "nullrun_eq_trailing_unmatched"
+pattern = '[^=]+='
+input = "abc=def=ghi"
+rev_nulls = [6, 5, 4, 2, 1, 0]
+
+[[test]]
+name = "nullrun_eq_only_delim"
+pattern = '[^=]+='
+input = "="
+rev_nulls = []
+
+[[test]]
+name = "nullrun_eq_quote"
+pattern = '[^=]+="'
+input = 'key="v1",KEY="v2",x='
+rev_nulls = [11, 10, 9, 8, 7, 6, 5, 4, 2, 1, 0]
+
+[[test]]
+name = "nullrun_slash_pairs"
+pattern = '\S+/\S+'
+input = "ab/cd ef/gh x//y"
+rev_nulls = [13, 12, 7, 6, 1, 0]
+
+[[test]]
+name = "nullrun_slash_unicode"
+pattern = '\S+/\S+'
+input = "éx/éy café/th"
+rev_nulls = [11, 10, 9, 8, 2, 0]
+
+[[test]]
+name = "nullrun_single_class_chain"
+pattern = '[^=]'
+input = "a=b=c="
+rev_nulls = [4, 2, 0]
+
+[[test]]
+name = "nullrun_pair_class"
+pattern = '[^=][^=]'
+input = "abc=def=ghi"
+rev_nulls = [9, 8, 5, 4, 1, 0]
+
+[[test]]
+name = "nullrun_lower_plus_prose"
+pattern = '[a-z]+'
+input = "no delimiters here at all"
+rev_nulls = [24, 23, 22, 20, 19, 17, 16, 15, 14, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 1, 0]
+
+[[test]]
+name = "nullrun_comma_chain"
+pattern = '[^,]+,'
+input = "a,b,,c,"
+rev_nulls = [5, 2, 0]
+
+[[test]]
+name = "nullrun_a_plus_b_runs"
+pattern = 'a+b'
+input = "aaab aab b ab"
+rev_nulls = [11, 6, 5, 2, 1, 0]
+
+[[test]]
+name = "nullrun_lower_pair_mixed"
+pattern = '[a-z][a-z]'
+input = "abcDefGhi"
+rev_nulls = [7, 4, 1, 0]

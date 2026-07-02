@@ -5,7 +5,9 @@
 use std::collections::HashSet;
 use std::sync::Mutex;
 
-use resharp_algebra::{NodeId, RegexBuilder};
+#[cfg(feature = "stream")]
+use resharp_algebra::NodeId;
+use resharp_algebra::RegexBuilder;
 use serde::{Deserialize, Serialize};
 
 use crate::bdfa::BDFA;
@@ -13,7 +15,7 @@ use crate::ldfa::{DFA_DEAD, LDFA};
 use crate::prefix::PrefixKind;
 #[cfg(feature = "stream")]
 use crate::stream::{StreamCache, StreamInit};
-use crate::{Error, FindAll, Match, Regex, RegexInner};
+use crate::{Error, FindAll, Match, NullRuns, Regex, RegexInner};
 
 pub(crate) mod array256 {
     use serde::{Deserialize, Deserializer, Serializer};
@@ -36,6 +38,7 @@ struct RegexDump {
     fixed_length: Option<u32>,
     empty_nullable: bool,
     always_nullable: bool,
+    star_loop: bool,
     is_empty_lang: bool,
     initial_nullability: resharp_algebra::nulls::Nullability,
     fwd_end_nullable: bool,
@@ -46,6 +49,7 @@ struct RegexDump {
     fwd_lb_body_nullable: bool,
     has_lb: bool,
     has_la: bool,
+    neg_lb: Option<crate::prefix::NegLb>,
     find_all: FindAll,
     lb_check_bytes: u8,
     fwd_lb_begin_nullable: bool,
@@ -54,6 +58,10 @@ struct RegexDump {
     fwd: Option<LDFA>,
     rev_ts: Option<LDFA>,
     bounded: Option<BDFA>,
+    #[cfg(feature = "convergence_prefix")]
+    conv_prefix: bool,
+    #[cfg(feature = "convergence_prefix")]
+    conv_b: Option<LDFA>,
 }
 
 fn precompile_ldfa(ldfa: &mut LDFA, b: &mut RegexBuilder) -> Result<(), Error> {
@@ -120,7 +128,6 @@ fn empty_ldfa() -> LDFA {
         node_to_state: Default::default(),
         skip_ids: Vec::new(),
         skip_searchers: Vec::new(),
-        prefix_skip: None,
         max_capacity: 0,
         is_forward: true,
         has_anchors: false,
@@ -160,11 +167,18 @@ impl Regex {
         if self.has_bounded {
             precompile_bdfa(inner.bounded.as_mut().unwrap(), &mut inner.b)?;
         }
+        #[cfg(feature = "convergence_prefix")]
+        if self.conv_prefix {
+            if let Some(cb) = inner.conv_b.as_mut() {
+                precompile_ldfa(cb, &mut inner.b)?;
+            }
+        }
 
         let dump = RegexDump {
             fixed_length: self.fixed_length,
             empty_nullable: self.empty_nullable,
             always_nullable: self.always_nullable,
+            star_loop: self.star_loop,
             is_empty_lang: self.is_empty_lang,
             initial_nullability: self.initial_nullability,
             fwd_end_nullable: self.fwd_end_nullable,
@@ -174,6 +188,7 @@ impl Regex {
             fwd_lb_body_nullable: self.fwd_lb_body_nullable,
             has_lb: self.has_lb,
             has_la: self.has_la,
+            neg_lb: self.neg_lb.clone(),
             lb_check_bytes: self.lb_check_bytes,
             fwd_lb_begin_nullable: self.fwd_lb_begin_nullable,
             has_anchors: self.has_anchors,
@@ -195,6 +210,14 @@ impl Regex {
             } else {
                 None
             },
+            #[cfg(feature = "convergence_prefix")]
+            conv_prefix: self.conv_prefix,
+            #[cfg(feature = "convergence_prefix")]
+            conv_b: if self.conv_prefix {
+                inner.conv_b.take()
+            } else {
+                None
+            },
         };
 
         let out = bincode_cfg()
@@ -210,6 +233,10 @@ impl Regex {
         }
         if let Some(b) = dump.bounded {
             inner.bounded = Some(b);
+        }
+        #[cfg(feature = "convergence_prefix")]
+        if let Some(cb) = dump.conv_b {
+            inner.conv_b = Some(cb);
         }
         Ok(out)
     }
@@ -228,13 +255,15 @@ impl Regex {
                 fwd_ts: empty_ldfa(),
                 rev: None,
                 rev_ts: dump.rev_ts.unwrap_or_else(empty_ldfa),
+                #[cfg(feature = "convergence_prefix")]
+                conv_b: dump.conv_b,
                 #[cfg(feature = "stream")]
                 stream: StreamInit {
                     start_node: NodeId::MISSING,
                     seek_fwd: 0,
                     seek_rev: 0,
                 },
-                nulls: Vec::new(),
+                nulls: NullRuns::new(),
                 matches: Vec::<Match>::new(),
                 bounded: dump.bounded,
                 fas: None,
@@ -243,6 +272,7 @@ impl Regex {
             fixed_length: dump.fixed_length,
             empty_nullable: dump.empty_nullable,
             always_nullable: dump.always_nullable,
+            star_loop: dump.star_loop,
             is_empty_lang: dump.is_empty_lang,
             fwd_begin_anchored: dump.fwd_begin_anchored,
             find_all: dump.find_all,
@@ -255,6 +285,9 @@ impl Regex {
             fwd_lb_body_nullable: dump.fwd_lb_body_nullable,
             has_lb: dump.has_lb,
             has_la: dump.has_la,
+            #[cfg(feature = "convergence_prefix")]
+            conv_prefix: dump.conv_prefix,
+            neg_lb: dump.neg_lb,
             lb_check_bytes: dump.lb_check_bytes,
             fwd_lb_begin_nullable: dump.fwd_lb_begin_nullable,
             has_anchors: dump.has_anchors,

@@ -372,7 +372,7 @@ fn stream_feed_loop<
                 .copied()
                 .unwrap_or(0);
             if sid != 0 {
-                let searcher = &inner.fwd_ts.skip_searchers[sid as usize - 1];
+                let searcher = crate::scan::state_searcher(&inner.fwd_ts.skip_searchers, sid);
                 match searcher.find_fwd(&input[pos..end]) {
                     Some(off) => pos += off,
                     None => break,
@@ -562,7 +562,7 @@ impl Regex {
                 .copied()
                 .unwrap_or(0);
             if sid != 0 {
-                let s = &inner.fwd_ts.skip_searchers[sid as usize - 1];
+                let accel::Skipper::State(s) = &inner.fwd_ts.skip_searchers[sid as usize - 1] else { unreachable!() };
                 match s.find_fwd(&input[pos..end]) {
                     Some(off) => pos += off,
                     None => return Ok(None),
@@ -643,7 +643,7 @@ impl Regex {
                 .copied()
                 .unwrap_or(0);
             if sid != 0 {
-                let s = &inner.rev_ts.skip_searchers[sid as usize - 1];
+                let accel::Skipper::State(s) = &inner.rev_ts.skip_searchers[sid as usize - 1] else { unreachable!() };
                 match s.find_rev(&input[..pos]) {
                     Some(idx) => pos = idx + 1,
                     None => return Ok(None),

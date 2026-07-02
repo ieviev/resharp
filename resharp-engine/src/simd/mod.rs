@@ -296,13 +296,16 @@ impl FwdLiteralSearch {
         let confirm_byte = self.confirm.1;
         let end = haystack.len() - nlen + rare_idx;
         let vrare = _mm256_set1_epi8(rare_byte as i8);
+        let vconf = _mm256_set1_epi8(confirm_byte as i8);
+        let confirm_off = confirm_idx as isize - rare_idx as isize;
+        let dual = nlen > 1;
         let mut last_end: usize = 0;
 
         let mut handle = |this: &Self, start: usize| -> Option<usize> {
             if COLLECT_ALL && start < last_end {
                 return None;
             }
-            if *ptr.add(start + confirm_idx) != confirm_byte || !this.verify(haystack, start) {
+            if !this.verify(haystack, start) {
                 return None;
             }
             if COLLECT_ALL {
@@ -319,6 +322,11 @@ impl FwdLiteralSearch {
         while pos + 32 <= end + 1 {
             let chunk = _mm256_loadu_si256(ptr.add(pos) as *const __m256i);
             let mut mask = _mm256_movemask_epi8(_mm256_cmpeq_epi8(chunk, vrare)) as u32;
+            if dual && mask != 0 {
+                let cchunk =
+                    _mm256_loadu_si256(ptr.offset(pos as isize + confirm_off) as *const __m256i);
+                mask &= _mm256_movemask_epi8(_mm256_cmpeq_epi8(cchunk, vconf)) as u32;
+            }
             while mask != 0 {
                 let bit = mask.trailing_zeros() as usize;
                 let start = pos + bit - rare_idx;
@@ -454,15 +462,24 @@ impl RevLiteralInner {
         let confirm_idx = self.confirm.0;
         let confirm_byte = self.confirm.1;
         let vrare = _mm256_set1_epi8(rare_byte as i8);
+        let vconf = _mm256_set1_epi8(confirm_byte as i8);
+        let confirm_off = confirm_idx as isize - rare_idx as isize;
+        let dual = nlen > 1;
         let min_rare_pos = rare_idx;
         let mut pos = end - (nlen - 1) + rare_idx;
         while pos >= min_rare_pos + 32 {
-            let chunk = _mm256_loadu_si256(ptr.add(pos - 31) as *const __m256i);
+            let base = pos - 31;
+            let chunk = _mm256_loadu_si256(ptr.add(base) as *const __m256i);
             let mut mask = _mm256_movemask_epi8(_mm256_cmpeq_epi8(chunk, vrare)) as u32;
+            if dual && mask != 0 {
+                let cchunk =
+                    _mm256_loadu_si256(ptr.offset(base as isize + confirm_off) as *const __m256i);
+                mask &= _mm256_movemask_epi8(_mm256_cmpeq_epi8(cchunk, vconf)) as u32;
+            }
             while mask != 0 {
                 let bit = 31 - (mask.leading_zeros() as usize);
-                let start = pos - 31 + bit - rare_idx;
-                if *ptr.add(start + confirm_idx) == confirm_byte && self.verify(haystack, start) {
+                let start = base + bit - rare_idx;
+                if self.verify(haystack, start) {
                     return Some(start + nlen - 1);
                 }
                 mask &= !(1u32 << bit);
@@ -646,22 +663,6 @@ impl RevTeddySearch {
         }
     }
 
-    #[cfg(feature = "convergence_prefix")]
-    pub fn add_tail_offset(mut self, extra: u32) -> Self {
-        match &mut self.inner {
-            RevSearchInner::Teddy(t) => t.tail_offset += extra as usize,
-            RevSearchInner::Literal(l) => l.tail_offset += extra as usize,
-        }
-        self
-    }
-
-    #[cfg(feature = "convergence_prefix")]
-    pub fn len(&self) -> usize {
-        match &self.inner {
-            RevSearchInner::Teddy(t) => t.len,
-            RevSearchInner::Literal(l) => l.needle.len(),
-        }
-    }
 
     pub fn find_rev(&self, haystack: &[u8], end: usize) -> Option<usize> {
         match &self.inner {
@@ -805,6 +806,7 @@ impl RevTeddySearch {
 pub struct FwdPrefixSearch {
     pub(crate) len: usize,
     pub(crate) num_simd: usize,
+    pub(crate) simd_offsets: [usize; 3],
     pub(crate) masks: TeddyMasks,
     pub(crate) sets: Vec<TSet>,
     pub(crate) verify_order: [u8; 16],
@@ -849,12 +851,13 @@ impl TeddyMasks {
 unsafe fn teddy_filter_fwd<const N: usize>(
     ptr: *const u8,
     pos: usize,
+    offsets: &[usize; 3],
     masks: &TeddyMasks,
     nib: __m256i,
 ) -> u32 {
     let vlo0 = _mm256_load_si256(masks.lo[0].as_ptr() as *const __m256i);
     let vhi0 = _mm256_load_si256(masks.hi[0].as_ptr() as *const __m256i);
-    let c0 = _mm256_loadu_si256(ptr.add(pos) as *const __m256i);
+    let c0 = _mm256_loadu_si256(ptr.add(pos + offsets[0]) as *const __m256i);
     let mut r = _mm256_and_si256(
         _mm256_shuffle_epi8(vlo0, _mm256_and_si256(c0, nib)),
         _mm256_shuffle_epi8(vhi0, _mm256_and_si256(_mm256_srli_epi16(c0, 4), nib)),
@@ -862,7 +865,7 @@ unsafe fn teddy_filter_fwd<const N: usize>(
     if N >= 2 {
         let vlo1 = _mm256_load_si256(masks.lo[1].as_ptr() as *const __m256i);
         let vhi1 = _mm256_load_si256(masks.hi[1].as_ptr() as *const __m256i);
-        let c1 = _mm256_loadu_si256(ptr.add(pos + 1) as *const __m256i);
+        let c1 = _mm256_loadu_si256(ptr.add(pos + offsets[1]) as *const __m256i);
         let r1 = _mm256_and_si256(
             _mm256_shuffle_epi8(vlo1, _mm256_and_si256(c1, nib)),
             _mm256_shuffle_epi8(vhi1, _mm256_and_si256(_mm256_srli_epi16(c1, 4), nib)),
@@ -872,7 +875,7 @@ unsafe fn teddy_filter_fwd<const N: usize>(
     if N >= 3 {
         let vlo2 = _mm256_load_si256(masks.lo[2].as_ptr() as *const __m256i);
         let vhi2 = _mm256_load_si256(masks.hi[2].as_ptr() as *const __m256i);
-        let c2 = _mm256_loadu_si256(ptr.add(pos + 2) as *const __m256i);
+        let c2 = _mm256_loadu_si256(ptr.add(pos + offsets[2]) as *const __m256i);
         let r2 = _mm256_and_si256(
             _mm256_shuffle_epi8(vlo2, _mm256_and_si256(c2, nib)),
             _mm256_shuffle_epi8(vhi2, _mm256_and_si256(_mm256_srli_epi16(c2, 4), nib)),
@@ -936,22 +939,39 @@ impl FwdPrefixSearch {
         debug_assert_eq!(byte_sets_raw.len(), len);
 
         let num_simd = len.min(3);
-        let masks = TeddyMasks::build(byte_sets_raw, num_simd);
+        let mut simd_offsets = [0usize; 3];
+        let mut masks = TeddyMasks {
+            lo: [[0u8; 32]; 3],
+            hi: [[0u8; 32]; 3],
+        };
+        for i in 0..num_simd {
+            let pos = freq_order[i];
+            simd_offsets[i] = pos;
+            let mut lo = [0u8; 16];
+            let mut hi = [0u8; 16];
+            for &b in &byte_sets_raw[pos] {
+                lo[(b & 0xF) as usize] |= 0x80;
+                hi[(b >> 4) as usize] |= 0x80;
+            }
+            masks.lo[i][..16].copy_from_slice(&lo);
+            masks.lo[i][16..].copy_from_slice(&lo);
+            masks.hi[i][..16].copy_from_slice(&hi);
+            masks.hi[i][16..].copy_from_slice(&hi);
+        }
 
         // build verify order: non-SIMD positions first (rarest first),
         // then SIMD positions last (already pre-filtered by SIMD)
+        let is_simd = |pos: usize| simd_offsets[..num_simd].contains(&pos);
         let mut verify_order = [0u8; 16];
         let mut vi = 0;
-        // non-SIMD positions in frequency order (rarest first)
         for &pos in freq_order {
-            if pos >= num_simd && pos < len {
+            if pos < len && !is_simd(pos) {
                 verify_order[vi] = pos as u8;
                 vi += 1;
             }
         }
-        // SIMD positions last (in frequency order)
         for &pos in freq_order {
-            if pos < num_simd {
+            if pos < len && is_simd(pos) {
                 verify_order[vi] = pos as u8;
                 vi += 1;
             }
@@ -960,6 +980,7 @@ impl FwdPrefixSearch {
         Self {
             len,
             num_simd,
+            simd_offsets,
             masks,
             sets: all_sets,
             verify_order,
@@ -1011,8 +1032,9 @@ impl FwdPrefixSearch {
 
         if N == 3 {
             while pos + 32 < simd_end {
-                let mask_a = teddy_filter_fwd::<N>(ptr, pos, &self.masks, nib);
-                let mask_b = teddy_filter_fwd::<N>(ptr, pos + 32, &self.masks, nib);
+                let mask_a = teddy_filter_fwd::<N>(ptr, pos, &self.simd_offsets, &self.masks, nib);
+                let mask_b =
+                    teddy_filter_fwd::<N>(ptr, pos + 32, &self.simd_offsets, &self.masks, nib);
                 if mask_a != 0 {
                     if let Some(m) = Self::verify_inline(ptr, pos, mask_a, sets_ptr, len, vo) {
                         return Some(m);
@@ -1028,7 +1050,7 @@ impl FwdPrefixSearch {
         }
 
         while pos < simd_end {
-            let mask = teddy_filter_fwd::<N>(ptr, pos, &self.masks, nib);
+            let mask = teddy_filter_fwd::<N>(ptr, pos, &self.simd_offsets, &self.masks, nib);
             if mask != 0 {
                 if let Some(m) = Self::verify_inline(ptr, pos, mask, sets_ptr, len, vo) {
                     return Some(m);

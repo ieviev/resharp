@@ -557,23 +557,6 @@ impl RevTeddySearch {
         }
     }
 
-    #[cfg(feature = "convergence_prefix")]
-    pub fn add_tail_offset(mut self, extra: u32) -> Self {
-        match &mut self.inner {
-            RevSearchInner::Teddy(t) => t.tail_offset += extra as usize,
-            RevSearchInner::Literal(l) => l.tail_offset += extra as usize,
-        }
-        self
-    }
-
-    #[cfg(feature = "convergence_prefix")]
-    pub fn len(&self) -> usize {
-        match &self.inner {
-            RevSearchInner::Teddy(t) => t.len,
-            RevSearchInner::Literal(l) => l.len(),
-        }
-    }
-
     pub fn find_rev(&self, haystack: &[u8], end: usize) -> Option<usize> {
         match &self.inner {
             RevSearchInner::Teddy(t) => {

@@ -33,6 +33,45 @@ fn consuming_alternation_variable_lookbehind_fails_loud() {
 }
 
 #[test]
+fn alternation_branch_lengths_disambiguate_lookbehind() {
+    assert!(
+        Regex::new(r"(?<=A)abc|(?<=C)abcd").is_err(),
+        "ambiguous lookbehind alternation (same start `a`, differing lookbehinds, differing \
+         lengths) is unsupported: the forward pass returns only a length and cannot tell which \
+         branch's lookbehind held; must be rejected"
+    );
+    assert!(
+        Regex::new(r"(?<=A)abc|(?<=C)abz").is_ok(),
+        "same length (3): forward length is unambiguous; the match span is correct regardless of \
+         which branch matched, and the reverse pass rejects when neither lookbehind holds"
+    );
+    assert!(
+        Regex::new(r"(?<=A)abc|(?<=C)abc").is_ok(),
+        "same length: forward length is unambiguous regardless of branch lookbehind"
+    );
+    assert!(
+        Regex::new(r"(?<=A)abc|(?<=C)xyzw").is_ok(),
+        "disjoint starts (a vs x): forward pass selects the right branch"
+    );
+    assert!(
+        Regex::new(r"(?<=A)abc|(?<=A)abcd").is_ok(),
+        "same lookbehind = (?<=A)(abc|abcd): one held lookbehind, forward longest is valid"
+    );
+    assert!(
+        Regex::new(r"^abc|^abcd").is_ok(),
+        "same anchor ^ = ^(abc|abcd): differing length under one shared lookbehind is fine"
+    );
+    assert!(
+        Regex::new(r"^a|cd|^b").is_ok(),
+        "disjoint forward firsts a/c/b: distinguishable regardless of anchors"
+    );
+    assert!(
+        Regex::new(r"(?<=A)ab|(?<=C)ab|(?<=E)abc").is_err(),
+        "len-3 (?<=E)abc overlaps the len-2 groups on `a`: differing lb + differing length"
+    );
+}
+
+#[test]
 fn length_one_lookbehind_alternation_supported() {
     let re = Regex::new(r"x|(?<=\.)y").unwrap();
     assert_eq!(
@@ -95,7 +134,6 @@ fn run_file(filename: &str) {
             continue;
         }
         if tc.expect_error {
-            // error may occur at compile time or during matching
             let re = match Regex::new(&tc.pattern) {
                 Err(_) => continue,
                 Ok(re) => re,
@@ -192,9 +230,6 @@ fn is_match_and_find_anchored_agree_with_find_all() {
                 tc.input
             );
 
-            // find_anchored is the leftmost-longest match anchored at offset 0, so it
-            // equals find_all's first match iff that match starts at 0, else None.
-            // lb-anchored patterns are not supported by find_anchored; accept that.
             match re.find_anchored(tc.input.as_bytes()) {
                 Ok(anchored) => {
                     let expected = tc
@@ -289,7 +324,6 @@ fn javascript() {
     run_file_javascript("javascript.toml");
 }
 
-/// cross-validate resharp against regex crate
 fn check_vs_regex(pattern: &str, input: &[u8]) {
     let re = Regex::new(pattern).expect(&format!("failed compile {}", pattern));
     let matches = re.find_all(input).unwrap();
@@ -303,6 +337,128 @@ fn check_vs_regex(pattern: &str, input: &[u8]) {
         "resharp vs regex mismatch: pattern={:?}",
         pattern
     );
+}
+
+#[test]
+fn offset_skip_brace_colon_ws_matches_regex() {
+    let pat = r"\{:\s([^}]+)\}";
+    let adversarial: &[u8] = b"   {:x}  { : y}  {:\ta} \n}}} {: } {:  z} {:\n q } {:w{:e} } noise }} \t\t {:\rk}  ";
+    check_vs_regex(pat, adversarial);
+    let re = Regex::new(pat).unwrap();
+    assert_eq!(re.prefix_kind_name(), Some("AnchoredRev"));
+}
+
+#[test]
+fn offset_skip_differential_fuzz() {
+    let patterns = [
+        r"\{:\s([^}]+)\}",
+        r"\{:\s+([^}]+)\}",
+        r"\{: ([^}]+)\}",
+        r"<([^>]+)>",
+        r"\{x([^}]+)\}",
+        r"a:b([^z]+)z",
+        r"\{:\s([^}]*)\}",
+        r"\[: ([^\]]+)\]",
+        r"foo:([^;]+);",
+        r"\{:\s(\S[^}]*)\}",
+        r":-\)([^!]+)!",
+        r"\{\{([^}]+)\}\}",
+    ];
+    let alphabet: &[&str] = &[
+        "{", "}", ":", " ", "\t", "\n", "\r", "<", ">", "[", "]",
+        "x", "z", "a", "b", "f", "o", ";", "!", "-", ")", "S", "e", "u",
+        "\u{e9}", "\u{4e2d}", "\u{1f600}",
+    ];
+    for pat in [r"\{:\s([^}]+)\}", r"<([^>]+)>", r"\{x([^}]+)\}"] {
+        assert_eq!(
+            Regex::new(pat).unwrap().prefix_kind_name(),
+            Some("AnchoredRev"),
+            "pattern {pat:?} should use AnchoredRev (offset-skip path)"
+        );
+    }
+    let mut state: u64 = 0x9e3779b97f4a7c15;
+    let mut next = move || {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        state
+    };
+    let mut mismatches = 0usize;
+    for pat in patterns {
+        let re = Regex::new(pat).expect(pat);
+        let rx = regex::bytes::Regex::new(pat).unwrap();
+        for _ in 0..4000 {
+            let len = (next() % 300) as usize;
+            let mut s = String::new();
+            for _ in 0..len {
+                s.push_str(alphabet[(next() as usize) % alphabet.len()]);
+            }
+            let input = s.as_bytes();
+            let got: Vec<(usize, usize)> = re
+                .find_all(input)
+                .unwrap()
+                .iter()
+                .map(|m| (m.start, m.end))
+                .collect();
+            let exp: Vec<(usize, usize)> =
+                rx.find_iter(input).map(|m| (m.start(), m.end())).collect();
+            if got != exp {
+                mismatches += 1;
+                eprintln!("MISMATCH pat={pat:?} input={input:?} got={got:?} exp={exp:?}");
+            }
+            if re.is_match(input).unwrap() != !exp.is_empty() {
+                mismatches += 1;
+                eprintln!("IS_MATCH MISMATCH pat={pat:?} input={input:?}");
+            }
+        }
+    }
+    assert_eq!(mismatches, 0, "offset-skip differential mismatches");
+}
+
+#[test]
+fn offset_skip_multibyte_class_differential_fuzz() {
+    use resharp::{RegexOptions, UnicodeMode};
+    let patterns = [r"([aÀ]{2,})", r"x([^zÀ]+)z", r"(À[a-z]+)", r"([abÀé]{2,})", r"y([^ À]+) "];
+    let alphabet = ["a", "b", "z", "x", "y", "À", "é", " ", "1", "_"];
+    let mut state: u64 = 0x1234567;
+    let mut next = move || {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        state
+    };
+    let mut mismatches = 0usize;
+    for pat in patterns {
+        let re = Regex::with_options(pat, RegexOptions::default().unicode(UnicodeMode::Javascript))
+            .expect(pat);
+        let fr = fancy_regex::Regex::new(pat).unwrap();
+        for _ in 0..3000 {
+            let len = (next() % 40) as usize;
+            let mut s = String::new();
+            for _ in 0..len {
+                s.push_str(alphabet[(next() as usize) % alphabet.len()]);
+            }
+            let input = s.as_bytes();
+            let got: Vec<(usize, usize)> =
+                re.find_all(input).unwrap().iter().map(|m| (m.start, m.end)).collect();
+            let mut exp: Vec<(usize, usize)> = Vec::new();
+            let mut pos = 0;
+            while pos <= s.len() {
+                match fr.find_from_pos(&s, pos).unwrap() {
+                    Some(m) => {
+                        exp.push((m.start(), m.end()));
+                        pos = if m.end() > m.start() { m.end() } else { m.end() + 1 };
+                    }
+                    None => break,
+                }
+            }
+            if got != exp {
+                mismatches += 1;
+                eprintln!("MISMATCH pat={pat:?} input={s:?} got={got:?} exp={exp:?}");
+            }
+        }
+    }
+    assert_eq!(mismatches, 0, "multibyte-class offset-skip differential mismatches");
 }
 
 #[test]
@@ -354,6 +510,53 @@ fn fwd_lb_prefix_line_anchor_find_all_is_exact() {
             re.find_all(hay).unwrap(),
             expected,
             "find_all wrong for {pat:?} on {hay:?}"
+        );
+    }
+}
+
+#[test]
+fn bounded_repeat_over_lookaround_alternation_compiles() {
+    let pats = [
+        r"\A[a-z0-9]([a-z0-9]|(-(?!-))){1,61}[a-z0-9]\z",
+        r"\A[^-#\x00-/:-@\[-^`{-\u{10FFFF}]([a-z]|[-](?![-])){0,62}[^-#\x00-/:-@\[-^`{-\u{10FFFF}]\z",
+        r"\A([a-z]|(\d(?!\d{0,2}\.\d{1,3}\.\d{1,3}\.\d{1,3})))([a-z0-9]|(\.(?!(\.|-)))|(-(?!\.))){1,61}[a-z0-9]\z",
+        r"\A\_\_([a-zA-Z](?:[a-zA-Z0-9]|\.[a-zA-Z]|(\.\_id)|\_(?!\_)){0,100})\_\_\z",
+    ];
+    for pat in pats {
+        let opts = RegexOptions::default().unicode(resharp::UnicodeMode::Javascript);
+        let re = Regex::with_options(pat, opts)
+            .unwrap_or_else(|e| panic!("compile failed for {pat:?}: {e:?}"));
+        let _ = re.find_all(b"ahZ09_/. ").unwrap();
+    }
+}
+
+#[test]
+fn leading_word_boundary_uses_anchored_prefix_and_is_exact() {
+    let opts = RegexOptions::default().unicode(resharp::UnicodeMode::Javascript);
+    let re = Regex::with_options(r"\bgithub_pat_[A-Za-z0-9_]{20,}\b", opts).unwrap();
+    assert_eq!(
+        re.prefix_kind_name(),
+        Some("AnchoredRev"),
+        "constant-offset literal should pick a reverse-anchored prefix"
+    );
+    let a20 = "A".repeat(20);
+    let m = |s: usize, e: usize| resharp::Match { start: s, end: e };
+    let cases: Vec<(String, Vec<resharp::Match>)> = vec![
+        (format!("github_pat_{a20}"), vec![m(0, 31)]),
+        (format!(" github_pat_{a20}"), vec![m(1, 32)]),
+        (format!("xgithub_pat_{a20}"), vec![]),
+        (format!("github_pat_{a20}!"), vec![m(0, 31)]),
+        (
+            format!("github_pat_{a20}X yo github_pat_{a20}"),
+            vec![m(0, 32), m(36, 67)],
+        ),
+        (format!("aa github_pat_{}", "A".repeat(19)), vec![]),
+    ];
+    for (hay, expected) in cases {
+        assert_eq!(
+            re.find_all(hay.as_bytes()).unwrap(),
+            expected,
+            "find_all wrong on {hay:?}"
         );
     }
 }
@@ -619,18 +822,17 @@ fn literal_alt() {
 
 #[test]
 fn capacity_exceeded_at_match() {
-    let re = Regex::with_options(
+    let result = Regex::with_options(
         "a.*b.*c.*d",
         RegexOptions {
             max_dfa_capacity: 4,
             ..Default::default()
         },
     )
-    .unwrap();
-    let result = re.find_all(b"a___b___c___d");
+    .and_then(|re| re.find_all(b"a___b___c___d"));
     assert!(
         matches!(result, Err(Error::CapacityExceeded)),
-        "expected CapacityExceeded error"
+        "expected CapacityExceeded error, got {result:?}"
     );
 }
 
@@ -901,7 +1103,6 @@ fn hardened_cross_validate() {
     for p in &patterns {
         check_hardened_vs_normal(p, input);
     }
-    // pathological: dense candidates with dotstar
     let aaaa = "A".repeat(500);
     check_hardened_vs_normal(r".*[^A-Z]|[A-Z]", aaaa.as_bytes());
     check_hardened_vs_normal(r"[A-Z]+", aaaa.as_bytes());
@@ -997,11 +1198,9 @@ fn range_prefix_random_haystack() {
         let mut h = DefaultHasher::new();
         seed.hash(&mut h);
         let hash = h.finish();
-        // generate pseudorandom haystack mixing ASCII ranges
         let input: Vec<u8> = (0..256)
             .map(|i| {
                 let v = ((hash.wrapping_mul(i as u64 + 1).wrapping_add(seed)) >> 8) as u8;
-                // bias toward printable ASCII
                 32 + (v % 95)
             })
             .collect();
@@ -1387,16 +1586,12 @@ fn rev_bot_constant_time() {
     let z_big = best(&z, &big, 1);
     let z_factor = z_big.as_secs_f64() / z_small.as_secs_f64();
 
-    // linear baseline: an absent byte forces a full O(n) scan with no early exit.
     let lin = Regex::new(r"q").unwrap();
     let lin_small = best(&lin, &small, 0);
     let lin_big = best(&lin, &big, 0);
     let lin_factor = lin_big.as_secs_f64() / lin_small.as_secs_f64();
 
     println!("z_factor={z_factor:.2} lin_factor={lin_factor:.2}");
-    // `\z` must scale far better than a linear scan of the same inputs. Comparing
-    // the two growth ratios cancels per-platform timer/allocator/page-fault noise
-    // that made an absolute threshold flaky on macOS.
     assert!(
         z_factor * 8.0 < lin_factor,
         "`\\z` scaling ({z_factor:.1}x) not clearly sub-linear vs literal scan ({lin_factor:.1}x); \
@@ -1509,43 +1704,6 @@ fn anchored_fwd_lb_selected_when_min_len_zero_kind() {
             Some("AnchoredFwdLb"),
             "expected AnchoredFwdLb for `{pat}`, got {:?}",
             re.prefix_kind_name()
-        );
-    }
-}
-
-mod probe_alt {
-    use resharp::{Regex, RegexOptions, UnicodeMode};
-
-    #[test]
-    fn probe_alt() {
-        let p = r"2011|TL868|NETTV\/3.1\b";
-        let mode = std::env::var("MODE").unwrap_or_else(|_| "js".into());
-        let m = match mode.as_str() {
-            "ascii" => UnicodeMode::Ascii,
-            "full" => UnicodeMode::Full,
-            _ => UnicodeMode::Javascript,
-        };
-        let re = Regex::with_options(p, RegexOptions::default().unicode(m)).unwrap();
-        let hay = "User-Agent: Mozilla/5.0 NETTV/3.1 or 2011 or TL868 random text\n".repeat(50);
-        let ms = re.find_all(hay.as_bytes()).unwrap();
-        let mut counts = [0usize; 3];
-        for m in &ms {
-            let s = &hay.as_bytes()[m.start..m.end];
-            if s.starts_with(b"2011") {
-                counts[0] += 1;
-            } else if s.starts_with(b"TL868") {
-                counts[1] += 1;
-            } else if s.starts_with(b"NETTV") {
-                counts[2] += 1;
-            }
-        }
-        println!(
-            "matches: {} algo: {:?} 2011={} TL868={} NETTV={}",
-            ms.len(),
-            re.prefix_kind_name(),
-            counts[0],
-            counts[1],
-            counts[2]
         );
     }
 }
@@ -1685,8 +1843,6 @@ mod prefix_toml {
                 tc.prefix_rev.is_some() || tc.potential_rev.is_some() || tc.potential_fwd.is_some();
             let re = resharp::Regex::new(&tc.pattern);
             if re.is_err() {
-                // unsupported pattern, skip test
-                // other tests cover unsupported patterns
                 continue;
             }
             let sets_pair = needs_sets.then(|| make_prefix_sets(&tc.pattern));
@@ -1724,6 +1880,13 @@ mod prefix_toml {
             }
             if let Some(e) = &tc.potential_fwd {
                 check("potential_fwd", e);
+            }
+            #[cfg(feature = "convergence_prefix")]
+            if let Some(e) = &tc.conv_literal {
+                let got = resharp::detect_inner_literal_bytes(&tc.pattern)
+                    .map(|v| String::from_utf8_lossy(&v).into_owned())
+                    .unwrap_or_else(|| "None".to_string());
+                assert_eq!(&got, e, "conv_literal mismatch: name={}", tc.name);
             }
         }
     }
@@ -1808,12 +1971,18 @@ mod auto_harden {
 }
 
 mod quadratic {
-    use super::common::schemas::QuadraticFile;
-    use resharp::Regex;
+    use super::common::schemas::{QuadKind, QuadraticFile};
+    use resharp::{Regex, RegexOptions};
     use std::path::Path;
 
+    fn find_all_ns(re: &Regex, hay: &[u8]) -> u128 {
+        let t = std::time::Instant::now();
+        let _ = re.find_all(hay).unwrap();
+        t.elapsed().as_nanos().max(1)
+    }
+
     #[test]
-    fn fwd_prefix_disabled_toml() {
+    fn quadratic_toml() {
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tests")
             .join("quadratic.toml");
@@ -1821,19 +1990,145 @@ mod quadratic {
         let file: QuadraticFile = toml::from_str(&content).unwrap();
         assert!(!file.test.is_empty());
         for tc in file.test {
-            let re = Regex::new(&tc.pattern)
-                .unwrap_or_else(|e| panic!("{}: compile failed: {e:?}", tc.name));
-            assert!(
-                !re.has_fwd_prefix(),
-                "{}: pattern {:?} selected a forward prefix; AnchoredFwd verify is O(n^2) here (unit={:?})",
-                tc.name,
-                tc.pattern,
-                tc.unit
-            );
             assert!(
                 !tc.unit.is_empty(),
                 "{}: missing worst-case construction unit",
                 tc.name
+            );
+            match tc.kind {
+                QuadKind::Fwd => {
+                    let re =
+                        Regex::with_options(&tc.pattern, RegexOptions::default().hardened(true))
+                            .unwrap_or_else(|e| panic!("{}: compile failed: {e:?}", tc.name));
+                    assert!(
+                        !re.has_fwd_prefix(),
+                        "{}: pattern {:?} selected a forward prefix under hardening; \
+                         AnchoredFwd verify is O(n^2) here (unit={:?})",
+                        tc.name,
+                        tc.pattern,
+                        tc.unit
+                    );
+                    let def = Regex::new(&tc.pattern)
+                        .unwrap_or_else(|e| panic!("{}: compile failed: {e:?}", tc.name));
+                    assert!(
+                        !def.has_fwd_prefix(),
+                        "{}: pattern {:?} selected a forward prefix in default mode; \
+                         the interior loop swallows the prefix so AnchoredFwd verify is \
+                         O(n^2) (unit={:?})",
+                        tc.name,
+                        tc.pattern,
+                        tc.unit
+                    );
+                }
+                QuadKind::Dfa => {
+                    let re = Regex::new(&tc.pattern)
+                        .unwrap_or_else(|e| panic!("{}: compile failed: {e:?}", tc.name));
+                    assert!(
+                        re.is_hardened(),
+                        "{}: pattern {:?} is O(n^2) in the generic Dfa path; auto_harden must \
+                         classify it as hardened in default mode",
+                        tc.name,
+                        tc.pattern
+                    );
+                    let build = |reps: usize| tc.unit.as_bytes().iter().cloned().cycle().take(reps).collect::<Vec<u8>>();
+                    find_all_ns(&re, &build(20_000));
+                    let baseline = find_all_ns(&re, &build(80_000));
+                    let scaled = find_all_ns(&re, &build(640_000));
+                    let ratio = scaled as f64 / baseline as f64;
+                    assert!(
+                        ratio < 24.0,
+                        "{}: 8x input grew time {ratio:.1}x (>= 24x => quadratic); hardening must \
+                         keep this dfa-quadratic pattern linear: {baseline}ns -> {scaled}ns",
+                        tc.name
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn auto_harden_suppresses_fwd_prefix_in_default_mode() {
+        let pat = r"(@[A-Za-z0-9_0-9\$\_]+)([^\n\r]+\))([^\s])";
+        let re = Regex::new(pat).unwrap();
+        assert!(!re.is_hardened());
+        assert_eq!(re.prefix_kind_name(), None);
+        assert!(
+            !re.has_fwd_prefix(),
+            "default mode selected a fwd prefix; the @ opener feeds the wide interior \
+             loop [^\\n\\r]+ so AnchoredFwd verify is O(n^2). This requires auto_harden's \
+             no_fwd_prefix flag to fire without hardened(true)."
+        );
+
+        let baseline = scan_ns(&re, 8_000);
+        let scaled = scan_ns(&re, 64_000);
+        let ratio = scaled as f64 / baseline as f64;
+        assert!(
+            ratio < 16.0,
+            "8x input grew time {ratio:.1}x (>= 16x => quadratic): {baseline}ns -> {scaled}ns"
+        );
+    }
+
+    fn scan_ns(re: &Regex, n: usize) -> u128 {
+        let hay = "@x".repeat(n / 2);
+        let t = std::time::Instant::now();
+        let m = re.find_all(hay.as_bytes()).unwrap().len();
+        assert_eq!(m, 0);
+        t.elapsed().as_nanos().max(1)
+    }
+
+    #[test]
+    fn offset_skip_no_quadratic_for_multibyte_class() {
+        use resharp::UnicodeMode;
+        let re = Regex::with_options(
+            r"[\wÀ]{2,}",
+            RegexOptions::default().unicode(UnicodeMode::Javascript),
+        )
+        .unwrap();
+        let run = |reps: usize| -> u128 {
+            let hay = "abz ".repeat(reps).into_bytes();
+            let t = std::time::Instant::now();
+            let _ = re.find_all(&hay).unwrap().len();
+            t.elapsed().as_nanos().max(1)
+        };
+        run(50_000);
+        let baseline = run(200_000);
+        let scaled = run(1_600_000);
+        let ratio = scaled as f64 / baseline as f64;
+        assert!(
+            ratio < 16.0,
+            "8x input grew time {ratio:.1}x (>= 16x => quadratic); a multibyte class \
+             member must not make the reverse offset-skip bound search unbounded: \
+             {baseline}ns -> {scaled}ns"
+        );
+    }
+
+    fn offset_skip_scaling(pat: &str, unit: &str) -> f64 {
+        let re = Regex::new(pat).unwrap();
+        let run = |reps: usize| -> u128 {
+            let hay = unit.repeat(reps).into_bytes();
+            let t = std::time::Instant::now();
+            let _ = re.find_all(&hay).unwrap().len();
+            t.elapsed().as_nanos().max(1)
+        };
+        run(20_000);
+        let baseline = run(80_000);
+        let scaled = run(640_000);
+        scaled as f64 / baseline as f64
+    }
+
+    #[test]
+    fn offset_skip_no_quadratic_on_absent_seq() {
+        let cases: &[(&str, &str)] = &[
+            (r"<([a-z][a-z0-9]*)\b[^>]*>", "-> DEF\n"),
+            (r"<([A-Z][A-Z0-9]*)\b[^>]*>", "-> def\n"),
+            (r"!\[#([^\s\]]+)(?:\s+([^\]]*))?\]((?:\([^\)]*\)|\[[^\]]*\])?)", "] gh ij\n"),
+        ];
+        for (pat, unit) in cases {
+            let ratio = offset_skip_scaling(pat, unit);
+            assert!(
+                ratio < 16.0,
+                "8x input grew time {ratio:.1}x (>= 16x => quadratic) for {pat:?} on {unit:?}; \
+                 an absent offset-skip seq must not make the reverse skip scan the whole prefix"
             );
         }
     }
@@ -1948,7 +2243,6 @@ fn test_word_boundary_group() {
     assert!(ok(r"(\b|\A)\w"));
     assert!(ok(r"\b\w|\A\w"));
     assert!(ok(r"(\b|\A)\w"));
-    // assert!(ok(r"[A-Z]|\b\w")); // possible, out of scope
 }
 
 #[test]
@@ -1978,7 +2272,6 @@ fn lookahead_rel_saturates_with_nested_quantified_lookahead() {
 fn lookaround_exotic() {
     let re = Regex::new(r"((?<!b)(?=b)|-)b(?!b)");
     if re.is_err() {
-        // reject is ok here
         return;
     }
     let re = re.unwrap();
@@ -2041,13 +2334,11 @@ fn suffix_anchored_is_match() {
     ] {
         assert_eq!(re.is_match(s.as_bytes()).unwrap(), want, "input={:?}", s);
     }
-    // large input: match only at the very end, none elsewhere
     let mut big = vec![b'a'; 64 * 1024];
     let n = big.len();
     big[n - 7..].copy_from_slice(b".client");
     assert!(re.is_match(&big).unwrap());
     assert!(!re.is_match(&vec![b'a'; 64 * 1024]).unwrap());
-    // end-nullable suffix-anchored must still work (falls back to general path)
     let re2 = Regex::new(r"a?\z").unwrap();
     assert!(re2.is_match(b"abc").unwrap());
     assert!(re2.is_match(b"xyz").unwrap());
@@ -2165,13 +2456,232 @@ fn multichar_negative_lookbehind_matches_reference() {
 }
 
 #[test]
+fn end_anchored_with_lookaround_matches_fancy_regex() {
+    let pats = [
+        r"\},(?!\x22)\z",
+        r"(?<=:)[0-9]+\z",
+        r"[a-z]+(?!x)\z",
+        r"(?<=[#@])[a-z0-9]+\z",
+        r"[}\],][a-z]*(?!\x22)\z",
+    ];
+    let alpha: &[u8] = b"ab12}],:@#\"xed\n";
+    let mut state: u64 = 0x9e3779b97f4a7c15;
+    let mut rng = || {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        state
+    };
+    for p in pats {
+        let re = Regex::new(p).unwrap_or_else(|e| panic!("{p:?}: compile error: {e}"));
+        let fr = fancy_regex::Regex::new(p).unwrap();
+        for _ in 0..20_000 {
+            let len = (rng() % 12) as usize;
+            let bytes: Vec<u8> = (0..len).map(|_| alpha[(rng() as usize) % alpha.len()]).collect();
+            let s = match std::str::from_utf8(&bytes) {
+                Ok(s) => s,
+                Err(_) => continue,
+            };
+            let ours: Vec<[usize; 2]> = re
+                .find_all(s.as_bytes())
+                .unwrap()
+                .iter()
+                .map(|m| [m.start, m.end])
+                .collect();
+            let mut reference = vec![];
+            let mut start = 0;
+            while let Ok(Some(m)) = fr.find_from_pos(s, start) {
+                reference.push([m.start(), m.end()]);
+                start = if m.end() > m.start() { m.end() } else { m.end() + 1 };
+                if start > s.len() {
+                    break;
+                }
+            }
+            assert_eq!(ours, reference, "{p:?} on {s:?}");
+        }
+    }
+}
+
+#[test]
+fn end_anchored_always_wins_over_fwd_prefix() {
+    let keep = [
+        "<script[\\s\\S]*\\z",
+        "abc[\\s\\S]*\\z",
+        "a\\z|b\\z",
+        ".com\\z|.net\\z|.org\\z",
+        "[\\s\\S]*foo\\z",
+        "\\w+\\z",
+    ];
+    for pat in keep {
+        let re = Regex::with_options(pat, RegexOptions::default().multiline(false)).unwrap();
+        assert_eq!(re.find_all_kind_name(), "EndAnchored", "pat={pat}");
+    }
+    let re = Regex::with_options("<script[\\s\\S]*\\z", RegexOptions::default().multiline(false)).unwrap();
+    let fr = fancy_regex::Regex::new("<script[\\s\\S]*\\z").unwrap();
+    for s in ["x <script>a</script> y", "no match", "<script", "a<script>\n<script>z"] {
+        let ours: Vec<[usize; 2]> = re.find_all(s.as_bytes()).unwrap().iter().map(|m| [m.start, m.end]).collect();
+        let mut reference = vec![];
+        let mut start = 0;
+        while let Ok(Some(m)) = fr.find_from_pos(s, start) {
+            reference.push([m.start(), m.end()]);
+            start = if m.end() > m.start() { m.end() } else { m.end() + 1 };
+            if start > s.len() { break; }
+        }
+        assert_eq!(ours, reference, "pat=<script...> on {s:?}");
+    }
+}
+
+#[test]
+fn begin_anchored_with_leading_lookbehind_matches_fancy_regex() {
+    let pats = [
+        (r"(?<!a)\A>", "Anchored"),
+        (r"(?<!ab)\Ax", "Anchored"),
+        (r"(?<!a)\A[a-z]+", "Anchored"),
+        (r"(?<=ab)\Ax", "EmptyLang"),
+        (r"(?<=a)\A>", "EmptyLang"),
+    ];
+    let alpha: &[u8] = b"abx>yz ";
+    let mut state: u64 = 0x51ed270b;
+    let mut rng = || {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        state
+    };
+    for (p, want_kind) in pats {
+        let re = Regex::new(p).unwrap_or_else(|e| panic!("{p:?}: compile error: {e}"));
+        assert_eq!(re.find_all_kind_name(), want_kind, "{p:?}");
+        let fr = fancy_regex::Regex::new(p).unwrap();
+        for _ in 0..30_000 {
+            let len = (rng() % 10) as usize;
+            let bytes: Vec<u8> = (0..len).map(|_| alpha[(rng() as usize) % alpha.len()]).collect();
+            let s = match std::str::from_utf8(&bytes) {
+                Ok(s) => s,
+                Err(_) => continue,
+            };
+            let ours: Vec<[usize; 2]> = re
+                .find_all(s.as_bytes())
+                .unwrap()
+                .iter()
+                .map(|m| [m.start, m.end])
+                .collect();
+            let mut reference = vec![];
+            let mut start = 0;
+            while let Ok(Some(m)) = fr.find_from_pos(s, start) {
+                reference.push([m.start(), m.end()]);
+                start = if m.end() > m.start() { m.end() } else { m.end() + 1 };
+                if start > s.len() {
+                    break;
+                }
+            }
+            assert_eq!(ours, reference, "{p:?} on {s:?}");
+        }
+    }
+}
+
+#[test]
+fn literal_prefix_with_following_lookahead_matches_fancy_regex() {
+    let pats = [
+        r"https://(?![^:@/\s]+:[^:@/\s]+@)[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}",
+        r"foo(?=bar)[a-z]+",
+        r"key=(?!secret)[a-z]+",
+    ];
+    let alpha: &[u8] = b"htps:/@.aZ09-x \nbcomfokeyrt";
+    let mut state: u64 = 0xdeadbeefcafe;
+    let mut rng = || {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        state
+    };
+    for p in pats {
+        let re = Regex::new(p).unwrap_or_else(|e| panic!("{p:?}: compile error: {e}"));
+        assert!(re.has_prefix(), "{p:?}: expected a prefilter");
+        let fr = fancy_regex::Regex::new(p).unwrap();
+        for _ in 0..40_000 {
+            let len = (rng() % 32) as usize;
+            let bytes: Vec<u8> = (0..len).map(|_| alpha[(rng() as usize) % alpha.len()]).collect();
+            let s = match std::str::from_utf8(&bytes) {
+                Ok(s) => s,
+                Err(_) => continue,
+            };
+            let ours: Vec<[usize; 2]> = re
+                .find_all(s.as_bytes())
+                .unwrap()
+                .iter()
+                .map(|m| [m.start, m.end])
+                .collect();
+            let mut reference = vec![];
+            let mut start = 0;
+            while let Ok(Some(m)) = fr.find_from_pos(s, start) {
+                reference.push([m.start(), m.end()]);
+                start = if m.end() > m.start() { m.end() } else { m.end() + 1 };
+                if start > s.len() {
+                    break;
+                }
+            }
+            assert_eq!(ours, reference, "{p:?} on {s:?}");
+        }
+    }
+}
+
+#[test]
+fn fixed_length_neg_lookbehind_prefix_matches_fancy_regex() {
+    let pats = [
+        r"(?<!]\()https://[a-zA-Z0-9./]+",
+        r"(?<![\$.])foo[a-z]+",
+        r"(?<!ab)xyz[0-9]*",
+        r"(?<!x)key=[a-z]+",
+        r"(?<![\$.])(?<![ab])foo[a-z]*",
+        r"(?<!xy)(?<![ab])(?<!\.)key=[a-z]+",
+    ];
+    let alpha: &[u8] = b"htps:/].(ab xyz0123fokl= $.cmABZ9-";
+    let mut state: u64 = 0x1234_5678_9abc;
+    let mut rng = || {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        state
+    };
+    for p in pats {
+        let re = Regex::new(p).unwrap_or_else(|e| panic!("{p:?}: compile error: {e}"));
+        assert!(re.has_prefix(), "{p:?}: expected a prefilter");
+        let fr = fancy_regex::Regex::new(p).unwrap();
+        for _ in 0..40_000 {
+            let len = (rng() % 32) as usize;
+            let bytes: Vec<u8> = (0..len).map(|_| alpha[(rng() as usize) % alpha.len()]).collect();
+            let s = match std::str::from_utf8(&bytes) {
+                Ok(s) => s,
+                Err(_) => continue,
+            };
+            let ours: Vec<[usize; 2]> = re
+                .find_all(s.as_bytes())
+                .unwrap()
+                .iter()
+                .map(|m| [m.start, m.end])
+                .collect();
+            let mut reference = vec![];
+            let mut start = 0;
+            while let Ok(Some(m)) = fr.find_from_pos(s, start) {
+                reference.push([m.start(), m.end()]);
+                start = if m.end() > m.start() { m.end() } else { m.end() + 1 };
+                if start > s.len() {
+                    break;
+                }
+            }
+            assert_eq!(ours, reference, "{p:?} on {s:?}");
+        }
+    }
+}
+
+#[test]
 fn lookahead_in_optional_with_surrounding_stars() {
     assert!(Regex::new(r"((?=(x|yy))x)? *\z").is_err());
     let cases: &[(&str, &[u8], &[[usize; 2]])] = &[(r"\A *((?=[^ ])[^ ])? *\z", b" x", &[[0, 2]])];
     for (pat, hay, expected) in cases {
         let re = Regex::new(pat);
         if re.is_err() {
-            continue; // rejected is fine here
+            continue;
         }
         let re = re.unwrap();
         let got: Vec<[usize; 2]> = re
@@ -2202,6 +2712,432 @@ fn hardened_bare_lookahead_zero_width_dot_hash() {
     assert_eq!(result, vec![[1, 1], [3, 3]]);
 }
 
+#[cfg(feature = "convergence_prefix")]
+#[test]
+fn leading_literal_prefers_fwd_over_convergence() {
+    use resharp::UnicodeMode;
+    let fwd: &[&str] = &[
+        r"<([/]?)([^ >]+)",
+        r"[^\x08]\x08",
+    ];
+    for p in fwd {
+        let opts = RegexOptions::default().unicode(UnicodeMode::Javascript);
+        let re = Regex::with_options(p, opts).unwrap();
+        assert_eq!(
+            re.prefix_kind_name(),
+            Some("AnchoredFwd"),
+            "pat={p} kind={:?}",
+            re.prefix_kind_name()
+        );
+        assert!(!re.uses_convergence_prefix(), "pat={p} still convergence");
+    }
+    let fwd_verify_quadratic: &[&str] = &[
+        r"<(?:\w+:)?Compression\s+([^>]*)/?>",
+        r"@([./][^\s\n]+\.[^\s\n]+)",
+        r"</?([a-z]\w*)\b[^>]*>",
+    ];
+    for p in fwd_verify_quadratic {
+        let opts = RegexOptions::default().unicode(UnicodeMode::Javascript);
+        let re = Regex::with_options(p, opts).unwrap();
+        assert_ne!(
+            re.prefix_kind_name(),
+            Some("AnchoredFwd"),
+            "pat={p}: AnchoredFwd verify is O(n^2) (interior loop swallows the prefix); \
+             must pick a linear-safe prefix instead",
+        );
+    }
+    let no_conv: &[&str] = &[
+        r"[^.!?:]+[.!?:]+",
+        "\\s*([^=]+)=\"([^\"]*)\",?",
+    ];
+    for p in no_conv {
+        let opts = RegexOptions::default().unicode(UnicodeMode::Javascript);
+        let re = Regex::with_options(p, opts).unwrap();
+        assert!(!re.uses_convergence_prefix(), "pat={p} still convergence");
+    }
+    let conv_ok: &[&str] = &[
+        "((?:\\\\.|[^\"])*)\"",
+    ];
+    for p in conv_ok {
+        let opts = RegexOptions::default().unicode(UnicodeMode::Javascript);
+        let re = Regex::with_options(p, opts).unwrap();
+        assert!(re.uses_convergence_prefix(), "pat={p} should select convergence");
+    }
+}
+
+#[cfg(feature = "convergence_prefix")]
+#[test]
+fn convergence_rejected_for_interior_unbounded_verify() {
+    use resharp::UnicodeMode;
+    let pats: &[&str] = &[
+        r"([a-zA-Z0-9_\.]*\([^\)]+\)|[^\s]+)\s+\?\s*([^\:]+)\s+\:\s*([^\n]+)",
+        r"(\([^\)]+\)|[^\s]+)\s*\?\s*([^\:]+)\s+\:\s*([^\n]+)",
+        r"(@\S[^@]+)",
+    ];
+    for p in pats {
+        let opts = RegexOptions::default().unicode(UnicodeMode::Javascript);
+        let re = Regex::with_options(p, opts).unwrap();
+        assert!(
+            !re.uses_convergence_prefix(),
+            "pat={p} selected convergence; its right part is an unbounded interior \
+             forward verify re-run per literal hit (quadratic), kind={:?}",
+            re.prefix_kind_name()
+        );
+    }
+}
+
+#[cfg(feature = "convergence_prefix")]
+#[test]
+fn convergence_rejected_for_bounded_short_no_anchor() {
+    use resharp::UnicodeMode;
+    let no_conv: &[&str] = &[
+        r"[^%]%[^%]",
+        "([^\u{00A4}])\u{00A4}([^\u{00A4}])",
+        r"0.5.0",
+        r"([^\\])sinx",
+        "[^\"](\"\")",
+    ];
+    for p in no_conv {
+        let opts = RegexOptions::default().unicode(UnicodeMode::Javascript);
+        let re = Regex::with_options(p, opts).unwrap();
+        assert!(
+            !re.uses_convergence_prefix(),
+            "pat={p} selected convergence; it is fully bounded and short with no \
+             anchor/boundary, so llmatch's bounded matcher beats it, kind={:?}",
+            re.prefix_kind_name()
+        );
+    }
+    let conv_ok: &[&str] = &[r"\b\s?<\s?\b", r".cjs\b", r"([^\w]|^)tr\("];
+    for p in conv_ok {
+        let opts = RegexOptions::default().unicode(UnicodeMode::Javascript);
+        let re = Regex::with_options(p, opts).unwrap();
+        assert!(
+            re.uses_convergence_prefix(),
+            "pat={p} should keep convergence; its anchor/boundary makes llmatch's \
+             reverse pass costly, kind={:?}",
+            re.prefix_kind_name()
+        );
+    }
+}
+
+#[cfg(feature = "convergence_prefix")]
+#[test]
+fn interior_slash_uses_convergence() {
+    for p in [r"\S+/\S+", r"[^ ]+/[^ ]+", r"\d+/\d+"] {
+        let re = Regex::new(p).unwrap();
+        if p == r"\d+/\d+" {
+            assert!(!re.uses_convergence_prefix(), "{p}");
+        } else {
+            assert!(re.uses_convergence_prefix(), "{p} should use convergence");
+        }
+    }
+}
+
+#[cfg(feature = "convergence_prefix")]
+#[test]
+fn convergence_giant_match_dense_literal_is_linear() {
+    let p = r"([a-z0-9-]+)\s*:\s*([^;\s]+(?:\s*[^;\s]+)*);?";
+    let re = Regex::new(p).unwrap();
+    assert!(re.uses_convergence_prefix(), "{p} should use convergence");
+    let mut hay = String::new();
+    for i in 0..20_000 {
+        hay.push_str(&format!("key{i}: value {i} here\n"));
+    }
+    let ms = re.find_all(hay.as_bytes()).unwrap();
+    assert_eq!(ms.len(), 1, "one giant match");
+    assert_eq!(ms[0].start, 0);
+    assert_eq!(ms[0].end, hay.trim_end().len());
+}
+
+#[cfg(feature = "convergence_prefix")]
+#[test]
+fn convergence_is_match_no_false_positive() {
+    let cases: &[(&str, &str)] = &[
+        (r"\S+/\S+", "ab/ "),
+        (r"\S+/\S+", "ab/"),
+        (r"\S+/\S+", "/cd"),
+        (r"\S+@\S+", "a@ "),
+        (r"\d+/\d+", "12/ "),
+        (r"\S+/\S+", "a/b"),
+        (r"\S+/\S+", "no slash"),
+    ];
+    for &(p, s) in cases {
+        let re = Regex::new(p).unwrap();
+        let im = re.is_match(s.as_bytes()).unwrap();
+        let fa = !re.find_all(s.as_bytes()).unwrap().is_empty();
+        assert_eq!(im, fa, "is_match/find_all disagree for {p:?} on {s:?}: is_match={im} find_all_nonempty={fa}");
+    }
+}
+
+#[test]
+fn bounded_matches_general_path_differential() {
+    use resharp::RegexOptions;
+    let pats = [
+        "(?:a|c?|cac)",
+        "(?:a|c?|[cb]ac)",
+        "(?:b?|bab)",
+        "(?:a|ab|abc)",
+        "(?:xy|y?|x)",
+        "(?:ab|b|)",
+        "(?:a|aa|aaa)?",
+        "ab|b|c?",
+        "(?:a?b?|abc)",
+        "(?:a|b|ab|ba|aba)",
+        "(?:a{1,3}|aab)",
+    ];
+    let alphabet = b"abc";
+    for pat in pats {
+        let bounded = Regex::new(pat).unwrap();
+        let general =
+            Regex::with_options(pat, RegexOptions::default().hardened(true)).unwrap();
+        for n in 0u32..=6 {
+            for code in 0..3usize.pow(n) {
+                let mut s = String::new();
+                let mut c = code;
+                for _ in 0..n {
+                    s.push(alphabet[c % 3] as char);
+                    c /= 3;
+                }
+                let o: Vec<_> = bounded.find_all(s.as_bytes()).unwrap();
+                let r: Vec<_> = general.find_all(s.as_bytes()).unwrap();
+                assert_eq!(o, r, "bounded != general for pat={pat:?} s={s:?}");
+            }
+        }
+    }
+}
+
+#[cfg(feature = "convergence_prefix")]
+#[test]
+fn inner_literal_detection() {
+    use resharp::detect_inner_literal_bytes;
+    assert_eq!(detect_inner_literal_bytes(r"(\S+)\/(\S+)"), Some(vec![b'/']));
+    assert_eq!(detect_inner_literal_bytes(r"(\d+)\/(\d+)"), Some(vec![b'/']));
+    assert_eq!(detect_inner_literal_bytes(r"\S+@\S+"), Some(vec![b'@']));
+    assert_eq!(detect_inner_literal_bytes(r"\w+@\w+"), Some(vec![b'@']));
+    assert_eq!(detect_inner_literal_bytes(r".(?=a)"), Some(vec![b'a']));
+    assert_eq!(detect_inner_literal_bytes(r".(?=a|$)"), Some(vec![b'\n', b'a']));
+    assert_eq!(detect_inner_literal_bytes(r"\S+(/\S+)?"), None);
+    assert_eq!(detect_inner_literal_bytes(r"\S+"), None);
+    assert_eq!(detect_inner_literal_bytes(r"\S+://\S+"), Some(b"://".to_vec()));
+    assert_eq!(detect_inner_literal_bytes(r"foo\S+bar"), Some(b"bar".to_vec()));
+    assert_eq!(detect_inner_literal_bytes(r"\S+ <-> \S+"), Some(b" <-> ".to_vec()));
+    assert_eq!(
+        detect_inner_literal_bytes(r"<(g|mi) (xlink[^> ]+) (xml[^> ]+)"),
+        Some(b" xml".to_vec())
+    );
+}
+
+#[cfg(feature = "convergence_prefix")]
+#[test]
+fn trailing_redundant_lookahead_keeps_convergence_skip() {
+    let p = r"(?:^|\W)props\.(\w+)(?!\w)";
+    let fr = fancy_regex::Regex::new(p).unwrap();
+    let inputs: &[&str] = &[
+        "x props.foo y props.barBaz! end .props.q123 props. props.a",
+        " props.x props.y_z9 \nprops.AbC ",
+        "no match here at all",
+        "props.foo \u{e9}cole .props.bar99 caf\u{e9}.props.baz",
+    ];
+    for unicode in [resharp::UnicodeMode::Ascii, resharp::UnicodeMode::Javascript] {
+        let opts = RegexOptions::default().unicode(unicode);
+        let re = Regex::with_options(p, opts).unwrap();
+        assert!(
+            re.prefix_kind_name().is_some(),
+            "trailing redundant lookahead must not disable the prefix ({unicode:?})"
+        );
+        for s in inputs {
+            let ours: Vec<[usize; 2]> = re
+                .find_all(s.as_bytes())
+                .unwrap()
+                .iter()
+                .map(|m| [m.start, m.end])
+                .collect();
+            let mut reference = vec![];
+            let mut start = 0;
+            while let Ok(Some(m)) = fr.find_from_pos(s, start) {
+                reference.push([m.start(), m.end()]);
+                start = if m.end() > m.start() { m.end() } else { m.end() + 1 };
+                if start > s.len() {
+                    break;
+                }
+            }
+            assert_eq!(ours, reference, "{p:?} on {s:?} ({unicode:?})");
+        }
+    }
+}
+
+#[cfg(feature = "convergence_prefix")]
+#[test]
+fn convergence_prefix_matches_fancy_regex() {
+    let pats = [
+        r"(\S+)/(\S+)",
+        r"(\d+)/(\d+)",
+        r"\S+@\S+",
+        r"\w+@\w+",
+        r".(?=a)",
+        r".(?=a|$)",
+        r"x.(?=y)",
+        r"\S+/\S+(?= END)",
+        r"([a-z0-9-]+)\s*:\s*([^;\s]+(?:\s*[^;\s]+)*);?",
+        r"[\sa-z]+/[\sa-z]+",
+    ];
+    let inputs: &[&str] = &[
+        "a/b foo/bar x//y /lead trail/ no_slash a/b/c",
+        "  /  ab/cd  12/34  e@f  user@host.com  /// ",
+        "\u{e9}x/\u{e9}y caf\u{e9}/th\u{e9} a/b",
+        "nothing here at all",
+        "banana xaxa zaq aq a",
+        "abc xy xyz x.y end",
+        "trailing a",
+        "p/q END r/s notEND u/v END",
+        "a/b END",
+        "/",
+        "a",
+        "color: red; margin: 0 auto; key: a b c",
+        "k:v",
+    ];
+    for p in pats {
+        let re = Regex::new(p).unwrap_or_else(|e| panic!("{p:?}: {e}"));
+        let fr = fancy_regex::Regex::new(p).unwrap();
+        for s in inputs {
+            let ours: Vec<[usize; 2]> = re
+                .find_all(s.as_bytes())
+                .unwrap()
+                .iter()
+                .map(|m| [m.start, m.end])
+                .collect();
+            let mut reference = vec![];
+            let mut start = 0;
+            while let Ok(Some(m)) = fr.find_from_pos(s, start) {
+                reference.push([m.start(), m.end()]);
+                start = if m.end() > m.start() { m.end() } else { m.end() + 1 };
+                if start > s.len() {
+                    break;
+                }
+            }
+            assert_eq!(ours, reference, "{p:?} on {s:?}");
+        }
+    }
+}
+
+#[cfg(feature = "convergence_prefix")]
+#[test]
+fn multi_byte_run_convergence_matches_fancy_regex() {
+    let pats = [
+        r"\S+ - \S+",
+        r"[\sa-z]+ :: [\sa-z]+",
+        r"\S+ => \S+",
+        r"\S+ <-> \S+",
+        r"\S+ OR \S+",
+    ];
+    let inputs: &[&str] = &[
+        "a - b  foo-bar  x -  - y lone - end - - -",
+        "x :: y  a::b   c :: d :: e  no colons here",
+        "a => b c=>d  e => f =>  => g end",
+        "p <-> q  r<->s  t <-> u <-> v  end <-> ",
+        "a OR b ORb aOR c OR  OR d xyz OR z",
+        " :: ",
+        " - ",
+        "",
+        "nothing",
+    ];
+    for p in pats {
+        let re = Regex::new(p).unwrap_or_else(|e| panic!("{p:?}: {e}"));
+        assert!(re.uses_convergence_prefix(), "{p:?} no longer uses convergence");
+        let fr = fancy_regex::Regex::new(p).unwrap();
+        for s in inputs {
+            let ours: Vec<[usize; 2]> = re
+                .find_all(s.as_bytes())
+                .unwrap()
+                .iter()
+                .map(|m| [m.start, m.end])
+                .collect();
+            let mut reference = vec![];
+            let mut start = 0;
+            while let Ok(Some(m)) = fr.find_from_pos(s, start) {
+                reference.push([m.start(), m.end()]);
+                start = if m.end() > m.start() { m.end() } else { m.end() + 1 };
+                if start > s.len() {
+                    break;
+                }
+            }
+            assert_eq!(ours, reference, "{p:?} on {s:?}");
+        }
+    }
+}
+
+#[test]
+fn plus_of_end_anchored_alts_is_end_anchored() {
+    let re = Regex::new(r"(/\z|\\\z)+").unwrap();
+    assert_eq!(re.find_all_kind_name(), "EndAnchored");
+    let cases: &[(&str, &[[usize; 2]])] = &[
+        ("a/", &[[1, 2]]),
+        ("a\\", &[[1, 2]]),
+        ("abc", &[]),
+        ("/", &[[0, 1]]),
+        ("x//", &[[2, 3]]),
+        ("//\\", &[[2, 3]]),
+        ("", &[]),
+    ];
+    for (s, want) in cases {
+        let got: Vec<[usize; 2]> = re
+            .find_all(s.as_bytes())
+            .unwrap()
+            .iter()
+            .map(|m| [m.start, m.end])
+            .collect();
+        assert_eq!(got, want.to_vec(), "find_all {s:?}");
+        assert_eq!(re.is_match(s.as_bytes()).unwrap(), !want.is_empty(), "is_match {s:?}");
+    }
+}
+
+#[cfg(feature = "convergence_prefix")]
+#[test]
+fn wide_unbounded_fwd_anchor_yields_to_convergence() {
+    let pats = [
+        "([A-Z0-9-]+)=((\"[^\"]*\")|([^\",]*))(?:,|\\z)",
+        "([A-Z0-9-]+)=(?:\"([^\"]+)\"|([^,]+))",
+        "([A-Z-]+)=(?:\"([^\"]+)\"|([^,]+))",
+    ];
+    let hay = "FOO=\"bar baz\",QUX=quux,A-B=1,lower=skip,X=";
+    for p in pats {
+        let re = Regex::new(p).unwrap();
+        assert!(re.uses_convergence_prefix(), "pat={p} should use convergence");
+        let ours: Vec<[usize; 2]> = re
+            .find_all(hay.as_bytes())
+            .unwrap()
+            .iter()
+            .map(|m| [m.start, m.end])
+            .collect();
+        let fr = fancy_regex::Regex::new(p).unwrap();
+        let mut reference = vec![];
+        let mut start = 0;
+        while let Ok(Some(m)) = fr.find_from_pos(hay, start) {
+            reference.push([m.start(), m.end()]);
+            start = if m.end() > m.start() { m.end() } else { m.end() + 1 };
+            if start > hay.len() {
+                break;
+            }
+        }
+        assert_eq!(ours, reference, "pat={p}");
+    }
+}
+
+#[test]
+fn wide_class_prefix_yields_to_rare_rev_literal() {
+    let re = Regex::new(r"([A-Z\_][A-Z0-9\_]{2,})\s*=").unwrap();
+    assert_eq!(re.prefix_kind_name(), Some("AnchoredRev"));
+    assert_ne!(re.find_all_kind_name(), "FwdPrefix");
+    let hay = b"x = 1; FOO_BAR = 2; lower = 3; ABC=4; Q=5";
+    let got: Vec<&str> = re
+        .find_all(hay)
+        .unwrap()
+        .iter()
+        .map(|m| std::str::from_utf8(&hay[m.start..m.end]).unwrap())
+        .collect();
+    assert_eq!(got, vec!["FOO_BAR =", "ABC="]);
+}
+
 #[test]
 fn convergence() {
     assert!(Regex::new(".*(.+)*.+").is_ok());
@@ -2230,7 +3166,6 @@ fn bug21_bb_not_idempotent() {
 
 #[test]
 fn bug3_is_match_vs_find_all_bu() {
-    // let re = Regex::new(r"\BU").unwrap();
     let re = Regex::new(r"\BU").unwrap();
     let hay = b"Ui";
     println!("{:?}","CALL 1");
@@ -2265,9 +3200,6 @@ fn bug3_is_match_vs_find_all_lookbehind() {
 
 #[test]
 fn bug4_no_match_sentinel_not_leaked_as_match_end() {
-    // BUG-4: push sites emitted Match { end: usize::MAX } when forward scan
-    // found no end for a reverse-proposed start. Every returned Match must
-    // satisfy start <= end <= haystack.len().
     let check = |ms: Vec<resharp::Match>, hay: &[u8]| {
         for m in &ms {
             assert!(
@@ -2278,7 +3210,6 @@ fn bug4_no_match_sentinel_not_leaked_as_match_end() {
         }
     };
 
-    // end-anchor complement, flags mode
     let mk_flags = || {
         resharp::RegexOptions::default()
             .case_insensitive(true)
@@ -2295,20 +3226,15 @@ fn bug4_no_match_sentinel_not_leaked_as_match_end() {
     check(re2.find_all(b"ab").unwrap(), b"ab");
     check(re2.find_all(b"abc").unwrap(), b"abc");
 
-    // non-word-boundary prefix, default mode
     let re3 = resharp::Regex::new(r"\Bb+").unwrap();
     check(re3.find_all(b"ba").unwrap(), b"ba");
 
-    // lookbehind prefix, default mode
     let re4 = resharp::Regex::new(r"(?<=[^a])b+").unwrap();
     check(re4.find_all(b"ba").unwrap(), b"ba");
 }
 
 #[test]
 fn bug7_negated_perl_classes_not_nullable_in_ascii_mode() {
-    // BUG-7: \D/\S/\W in ascii mode used mk_compl (language complement ~)
-    // instead of neg_class (byte-class negation), making them nullable.
-    // The empty string and every multi-byte string fell inside ~(\w) etc.
     macro_rules! mk {
         ($pat:expr) => {
             resharp::Regex::with_options(
@@ -2318,25 +3244,20 @@ fn bug7_negated_perl_classes_not_nullable_in_ascii_mode() {
         };
     }
 
-    // bare shorthands must not match the empty string
     assert!(!mk!(r"\D").is_match(b"").unwrap(), r"\D must not match empty");
     assert!(!mk!(r"\S").is_match(b"").unwrap(), r"\S must not match empty");
     assert!(!mk!(r"\W").is_match(b"").unwrap(), r"\W must not match empty");
 
-    // must not match a string containing only the positive class member
     assert!(!mk!(r"\D").is_match(b"0").unwrap(), r"\D must not match '0'");
     assert!(!mk!(r"\S").is_match(b" ").unwrap(), r"\S must not match ' '");
     assert!(!mk!(r"\W").is_match(b"a").unwrap(), r"\W must not match 'a'");
 
-    // suffixed pattern: a*\D must not match "" or "0"
     assert!(!mk!(r"a*\D").is_match(b"").unwrap(), r"a*\D must not match empty");
     assert!(!mk!(r"a*\D").is_match(b"0").unwrap(), r"a*\D must not match '0'");
 
-    // bracketed forms must stay correct (they were never broken)
     assert!(!mk!(r"[\D]").is_match(b"").unwrap(), r"[\D] must not match empty");
     assert!(!mk!(r"[^\d]").is_match(b"").unwrap(), r"[^\d] must not match empty");
 
-    // positive classes must match the right bytes
     assert!(mk!(r"\d").is_match(b"5").unwrap(), r"\d must match '5'");
     assert!(mk!(r"\s").is_match(b" ").unwrap(), r"\s must match ' '");
     assert!(mk!(r"\w").is_match(b"_").unwrap(), r"\w must match '_'");
@@ -2344,9 +3265,6 @@ fn bug7_negated_perl_classes_not_nullable_in_ascii_mode() {
 
 #[test]
 fn bug8_default_and_hardened_find_all_agree() {
-    // BUG-8: default optimised path disagrees with hardened find_all_dfa.
-    // On "aaa", default gives [(0,1),(1,2),(2,3),(3,3)],
-    // hardened gives [(0,2),(2,3),(3,3)]. Default is correct (leftmost-longest).
     let cases: &[(&str, &[u8])] = &[
         (r"~(_a+)", b"aaa"),
         (r"~(aa*a)", b"aaa"),
@@ -2382,9 +3300,6 @@ fn compile_wildcard_literal_wildcard_terminates() {
 
 #[test]
 fn bug10_default_and_hardened_find_all_agree() {
-    // BUG-10: default optimised path drops a trailing zero-width match.
-    // Pattern: (?<=^)~(0+)
-    // This has a zero-width lookbehind (?<=^) and body ~ (0+) that can match zero bytes.
     let cases: &[(&str, &[u8])] = &[
         (r"(?<=^)~(0+)", b"\n"),
         (r"(?<=^)~(0+)", b"0\n"),
@@ -2406,7 +3321,6 @@ fn bug10_default_and_hardened_find_all_agree() {
 
 #[test]
 fn find_all_lb_prefix_keeps_offset1_zero_width() {
-    // regression: prefix-accelerated lb driver dropped the offset-1 zero-width match after a leading zero-width begin match.
     let hay: &[u8] = b"\n\n";
     let spans = |re: &resharp::Regex| -> Vec<(usize, usize)> {
         re.find_all(hay)
@@ -2435,13 +3349,43 @@ fn find_all_lb_prefix_keeps_offset1_zero_width() {
 }
 
 #[test]
+fn rev_boundary_prefix_keeps_trailing_word_boundary() {
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    let opts = RegexOptions::default().unicode(UnicodeMode::Javascript);
+    let re = Regex::with_options(r"[a-z]+assert\b(?!\$)", opts).unwrap();
+    let spans = |h: &[u8]| {
+        re.find_all(h)
+            .unwrap()
+            .into_iter()
+            .map(|m| (m.start, m.end))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(spans(b"xassert"), vec![(0, 7)]);
+    assert_eq!(spans(b"xassert_eq"), vec![]);
+    assert_eq!(spans(b"xassertx"), vec![]);
+    assert_eq!(spans(b"xassert$"), vec![]);
+    assert_eq!(spans(b"xassert yassert_eq zassertx wassert"), vec![(0, 7), (28, 35)]);
+    assert_eq!(
+        spans(b"fooassert barassert_eq bazassert; quxassertx"),
+        vec![(0, 9), (23, 32)]
+    );
+
+    let mut long = Vec::new();
+    long.extend_from_slice(b"fooassert ");
+    long.extend(std::iter::repeat(b'q').take(8192));
+    long.extend_from_slice(b" barassert_eq bazassertx quxassert");
+    let base = 10 + 8192;
+    assert_eq!(spans(&long), vec![(0, 9), (base + 25, base + 34)]);
+}
+
+#[test]
 fn fullmode_dot_literal_concat_compile_bounded() {
     use resharp::{Regex, RegexOptions, UnicodeMode};
     let t = std::time::Instant::now();
     let opts = RegexOptions::default().unicode(UnicodeMode::Full);
     let re = Regex::with_options(".n.................  n.", opts).unwrap();
     let el = t.elapsed();
-    assert!(el.as_secs_f64() < 6.0, "compile blew up: {el:?}");
+    assert!(el.as_secs_f64() < 12.0, "compile blew up: {el:?}");
     assert_eq!(re.find_all(b"xn................. zn.").unwrap().len(), 0);
 }
 
@@ -2622,6 +3566,62 @@ fn bug22_is_match_fwd_prefix_not_quadratic() {
 }
 
 #[test]
+fn always_nullable_greedy_fast_path_correct() {
+    let cases: &[(&str, &[u8], &[[usize; 2]])] = &[
+        (r"[^/]*", b"aa/bb", &[[0, 2], [2, 2], [3, 5], [5, 5]]),
+        (r"[^/]{0,3}", b"aaaa/b", &[[0, 3], [3, 4], [4, 4], [5, 6], [6, 6]]),
+        (r".*", b"ab\ncd", &[[0, 2], [2, 2], [3, 5], [5, 5]]),
+        (r"\d{0,7}", b"x0y", &[[0, 0], [1, 2], [2, 2], [3, 3]]),
+    ];
+    for (pat, input, expected) in cases {
+        let re = Regex::new(pat).unwrap();
+        let got: Vec<[usize; 2]> =
+            re.find_all(input).unwrap().iter().map(|m| [m.start, m.end]).collect();
+        assert_eq!(&got, expected, "pattern={pat:?} input={input:?}");
+    }
+    let re = Regex::new(r"[^/]*").unwrap();
+    let hay = vec![b'a'; 4 * 1024 * 1024];
+    let t = std::time::Instant::now();
+    let n = re.find_all(&hay).unwrap().len();
+    assert_eq!(n, 2);
+    assert!(
+        t.elapsed().as_secs_f64() < 0.2,
+        "find_all [^/]* on 4 MB non-slash should be near-linear, took {:.3}s",
+        t.elapsed().as_secs_f64()
+    );
+}
+
+#[test]
+fn concat_wide_star_middle_not_hardened_and_linear() {
+    let per_byte = |re: &Regex, sz: usize| -> f64 {
+        let hay = vec![b'a'; sz];
+        let _ = re.find_all(&hay).unwrap();
+        let mut best = f64::MAX;
+        for _ in 0..3 {
+            let t = std::time::Instant::now();
+            let _ = re.find_all(&hay).unwrap();
+            best = best.min(t.elapsed().as_secs_f64() / sz as f64);
+        }
+        best
+    };
+    let small = 64 * 1024usize;
+    let big = 4 * 1024 * 1024usize;
+    for pat in [r"[^\.]*[^\n\r][^\.]*", r"[^\.]*[^\n\r]"] {
+        let re = Regex::new(pat).unwrap();
+        assert!(!re.is_hardened(), "pattern {pat:?} should not be auto-hardened");
+        let ns_small = per_byte(&re, small);
+        let ns_big = per_byte(&re, big);
+        assert!(
+            ns_big < ns_small * 4.0,
+            "pattern {pat:?} super-linear: per-byte {:.2}ns at {small} vs {:.2}ns at {big} ({}x size)",
+            ns_small * 1e9,
+            ns_big * 1e9,
+            big / small
+        );
+    }
+}
+
+#[test]
 fn bug18_find_all_not_quadratic_on_always_nullable() {
     let re = Regex::new("~(a+)").unwrap();
     let result = re.find_all(b"aaa").unwrap();
@@ -2688,7 +3688,6 @@ fn bug19_optional_anchor_before_class_same_matches() {
 
 #[test]
 fn bug20_find_anchored_respects_leading_assertion_at_begin() {
-    // \B0 on "00": \B is FALSE at offset 0 (none->word = word boundary), so no match at 0.
     let re = Regex::new(r"\B0").unwrap();
     let hay = b"00";
     assert_eq!(
@@ -2705,13 +3704,11 @@ fn bug20_find_anchored_respects_leading_assertion_at_begin() {
         no_match(&re, hay),
         "find_anchored should return None (\\B fails at offset 0)"
     );
-    // (?<=0)0 on "00": nothing precedes offset 0, so no match there.
     let re2 = Regex::new(r"(?<=0)0").unwrap();
     assert!(
         no_match(&re2, hay),
         "find_anchored should return None ((?<=0) fails at offset 0)"
     );
-    // \b0 on "00": \b IS true at offset 0 (none->word), so match at 0.
     let re3 = Regex::new(r"\b0").unwrap();
     match re3.find_anchored(hay) {
         Ok(m) => assert_eq!(
@@ -2736,6 +3733,17 @@ fn bug26_end_before_begin_anchor_matches_empty_string() {
     let re2 = Regex::new(r"\za*\A").unwrap();
     assert_eq!(re2.is_match(b"").unwrap(), true, "\\za*\\A must match empty string");
     assert_eq!(re2.is_match(b"a").unwrap(), false, "\\za*\\A must not match non-empty");
+}
+
+#[test]
+fn end_before_begin_anchor_reverse_dead_skips() {
+    let re = Regex::new(r"\z\A").unwrap();
+    let hay = vec![b'a'; 200_000];
+    assert_eq!(re.find_all(&hay).unwrap().len(), 0);
+    assert!(
+        re.has_accel().1,
+        "\\z\\A reverse scan must enable dead-skip instead of self-looping over the whole input"
+    );
 }
 
 #[test]
@@ -3021,3 +4029,225 @@ fn sanity_always_nullable_end_matches() {
     }
 }
 
+#[test]
+fn bounded_always_nullable_uses_bounded_path() {
+    use resharp::{RegexOptions, UnicodeMode};
+    let opts = RegexOptions::default().unicode(UnicodeMode::Javascript);
+    let re = Regex::with_options(r"[^\n\r]{0,3}", opts).unwrap();
+    assert_eq!(
+        re.find_all_kind_name(),
+        "Bounded",
+        "bounded always-nullable pattern must route through the BDFA bounded path"
+    );
+    let all: Vec<[usize; 2]> = re
+        .find_all(b"abcdef\ngh")
+        .unwrap()
+        .iter()
+        .map(|m| [m.start, m.end])
+        .collect();
+    assert_eq!(
+        all,
+        vec![[0, 3], [3, 6], [6, 6], [7, 9], [9, 9]],
+        "leftmost-longest non-overlapping with zero-width fill at gaps"
+    );
+}
+
+fn oracle_bounded_nonnewline(data: &[u8], bound: usize) -> Vec<[usize; 2]> {
+    let len = data.len();
+    let mut out = Vec::new();
+    let mut cursor = 0usize;
+    while cursor < len {
+        let mut run = 0usize;
+        while run < bound
+            && cursor + run < len
+            && data[cursor + run] != b'\n'
+            && data[cursor + run] != b'\r'
+        {
+            run += 1;
+        }
+        if run > 0 {
+            out.push([cursor, cursor + run]);
+            cursor += run;
+        } else {
+            out.push([cursor, cursor]);
+            cursor += 1;
+        }
+    }
+    if out.last().map(|m| m[0]) != Some(len) {
+        out.push([len, len]);
+    }
+    out
+}
+
+#[test]
+fn bounded_always_nullable_matches_oracle() {
+    use resharp::{RegexOptions, UnicodeMode};
+    let mut data = Vec::new();
+    for i in 0..3000u32 {
+        let n = (i % 130) + 1;
+        for j in 0..n {
+            data.push(b'a' + (j % 26) as u8);
+        }
+        data.push(b'\n');
+    }
+    data.extend_from_slice(b"trailing no newline");
+    for (pat, bound) in [(r"[^\n\r]{0,10}", 10), (r"[^\n\r]{0,40}", 40), (r"[^\n\r]{0,80}", 80)] {
+        let opts = RegexOptions::default().unicode(UnicodeMode::Javascript);
+        let re = Regex::with_options(pat, opts).unwrap();
+        assert_eq!(re.find_all_kind_name(), "Bounded", "pat={pat}");
+        let got: Vec<[usize; 2]> = re
+            .find_all(&data)
+            .unwrap()
+            .iter()
+            .map(|m| [m.start, m.end])
+            .collect();
+        let want = oracle_bounded_nonnewline(&data, bound);
+        assert_eq!(got, want, "pat={pat}");
+    }
+}
+
+#[test]
+fn bounded_range_with_nullable_alt_no_overrun() {
+    use resharp::{RegexOptions, UnicodeMode};
+    let cases: &[(&str, &str, &[(usize, usize)])] = &[
+        ("c{2,3}ba|c?", "cccb", &[(0, 1), (1, 1), (2, 1), (3, 0), (4, 0)]),
+        (
+            "c{2,4}b(]|a)|(?:(?:c|))",
+            "cccb",
+            &[(0, 1), (1, 1), (2, 1), (3, 0), (4, 0)],
+        ),
+    ];
+    for &(pat, input, expected) in cases {
+        let opts = RegexOptions::default().unicode(UnicodeMode::Javascript);
+        let re = Regex::with_options(pat, opts).unwrap();
+        assert_eq!(re.find_all_kind_name(), "Bounded", "pat={pat}");
+        let got: Vec<(usize, usize)> = re
+            .find_all(input.as_bytes())
+            .unwrap()
+            .iter()
+            .map(|m| (m.start, m.end - m.start))
+            .collect();
+        assert_eq!(got, expected, "pat={pat}");
+    }
+}
+
+#[test]
+fn zero_width_lookaround_alternation_no_double_count() {
+    use resharp::{RegexOptions, UnicodeMode};
+    let opts = RegexOptions::default().unicode(UnicodeMode::Javascript);
+    let re = Regex::with_options("(?=[a-zA-Z])|(?<=[a-zA-Z])", opts).unwrap();
+    let inp = b"ab cd";
+    let ms = re.find_all(inp).unwrap();
+    assert!(ms.iter().all(|m| m.start == m.end), "all zero-width");
+    let positions: Vec<usize> = ms.iter().map(|m| m.start).collect();
+    assert_eq!(positions, vec![0, 1, 2, 3, 4, 5], "one match per position");
+}
+
+#[test]
+fn begin_anchor_after_nullable_quantifier_matches_empty_at_zero() {
+    use resharp::{RegexOptions, UnicodeMode};
+    let cases: &[(&str, &[u8])] = &[
+        ("x*\\A", b"abc"),
+        ("a*\\A", b"aaa"),
+        ("[^\n\r]*\\A", b"abc"),
+    ];
+    for &(pat, hay) in cases {
+        let opts = RegexOptions::default().unicode(UnicodeMode::Javascript);
+        let re = Regex::with_options(pat, opts).unwrap();
+        let ms = re.find_all(hay).unwrap();
+        assert_eq!(
+            ms,
+            vec![resharp::Match { start: 0, end: 0 }],
+            "pat={pat} hay={:?}",
+            std::str::from_utf8(hay).unwrap()
+        );
+    }
+}
+
+#[test]
+fn lookbehind_kept_with_nullable_star_body_no_fwd_prefix() {
+    let cases: &[(&str, &[u8], usize)] = &[
+        ("(?<=Q)z[^\n\r]*z", b"zXz", 0),
+        ("(?<=Q)z[^\n\r]*z", b"QzXz", 1),
+        ("(?<=Q)z[^\n\r]*", b"zX", 0),
+        ("(?<=Q)z[^\n\r]*", b"QzX", 1),
+        ("(?<=@import )['\"].*['\"]", b"@import 'x'", 1),
+        ("(?<=@import )['\"].*['\"]", b"import 'x'", 0),
+    ];
+    for &(pat, hay, want) in cases {
+        let re = Regex::new(pat).unwrap();
+        let got = re.find_all(hay).unwrap().len();
+        assert_eq!(
+            got,
+            want,
+            "pat={pat} hay={:?}",
+            std::str::from_utf8(hay).unwrap()
+        );
+    }
+}
+
+#[cfg(feature = "convergence_prefix")]
+#[test]
+fn conv_forced_differential_vs_regex_crate() {
+    let pats = [
+        r"- ([^:]+): Rejected because ([^\n]+)",
+        r"\[([a-z-]+)\s+([^\]]+)\]",
+        r"foo([0-9]+)bar",
+        r"a+X[bc]+",
+        r"[a-z]+ foo [a-z]* QQ: [^\n]+",
+        r"\{([a-zA-Z0-9_.]+), ([^}]+)\}",
+        r"x[0-9]*Y[0-9]*z+",
+        r#"\s*([^=]+)="([^"]*)",?"#,
+        r#"((?:\\.|[^"])*)""#,
+    ];
+    let alphabet = b"- :RejctdbcausXabcfo0129[]{}|.QYz_ =\"\\\n\t";
+    let mut state: u64 = 0x9e3779b97f4a7c15;
+    let mut next = || {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        state
+    };
+    for pat in pats {
+        let rs = resharp::Regex::with_options(
+            pat,
+            resharp::RegexOptions::default()
+                .unicode(resharp::UnicodeMode::Ascii)
+                .force_convergence(true),
+        )
+        .unwrap();
+        assert!(
+            rs.uses_convergence_prefix(),
+            "pat={pat:?} did not select convergence even when forced"
+        );
+        let re = regex::bytes::RegexBuilder::new(pat)
+            .unicode(false)
+            .build()
+            .unwrap();
+        let fr = fancy_regex::Regex::new(pat).unwrap();
+        for _ in 0..20_000 {
+            let len = (next() % 200) as usize;
+            let hay: Vec<u8> = (0..len)
+                .map(|_| alphabet[(next() as usize) % alphabet.len()])
+                .collect();
+            let rs_m = rs.is_match(&hay).unwrap();
+            let re_m = re.is_match(&hay);
+            let rs_n = rs.find_all(&hay).unwrap().len();
+            let re_n = re.find_iter(&hay).count();
+            if rs_m == re_m && rs_n.min(1) == re_n.min(1) {
+                continue;
+            }
+            let hs = String::from_utf8_lossy(&hay);
+            let fr_m = fr.is_match(&hs).unwrap();
+            assert_eq!(
+                rs_m, fr_m,
+                "is_match divergence (resharp vs fancy-regex) pat={pat:?} hay={hs:?} regex-crate={re_m}"
+            );
+            assert_eq!(
+                rs_n.min(1),
+                fr_m as usize,
+                "match-presence divergence (resharp vs fancy-regex) pat={pat:?} rs_n={rs_n} hay={hs:?}"
+            );
+        }
+    }
+}

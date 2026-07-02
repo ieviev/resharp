@@ -10,9 +10,15 @@ impl Regex {
         }
         let inner = &mut *self.inner.lock().unwrap_or_else(|e| e.into_inner());
         inner.nulls.clear();
+        #[cfg(feature = "convergence_prefix")]
+        if self.conv_prefix {
+            let crate::RegexInner { rev_ts, b, nulls, conv_b, .. } = &mut *inner;
+            rev_ts.collect_rev_first(b, input.len() - 1, input, nulls, conv_b.as_mut())?;
+            return Ok(!nulls.is_empty());
+        }
         inner
             .rev_ts
-            .collect_rev_first(&mut inner.b, input.len() - 1, input, &mut inner.nulls)?;
+            .collect_rev_first(&mut inner.b, input.len() - 1, input, &mut inner.nulls, None)?;
         Ok(!inner.nulls.is_empty())
     }
 

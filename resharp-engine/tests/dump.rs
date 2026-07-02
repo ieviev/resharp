@@ -61,6 +61,12 @@ fn bdfa_short_alt() {
 }
 
 #[test]
+fn star_loop_always_nullable() {
+    roundtrip(r".*", &["abc", "", "a\nb"]);
+    roundtrip(r"(a|b)*", &["aabba c", "", "xyz"]);
+}
+
+#[test]
 fn case_insensitive() {
     let opts = resharp::RegexOptions::default().case_insensitive(true);
     let re = resharp::Regex::with_options(r"hello", opts).unwrap();

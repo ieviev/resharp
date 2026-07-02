@@ -403,3 +403,9 @@ pattern = '\bx?y\b'
 input = "''x"
 matches = []
 ascii = true
+
+[[test]]
+name = "email_boundary_inner_literal"
+pattern = '\b([a-zA-Z0-9])([a-zA-Z0-9\.\_-]+)@([a-zA-Z0-9\.-]+)\.([a-zA-Z]{2,})\b'
+input = "contact a@b.com or x.y_z@sub.example.org, not @bad or foo@bar"
+matches = [[19, 40]]

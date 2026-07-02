@@ -1,4 +1,18 @@
-description = "prefix set and potential_start computation tests (matches engine runtime via ts_rev_start)"
+description = "prefix set and potential_start computation tests"
+
+
+
+[[test]]
+name = "convergence_picks_cheap_right_part"
+pattern = '<(g|mi) (xlink[^> ]+) (xml[^> ]+)'
+kind = "Convergence"
+conv_literal = " xml"
+
+
+[[test]]
+name = "literal_dot_anchor_keeps_anchored_rev"
+pattern = '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}'
+kind = "AnchoredRev"
 
 
 
@@ -262,4 +276,57 @@ pattern = "x(_*b&~(b_+))"
 prefix_rev = "b"
 kind = "AnchoredRev"
 
+[[test]]
+name = "upper_ident_assign_rev_eq"
+pattern = '([A-Z\_][A-Z0-9\_]{2,})\s*='
+prefix_rev = "="
+kind = "AnchoredRev"
 
+[[test]]
+name = "html_tag_open_slash_name"
+pattern = '<([/]?)([^ >]+)'
+kind = "AnchoredFwd"
+
+[[test]]
+name = "query_key_value"
+pattern = '([^/?&]+)=([^?&]+)'
+kind = "PotentialStart"
+
+[[test]]
+name = "leading_literal_then_wide_interior_loop_no_fwd"
+pattern = '(@[A-Za-z0-9_0-9\$\_]+)([^\n\r]+\))([^\s])'
+kind = "None"
+
+[[test]]
+name = "leading_wide_class_inner_literal_convergence"
+pattern = '\Wprops.(\w+)'
+kind = "Convergence"
+conv_literal = "props"
+
+[[test]]
+name = "trailing_redundant_lookahead_keeps_convergence"
+pattern = '\Wprops.(\w+)(?!\w)'
+kind = "Convergence"
+conv_literal = "props"
+
+[[test]]
+name = "leading_literal_trailing_class_run_anchored_fwd"
+pattern = '\$[^ ]+'
+kind = "AnchoredFwd"
+
+[[test]]
+name = "leading_literal_interior_unbounded_then_literal_convergence"
+pattern = '\$[^ ]+ xml[^> ]+'
+kind = "Convergence"
+
+[[test]]
+name = "leading_alt_anchor_single_byte_literal_convergence"
+pattern = '(^|\s+)\+\S+'
+kind = "Convergence"
+conv_literal = "+"
+
+[[test]]
+name = "interior_single_byte_literal_beats_potential_start"
+pattern = '[^\s@]+@[^\s@]+\.[^\s@]+'
+kind = "Convergence"
+conv_literal = "."

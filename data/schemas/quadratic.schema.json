@@ -22,6 +22,13 @@
   },
   "additionalProperties": false,
   "definitions": {
+    "QuadKind": {
+      "type": "string",
+      "enum": [
+        "fwd",
+        "dfa"
+      ]
+    },
     "QuadraticCase": {
       "type": "object",
       "required": [
@@ -29,6 +36,9 @@
         "unit"
       ],
       "properties": {
+        "kind": {
+          "$ref": "#/definitions/QuadKind"
+        },
         "name": {
           "default": "",
           "type": "string"
