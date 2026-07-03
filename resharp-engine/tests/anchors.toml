@@ -656,3 +656,27 @@ name = "literal_branch_does_not_poison_end_anchored_branch"
 pattern = '<!|>\z'
 input = "x>"
 matches = [[1, 2]]
+
+[[test]]
+name = "bug09_start_anchor_in_optional_group"
+pattern = '(\Aab|xy)?'
+input = "ababxy"
+matches = [[0, 2], [2, 2], [3, 3], [4, 6], [6, 6]]
+
+[[test]]
+name = "bug09_start_anchor_in_optional_group_single"
+pattern = '(\Aa|b)?'
+input = "aabaab"
+matches = [[0, 1], [1, 1], [2, 3], [3, 3], [4, 4], [5, 6], [6, 6]]
+
+[[test]]
+name = "bug09_start_anchor_in_group"
+pattern = '(\Aab|xy)'
+input = "ababxy"
+matches = [[0, 2], [4, 6]]
+
+[[test]]
+name = "bug09_start_anchor_bare_alt"
+pattern = '\Aab|xy'
+input = "ababxy"
+matches = [[0, 2], [4, 6]]

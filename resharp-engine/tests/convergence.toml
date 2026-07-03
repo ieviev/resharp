@@ -1,0 +1,165 @@
+description = '''
+convergence-prefix regression cases. all run in UnicodeMode::Javascript.
+prefix_kind / not_prefix_kind guard whether the convergence optimization is
+selected; matches guard the actual behaviour. see bugs/bug-0{8,10,11,12}-*.md.
+'''
+
+[[test]]
+name = "bug08_periodic_literal_run_1_hash"
+pattern = '\n[ ]*##([^\n]+)(?=\n)'
+input = "\n##a\n"
+matches = [[0, 4]]
+javascript = true
+not_prefix_kind = "Convergence"
+
+[[test]]
+name = "bug08_periodic_literal_run_2_hash"
+pattern = '\n[ ]*##([^\n]+)(?=\n)'
+input = "\n###a\n"
+matches = [[0, 5]]
+javascript = true
+not_prefix_kind = "Convergence"
+
+[[test]]
+name = "bug08_periodic_literal_run_3_hash"
+pattern = '\n[ ]*##([^\n]+)(?=\n)'
+input = "\n####a\n"
+matches = [[0, 6]]
+javascript = true
+not_prefix_kind = "Convergence"
+
+[[test]]
+name = "bug08_periodic_literal_run_4_hash"
+pattern = '\n[ ]*##([^\n]+)(?=\n)'
+input = "\n#####a\n"
+matches = [[0, 7]]
+javascript = true
+not_prefix_kind = "Convergence"
+
+[[test]]
+name = "bug08_nonperiodic_literal_run_stays_convergence"
+pattern = '\n[ ]*ab([^\n]+)(?=\n)'
+input = "\nabcd\n"
+matches = [[0, 5]]
+javascript = true
+prefix_kind = "Convergence"
+
+[[test]]
+name = "bug10_single_byte_literal_double_sep"
+pattern = '[a-z]+:([^;]+)(?!;)'
+input = "a::cm;"
+matches = [[0, 4]]
+javascript = true
+not_prefix_kind = "Convergence"
+
+[[test]]
+name = "bug10_single_byte_literal_double_sep_short"
+pattern = '[a-z]+:([^;]+)(?!;)'
+input = "a::c;"
+matches = [[0, 3]]
+javascript = true
+not_prefix_kind = "Convergence"
+
+[[test]]
+name = "bug10_single_byte_literal_single_sep"
+pattern = '[a-z]+:([^;]+)(?!;)'
+input = "a:cm;"
+matches = [[0, 3]]
+javascript = true
+not_prefix_kind = "Convergence"
+
+[[test]]
+name = "bug10_left_absorbs_literal_still_ok"
+pattern = '[a-z]+=([^&]+)'
+input = "a==v&"
+matches = [[0, 4]]
+javascript = true
+
+[[test]]
+name = "bug11_min_two_right_n3"
+pattern = '\w{2,}\.[^\s]{2,}'
+input = "aa..."
+matches = [[0, 5]]
+javascript = true
+not_prefix_kind = "Convergence"
+
+[[test]]
+name = "bug11_min_two_right_n4"
+pattern = '\w{2,}\.[^\s]{2,}'
+input = "aa...."
+matches = [[0, 6]]
+javascript = true
+not_prefix_kind = "Convergence"
+
+[[test]]
+name = "bug11_min_two_right_n5"
+pattern = '\w{2,}\.[^\s]{2,}'
+input = "aa....."
+matches = [[0, 7]]
+javascript = true
+not_prefix_kind = "Convergence"
+
+[[test]]
+name = "bug11_min_two_right_n8"
+pattern = '\w{2,}\.[^\s]{2,}'
+input = "aa........"
+matches = [[0, 10]]
+javascript = true
+not_prefix_kind = "Convergence"
+
+[[test]]
+name = "bug11_min_two_right_no_match"
+pattern = '\w{2,}\.[^\s]{2,}'
+input = "aa.."
+matches = []
+javascript = true
+not_prefix_kind = "Convergence"
+
+[[test]]
+name = "bug11_left_plus_min_two_right"
+pattern = '\w+\.[^\s]{2,}'
+input = "aa...."
+matches = [[0, 6]]
+javascript = true
+
+[[test]]
+name = "bug12_repeated_literal_eq"
+pattern = '[a-z]+=[^\s]\S+'
+input = "x==aa"
+matches = [[0, 5]]
+javascript = true
+
+[[test]]
+name = "bug12_repeated_literal_colon"
+pattern = '[a-z]+:[^\s]\S+'
+input = "x::aa"
+matches = [[0, 5]]
+javascript = true
+
+[[test]]
+name = "bug12_repeated_literal_dot"
+pattern = '[a-z]+\.[^\s]\S+'
+input = "x..aa"
+matches = [[0, 5]]
+javascript = true
+
+[[test]]
+name = "bug12_repeated_literal_z_double"
+pattern = 'a+z[^\s]\S+'
+input = "aazzaa"
+matches = [[0, 6]]
+javascript = true
+
+[[test]]
+name = "bug12_repeated_literal_z_single"
+pattern = 'a+z[^\s]\S+'
+input = "aazaa"
+matches = [[0, 5]]
+javascript = true
+
+[[test]]
+name = "bug12_key_value_alternation"
+pattern = '[a-z]+=(?:"(?:[^"\\]|\\.)+"|[^"]\S+)'
+input = "s==name))"
+matches = [[0, 9]]
+javascript = true

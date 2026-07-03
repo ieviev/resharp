@@ -48,6 +48,10 @@
           "default": "",
           "type": "string"
         },
+        "javascript": {
+          "default": false,
+          "type": "boolean"
+        },
         "matches": {
           "default": [],
           "type": "array",
@@ -66,8 +70,22 @@
           "default": "",
           "type": "string"
         },
+        "not_prefix_kind": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "pattern": {
           "type": "string"
+        },
+        "prefix_kind": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "reason": {
           "default": null,

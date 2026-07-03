@@ -28,6 +28,12 @@ pub struct EngineCase {
     #[serde(default)]
     pub ascii: bool,
     #[serde(default)]
+    pub javascript: bool,
+    #[serde(default)]
+    pub prefix_kind: Option<String>,
+    #[serde(default)]
+    pub not_prefix_kind: Option<String>,
+    #[serde(default)]
     pub vs_regex: bool,
     #[serde(default)]
     pub vs_find_all: bool,
