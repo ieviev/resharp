@@ -48,7 +48,11 @@ function run(): string {
         "--measurement-time", process.env.MEASURE ?? "1.5",
         "--sample-size", process.env.SAMPLES ?? "30",
     ];
-    const r = spawnSync("cargo", args, { cwd: engineDir, encoding: "utf8", maxBuffer: 64 << 20 });
+    process.stdout.write(`running: cargo ${args.join(" ")}\n`);
+    process.stdout.write(`cwd: ${engineDir}\n`);
+    process.stdout.write("this builds the example then benches; expect a few minutes...\n");
+    const r = spawnSync("cargo", args, { cwd: engineDir, encoding: "utf8", maxBuffer: 64 << 20, stdio: ["inherit", "pipe", "inherit"] });
+    process.stdout.write("cargo finished; parsing output...\n");
     if (r.status !== 0) {
         process.stderr.write(r.stdout ?? "");
         process.stderr.write(r.stderr ?? "");
@@ -142,9 +146,11 @@ function table(rows: Row[], group: Group, metric: "thrpt" | "time", patterns: Ma
     return [header, sep, ...body].join("\n");
 }
 
+process.stdout.write("loading patterns...\n");
 const patterns = patternByName();
 const rows = parse(run());
 if (rows.length === 0) throw new Error("no benchmark rows parsed");
+process.stdout.write(`parsed ${rows.length} benchmark rows\n`);
 
 const md = [
     "resharp runs with `UnicodeMode::Full` and `multiline(false)` to match the other engines. Ratios are vs the fastest per row.",
@@ -160,6 +166,7 @@ const md = [
 ].join("\n");
 
 writeFileSync(outFile, md);
+process.stdout.write(`wrote ${outFile}\n`);
 
 const readme = readFileSync(readmeFile, "utf8");
 const b = readme.indexOf(BEGIN);

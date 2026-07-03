@@ -603,13 +603,17 @@ impl LDFA {
             self.skip_ids[state] = sid;
             return;
         }
-        if !self.is_forward {
-            if let Some(sid) = self.try_build_offset_skip(b, node) {
-                self.skip_ids[state] = sid;
-            }
-        }
+        // temporary: reverse offset skip disabled (unsound for states masking a
+        // wildcard `_*` self-loop behind an active match). Re-enable once
+        // extend_chain/node_self_loop reject such states.
+        // if !self.is_forward {
+        //     if let Some(sid) = self.try_build_offset_skip(b, node) {
+        //         self.skip_ids[state] = sid;
+        //     }
+        // }
     }
 
+    #[allow(dead_code)]
     fn try_build_offset_skip(&mut self, b: &mut RegexBuilder, node: NodeId) -> Option<u8> {
         const MAX_DEPTH: usize = 3;
         if b.get_nulls_id(node) != NullsId::EMPTY {

@@ -4287,3 +4287,32 @@ fn class_plus_fast_path() {
         }
     }
 }
+
+#[test]
+fn bug07_lowerbound_1_repeat_after_overlapping_prefix() {
+    let cases: &[(&str, &[u8], usize)] = &[
+        (r"[ab]\n[b]+\n", b"a\nb\n", 1),
+        (r"[ab]\n[b]{1,}\n", b"a\nb\n", 1),
+        (r"[ab]\n[b][b]*\n", b"a\nb\n", 1),
+        (r"[ab]\n[b]+\n", b"a\nbb\n", 1),
+        (r"[ab]\n[b]*\n", b"a\nb\n", 1),
+        (r"[ab]\n[b]{2,}\n", b"a\nbb\n", 1),
+        (r"a\n[b]+\n", b"a\nb\n", 1),
+        (r"(.+\r?\n)[-=]+\r?\n", b"title\n===\nx", 1),
+    ];
+    for &(pat, hay, want) in cases {
+        let re = Regex::new(pat).unwrap();
+        assert_eq!(
+            re.is_match(hay).unwrap(),
+            want > 0,
+            "is_match pat={pat:?} hay={:?}",
+            String::from_utf8_lossy(hay)
+        );
+        assert_eq!(
+            re.find_all(hay).unwrap().len(),
+            want,
+            "find_all pat={pat:?} hay={:?}",
+            String::from_utf8_lossy(hay)
+        );
+    }
+}
