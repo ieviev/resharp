@@ -603,17 +603,13 @@ impl LDFA {
             self.skip_ids[state] = sid;
             return;
         }
-        // temporary: reverse offset skip disabled (unsound for states masking a
-        // wildcard `_*` self-loop behind an active match). Re-enable once
-        // extend_chain/node_self_loop reject such states.
-        // if !self.is_forward {
-        //     if let Some(sid) = self.try_build_offset_skip(b, node) {
-        //         self.skip_ids[state] = sid;
-        //     }
-        // }
+        if !self.is_forward {
+            if let Some(sid) = self.try_build_offset_skip(b, node) {
+                self.skip_ids[state] = sid;
+            }
+        }
     }
 
-    #[allow(dead_code)]
     fn try_build_offset_skip(&mut self, b: &mut RegexBuilder, node: NodeId) -> Option<u8> {
         const MAX_DEPTH: usize = 3;
         if b.get_nulls_id(node) != NullsId::EMPTY {
@@ -627,8 +623,12 @@ impl LDFA {
             .iter()
             .fold(TSetId::EMPTY, |acc, &(s, _)| b.solver().or_id(acc, s));
         let mut best: Option<Vec<TSetId>> = None;
+        let self_loop = node_self_loop(b, node);
         for &(s0, m0) in &branches {
             let not_s0 = b.solver().not_id(s0);
+            if b.solver().and_id(self_loop, not_s0) != TSetId::EMPTY {
+                continue;
+            }
             let bound = b.solver().and_id(all_adv, not_s0);
             if let Some(chain) = extend_chain(b, node, s0, m0, bound, MAX_DEPTH) {
                 let take = match &best {
@@ -707,13 +707,19 @@ impl LDFA {
         b: &mut RegexBuilder,
         search: crate::accel::RevTeddySearch,
         resume: u32,
+        window: u32,
     ) -> Result<(), Error> {
         self.create_state(b, self.pruned)?;
         let skipper = if resume == 0 {
             Skipper::Prefix(search)
         } else {
             self.create_state(b, resume as u16)?;
-            Skipper::Inner { search, resume }
+            Skipper::Inner {
+                search,
+                resume,
+                pruned: self.pruned as u32,
+                window,
+            }
         };
         self.skip_searchers.push(skipper);
         let sid = self.skip_searchers.len() as u8;
@@ -914,7 +920,11 @@ impl LDFA {
         };
 
         let mt = self.mt_lookup[data[pos_begin] as usize];
-        let mut curr = self.begin_table[mt as usize] as u32;
+        let mut curr = if pos_begin == 0 {
+            self.begin_table[mt as usize] as u32
+        } else {
+            self.lazy_transition(b, self.pruned, mt as u32)? as u32
+        };
         #[cfg(feature = "debug")]
         eprintln!("[sfo] begin curr={curr} max_end={max_end}");
         if curr <= DFA_DEAD as u32 {

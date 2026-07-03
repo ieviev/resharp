@@ -1122,6 +1122,62 @@ fn convergence_right_node(b: &RegexBuilder, fwd_node: NodeId, run: &[TSetId]) ->
 }
 
 #[cfg(feature = "convergence_prefix")]
+fn conv_leading_set(b: &mut RegexBuilder, node: NodeId) -> Result<TSetId, Error> {
+    let d = b.der(node, Nullability::CENTER)?;
+    let mut stack = vec![(d, TSetId::FULL)];
+    let mut lead = TSetId::EMPTY;
+    b.iter_sat(&mut stack, &mut |bb, n, set| {
+        if n != NodeId::BOT {
+            lead = bb.solver().or_id(lead, set);
+        }
+    });
+    Ok(lead)
+}
+
+fn conv_der_through_set(b: &mut RegexBuilder, node: NodeId, s: TSetId) -> Result<NodeId, Error> {
+    let der = b.der(node, Nullability::CENTER)?;
+    let mut targets: Vec<(NodeId, TSetId)> = Vec::new();
+    b.collect_der_targets(der, TSetId::FULL, &mut targets);
+    for (t, set) in targets {
+        if t != NodeId::BOT && b.solver().and_id(set, s) != TSetId::EMPTY {
+            return Ok(t);
+        }
+    }
+    Ok(NodeId::BOT)
+}
+
+fn conv_run_boundary_ambiguous(
+    b: &mut RegexBuilder,
+    conv_node: NodeId,
+    run: &[TSetId],
+    b_node: NodeId,
+) -> Result<bool, Error> {
+    if run.is_empty() {
+        return Ok(false);
+    }
+    let mut run_core = TSetId::FULL;
+    for &s in run {
+        run_core = b.solver().and_id(run_core, s);
+    }
+    if run_core == TSetId::EMPTY {
+        return Ok(false);
+    }
+    let b_lead = conv_leading_set(b, b_node)?;
+    if b.solver().and_id(run_core, b_lead) == TSetId::EMPTY {
+        return Ok(false);
+    }
+    let mut left = conv_node;
+    for &s in run.iter().rev() {
+        left = conv_der_through_set(b, left, s)?;
+        if left == NodeId::BOT {
+            return Ok(true);
+        }
+    }
+    let left_lead = conv_leading_set(b, left)?;
+    Ok(b.solver().and_id(run_core, left_lead) == TSetId::EMPTY)
+}
+
+#[cfg(feature = "convergence_prefix")]
 fn try_convergence_prefix(
     b: &mut RegexBuilder,
     fwd_node: NodeId,
@@ -1146,6 +1202,13 @@ fn try_convergence_prefix(
     let Some(b_node) = convergence_right_node(b, fwd_node, &run) else {
         return Ok(None);
     };
+    let (b_min, b_max) = b.get_min_max_length(b_node);
+    if b_max == u32::MAX
+        && (b_min >= 2 || b_node.contains_lookaround(b))
+        && conv_run_boundary_ambiguous(b, conv_node, &run, b_node)?
+    {
+        return Ok(None);
+    }
     if !force && !resume_loops_die_fast(b, conv_node, &run)? {
         return Ok(None);
     }

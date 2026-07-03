@@ -707,8 +707,11 @@ impl Regex {
                 filled.push(*m);
                 cursor = m.end.max(m.start + 1);
             }
-            for pos in cursor..=len {
+            for pos in cursor..len {
                 filled.push(Match { start: pos, end: pos });
+            }
+            if filled.last().map(|x| x.start) != Some(len) {
+                filled.push(Match { start: len, end: len });
             }
             return Ok(filled);
         }

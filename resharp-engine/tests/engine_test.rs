@@ -2788,6 +2788,80 @@ fn convergence_rejected_for_interior_unbounded_verify() {
 
 #[cfg(feature = "convergence_prefix")]
 #[test]
+fn convergence_unbounded_all_adjacent_literals_to_pos_one() {
+    let re = Regex::new(r"(\S+)/(\S+)").unwrap();
+    assert!(re.uses_convergence_prefix());
+    let cases: &[(&[u8], &[(usize, usize)])] = &[
+        (b"///", &[(0, 3)]),
+        (b"/// ", &[(0, 3)]),
+        (b"////", &[(0, 4)]),
+    ];
+    for (hay, want) in cases {
+        let got: Vec<(usize, usize)> = re
+            .find_all(hay)
+            .unwrap()
+            .into_iter()
+            .map(|m| (m.start, m.end))
+            .collect();
+        assert_eq!(got, *want, "hay={:?}", std::str::from_utf8(hay).unwrap());
+    }
+}
+
+#[cfg(feature = "convergence_prefix")]
+#[test]
+fn convergence_multibyte_class_variable_bounded_right() {
+    let re = Regex::new(r"(\S):(\S{1,3})").unwrap();
+    assert!(re.uses_convergence_prefix());
+    let cases: &[(&[u8], &[(usize, usize)])] = &[
+        (b"x:19 ", &[(0, 4)]),
+        (b"x:1 ", &[(0, 3)]),
+        (b"a:b ", &[(0, 3)]),
+        (b":::", &[(0, 3)]),
+        (b"a:bc", &[(0, 4)]),
+        ("é:ab ".as_bytes(), &[(0, 5)]),
+        ("café:x t".as_bytes(), &[(3, 7)]),
+        (b"  a:bb  z:9", &[(2, 6), (8, 11)]),
+    ];
+    for (hay, want) in cases {
+        let got: Vec<(usize, usize)> = re
+            .find_all(hay)
+            .unwrap()
+            .into_iter()
+            .map(|m| (m.start, m.end))
+            .collect();
+        assert_eq!(got, *want, "hay={:?}", std::str::from_utf8(hay).unwrap());
+    }
+}
+
+#[cfg(feature = "convergence_prefix")]
+#[test]
+fn convergence_adjacent_literal_overlap_seeds_all_starts() {
+    let re = Regex::new("a?+:..").unwrap();
+    assert!(re.uses_convergence_prefix());
+    let cases: &[(&[u8], &[(usize, usize)])] = &[
+        (b"::xy", &[(0, 3)]),
+        (b"z::xy", &[(1, 4)]),
+        (b"zz:xy:xy", &[(2, 5), (5, 8)]),
+        (b":.:.:.", &[(0, 3)]),
+        (b"z:w:xy", &[(1, 4)]),
+    ];
+    for (hay, want) in cases {
+        let got: Vec<(usize, usize)> = re
+            .find_all(hay)
+            .unwrap()
+            .into_iter()
+            .map(|m| (m.start, m.end))
+            .collect();
+        assert_eq!(
+            got, *want,
+            "pat=a?+:.. hay={:?}: convergence skip dropped an overlapping start",
+            std::str::from_utf8(hay).unwrap()
+        );
+    }
+}
+
+#[cfg(feature = "convergence_prefix")]
+#[test]
 fn convergence_rejected_for_bounded_short_no_anchor() {
     use resharp::UnicodeMode;
     let no_conv: &[&str] = &[
@@ -3687,6 +3761,192 @@ fn bug19_optional_anchor_before_class_same_matches() {
 }
 
 #[test]
+fn bug06_universal_class_matches_full_codepoint_in_unicode_modes() {
+    use resharp::UnicodeMode;
+    let ms = |p: &str, h: &[u8], mode: UnicodeMode| -> Vec<(usize, usize)> {
+        Regex::with_options(p, resharp::RegexOptions::default().unicode(mode))
+            .unwrap()
+            .find_all(h)
+            .unwrap()
+            .iter()
+            .map(|m| (m.start, m.end))
+            .collect()
+    };
+    let euro = "\u{20AC}".as_bytes();
+    assert_eq!(euro.len(), 3);
+    for mode in [UnicodeMode::Javascript, UnicodeMode::Full] {
+        assert_eq!(ms(r"[\s\S]", euro, mode), vec![(0, 3)], "[\\s\\S] must consume one codepoint in {mode:?}");
+        assert_eq!(ms(r"[\s\S]", euro, mode), ms(r".", euro, mode), "[\\s\\S] must agree with . in {mode:?}");
+        assert_eq!(ms(r"%([\dA-F]{2})|[\s\S]", euro, mode), vec![(0, 3)]);
+        assert_eq!(ms(r"[\s\S]{2}", "\u{20AC}\u{20AC}".as_bytes(), mode), vec![(0, 6)]);
+        assert_eq!(ms(r"[\s\S]*", euro, mode), vec![(0, 3), (3, 3)]);
+        assert_eq!(
+            ms(r"[\s\S]*", &[0xFFu8, 0x80, b'a'], mode),
+            vec![(0, 0), (1, 1), (2, 3), (3, 3)],
+            "[\\s\\S]* is valid-UTF-8 constrained (over-approx), not byte-universal, in {mode:?}"
+        );
+    }
+    for mode in [UnicodeMode::Ascii, UnicodeMode::Default] {
+        assert_eq!(ms(r"[\s\S]", euro, mode), vec![(0, 1), (1, 2), (2, 3)], "byte modes unchanged: {mode:?}");
+    }
+}
+
+#[test]
+fn bug09_optional_group_keeps_start_anchor() {
+    let ms = |p: &str, h: &[u8]| -> Vec<(usize, usize)> {
+        Regex::new(p)
+            .unwrap()
+            .find_all(h)
+            .unwrap()
+            .iter()
+            .map(|m| (m.start, m.end))
+            .collect()
+    };
+    assert_eq!(
+        ms(r"(\Aab|xy)?", b"ababxy"),
+        vec![(0, 2), (2, 2), (3, 3), (4, 6), (6, 6)],
+        "\\A inside optional group must fire only at absolute offset 0"
+    );
+    assert_eq!(
+        ms(r"(\Aa|b)?", b"aabaab"),
+        vec![(0, 1), (1, 1), (2, 3), (3, 3), (4, 4), (5, 6), (6, 6)]
+    );
+    assert_eq!(ms(r"(\Aab|xy)", b"ababxy"), vec![(0, 2), (4, 6)]);
+    assert_eq!(ms(r"\Aab|xy", b"ababxy"), vec![(0, 2), (4, 6)]);
+}
+
+#[cfg(feature = "convergence_prefix")]
+#[test]
+fn bug08_periodic_literal_run_unbounded_b_not_convergence() {
+    use resharp::{RegexOptions, UnicodeMode};
+    let ms = |p: &str, h: &[u8]| -> Vec<(usize, usize)> {
+        Regex::with_options(p, RegexOptions::default().unicode(UnicodeMode::Javascript))
+            .unwrap()
+            .find_all(h)
+            .unwrap()
+            .iter()
+            .map(|m| (m.start, m.end))
+            .collect()
+    };
+    let p = r"\n[ ]*##([^\n]+)(?=\n)";
+    let re =
+        Regex::with_options(p, RegexOptions::default().unicode(UnicodeMode::Javascript)).unwrap();
+    assert_ne!(
+        re.prefix_kind_name(),
+        Some("Convergence"),
+        "periodic literal run (##) with unbounded right part must not use convergence: \
+         window=0 cannot seed the overlapping earlier run occurrence"
+    );
+    for (hay, want) in [
+        (&b"\n##a\n"[..], vec![(0usize, 4usize)]),
+        (&b"\n###a\n"[..], vec![(0, 5)]),
+        (&b"\n####a\n"[..], vec![(0, 6)]),
+        (&b"\n#####a\n"[..], vec![(0, 7)]),
+    ] {
+        assert_eq!(ms(p, hay), want, "input {:?}", String::from_utf8_lossy(hay));
+    }
+    let ab = Regex::with_options(
+        r"\n[ ]*ab([^\n]+)(?=\n)",
+        RegexOptions::default().unicode(UnicodeMode::Javascript),
+    )
+    .unwrap();
+    assert_eq!(
+        ab.prefix_kind_name(),
+        Some("Convergence"),
+        "non-periodic literal run (ab) with unbounded right part stays convergence"
+    );
+    assert_eq!(ms(r"\n[ ]*ab([^\n]+)(?=\n)", b"\nabcd\n"), vec![(0, 5)]);
+}
+
+#[test]
+fn bug10_single_byte_literal_in_right_part_leading_set_not_convergence() {
+    use resharp::{RegexOptions, UnicodeMode};
+    let ms = |p: &str, h: &[u8]| -> Vec<(usize, usize)> {
+        Regex::with_options(p, RegexOptions::default().unicode(UnicodeMode::Javascript))
+            .unwrap()
+            .find_all(h)
+            .unwrap()
+            .iter()
+            .map(|m| (m.start, m.end))
+            .collect()
+    };
+    let p = r"[a-z]+:([^;]+)(?!;)";
+    let re =
+        Regex::with_options(p, RegexOptions::default().unicode(UnicodeMode::Javascript)).unwrap();
+    assert_ne!(
+        re.prefix_kind_name(),
+        Some("Convergence"),
+        "single-byte literal (:) whose right part [^;]+ can start with that same byte must not \
+         use convergence: window=0 loses an earlier overlapping literal placement (`::` in input)"
+    );
+    for (hay, want) in [
+        (&b"a::cm;"[..], vec![(0usize, 4usize)]),
+        (&b"a::c;"[..], vec![(0, 3)]),
+        (&b"a:cm;"[..], vec![(0, 3)]),
+    ] {
+        assert_eq!(ms(p, hay), want, "input {:?}", String::from_utf8_lossy(hay));
+    }
+    assert_eq!(ms(r"[a-z]+=([^&]+)", b"a==v&"), vec![(0, 4)]);
+}
+
+#[test]
+fn bug11_unbounded_right_min_two_around_shared_literal_not_convergence() {
+    use resharp::{RegexOptions, UnicodeMode};
+    let ms = |p: &str, h: &[u8]| -> Vec<(usize, usize)> {
+        Regex::with_options(p, RegexOptions::default().unicode(UnicodeMode::Javascript))
+            .unwrap()
+            .find_all(h)
+            .unwrap()
+            .iter()
+            .map(|m| (m.start, m.end))
+            .collect()
+    };
+    let p = r"\w{2,}\.[^\s]{2,}";
+    let re =
+        Regex::with_options(p, RegexOptions::default().unicode(UnicodeMode::Javascript)).unwrap();
+    assert_ne!(
+        re.prefix_kind_name(),
+        Some("Convergence"),
+        "literal (.) shared with the right part [^\\s]{{2,}} whose minimum length is >= 2 must not \
+         use convergence: window=0 recovery has an off-by-one hole of width (b_min-1) lengths"
+    );
+    for n in 3..=8 {
+        let hay = format!("aa{}", ".".repeat(n));
+        assert_eq!(
+            ms(p, hay.as_bytes()),
+            vec![(0usize, n + 2)],
+            "input {hay:?}"
+        );
+    }
+    assert_eq!(ms(p, b"aa.."), Vec::<(usize, usize)>::new());
+    assert_eq!(ms(r"\w+\.[^\s]{2,}", b"aa...."), vec![(0, 6)]);
+}
+
+#[test]
+fn bug12_repeated_literal_single_class_then_plus_no_lookahead_not_convergence() {
+    use resharp::{RegexOptions, UnicodeMode};
+    let ms = |p: &str, h: &[u8]| -> Vec<(usize, usize)> {
+        Regex::with_options(p, RegexOptions::default().unicode(UnicodeMode::Javascript))
+            .unwrap()
+            .find_all(h)
+            .unwrap()
+            .iter()
+            .map(|m| (m.start, m.end))
+            .collect()
+    };
+    for (p, hay, want) in [
+        (r"[a-z]+=[^\s]\S+", &b"x==aa"[..], vec![(0usize, 5usize)]),
+        (r"[a-z]+:[^\s]\S+", &b"x::aa"[..], vec![(0, 5)]),
+        (r"[a-z]+\.[^\s]\S+", &b"x..aa"[..], vec![(0, 5)]),
+        (r"a+z[^\s]\S+", &b"aazzaa"[..], vec![(0, 6)]),
+        (r"a+z[^\s]\S+", &b"aazaa"[..], vec![(0, 5)]),
+        (r#"[a-z]+=(?:"(?:[^"\\]|\\.)+"|[^"]\S+)"#, &b"s==name))"[..], vec![(0, 9)]),
+    ] {
+        assert_eq!(ms(p, hay), want, "pat {p:?} input {:?}", String::from_utf8_lossy(hay));
+    }
+}
+
+#[test]
 fn bug20_find_anchored_respects_leading_assertion_at_begin() {
     let re = Regex::new(r"\B0").unwrap();
     let hay = b"00";
@@ -4315,4 +4575,17 @@ fn bug07_lowerbound_1_repeat_after_overlapping_prefix() {
             String::from_utf8_lossy(hay)
         );
     }
+}
+
+#[test]
+fn bug09_regex_instance_not_poisoned_after_match() {
+    let re = Regex::new(r"([\(,])\s+|\s+([\),])").unwrap();
+    assert!(re.is_match(b"a, b").unwrap());
+    for _ in 0..6 {
+        assert_eq!(re.find_all(b"a, b").unwrap().len(), 1);
+    }
+    let re2 = Regex::new(r"([\(,])\s+|\s+([\),])").unwrap();
+    assert_eq!(re2.find_all(b"a, b").unwrap().len(), 1);
+    assert_eq!(re2.find_all(b"zzzz").unwrap().len(), 0);
+    assert_eq!(re2.find_all(b"a, b").unwrap().len(), 1);
 }

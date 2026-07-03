@@ -139,6 +139,42 @@ fn class_set_item_word_kind(item: &regex_syntax::ast::ClassSetItem) -> WordCharK
     }
 }
 
+fn utf8_codepoint_node(tb: &mut TB<'_>) -> NodeId {
+    let ascii = tb.mk_range_u8(0, 127);
+    let beta = tb.mk_range_u8(0x80, 0xBF);
+    let c0 = tb.mk_range_u8(0xC0, 0xDF);
+    let c0s = tb.mk_concats([c0, beta].into_iter());
+    let e0 = tb.mk_range_u8(0xE0, 0xEF);
+    let e0s = tb.mk_concats([e0, beta, beta].into_iter());
+    let f0 = tb.mk_range_u8(0xF0, 0xF7);
+    let f0s = tb.mk_concats([f0, beta, beta, beta].into_iter());
+    tb.mk_unions([ascii, c0s, e0s, f0s].into_iter())
+}
+
+fn unicode_ranges_to_node(ranges: &[hir::ClassUnicodeRange], tb: &mut TB<'_>) -> NodeId {
+    let mut nodes = Vec::new();
+    for range in ranges {
+        for seq in Utf8Sequences::new(range.start(), range.end()) {
+            let sl = seq.as_slice();
+            let bytes: Vec<_> = sl.iter().map(|s| (s.start, s.end)).collect();
+            let node = match bytes.len() {
+                1 => tb.mk_range_u8(bytes[0].0, bytes[0].1),
+                n => {
+                    let last = tb.mk_range_u8(bytes[n - 1].0, bytes[n - 1].1);
+                    let mut conc = last;
+                    for i in (0..n - 1).rev() {
+                        let b = tb.mk_range_u8(bytes[i].0, bytes[i].1);
+                        conc = tb.mk_concat(b, conc);
+                    }
+                    conc
+                }
+            };
+            nodes.push(node);
+        }
+    }
+    tb.mk_unions(nodes.into_iter())
+}
+
 fn class_bracketed_word_kind(c: &regex_syntax::ast::ClassBracketed) -> WordCharKind {
     use regex_syntax::ast::{ClassPerlKind, ClassSet, ClassSetItem};
     use WordCharKind::*;
@@ -1160,6 +1196,10 @@ impl<'s> ResharpParser<'s> {
         })
     }
 
+    fn any_codepoint_node(&self, tb: &mut TB<'_>) -> NodeId {
+        utf8_codepoint_node(tb)
+    }
+
     fn hir_to_node_id(&self, hir: &hir::Hir, tb: &mut TB<'s>) -> Result<NodeId> {
         match hir.kind() {
             hir::HirKind::Empty => Ok(NodeId::EPS),
@@ -1175,35 +1215,7 @@ impl<'s> ResharpParser<'s> {
             }
             hir::HirKind::Class(class) => match class {
                 hir::Class::Unicode(class_unicode) => {
-                    let ranges = class_unicode.ranges();
-                    if ranges.len() == 1
-                        && ranges[0].start() == '\u{0}'
-                        && ranges[0].end() == '\u{10FFFF}'
-                    {
-                        return Ok(tb.mk_range_u8(0, 255));
-                    }
-                    let mut nodes = Vec::new();
-                    for range in ranges {
-                        for seq in Utf8Sequences::new(range.start(), range.end()) {
-                            let sl = seq.as_slice();
-                            let bytes: Vec<_> = sl.iter().map(|s| (s.start, s.end)).collect();
-                            let node = match bytes.len() {
-                                1 => tb.mk_range_u8(bytes[0].0, bytes[0].1),
-                                n => {
-                                    let last = tb.mk_range_u8(bytes[n - 1].0, bytes[n - 1].1);
-                                    let mut conc = last;
-                                    for i in (0..n - 1).rev() {
-                                        let b = tb.mk_range_u8(bytes[i].0, bytes[i].1);
-                                        conc = tb.mk_concat(b, conc);
-                                    }
-                                    conc
-                                }
-                            };
-                            nodes.push(node);
-                        }
-                    }
-                    let merged = tb.mk_unions(nodes.into_iter());
-                    Ok(merged)
+                    Ok(unicode_ranges_to_node(class_unicode.ranges(), tb))
                 }
                 hir::Class::Bytes(class_bytes) => {
                     let ranges = class_bytes.ranges();
@@ -2035,17 +2047,7 @@ impl<'s> ResharpParser<'s> {
                             // \p{ascii} for ascii, \p{ascii}&\p{Letter} => [A-Za-z]
                             "ascii" => return Ok(tb.mk_range_u8(0, 127)),
                             // a single valid utf8 codepoint; \p{utf8}*&~(a) => non a, but valid utf8
-                            "utf8" => {
-                                let ascii = tb.mk_range_u8(0, 127);
-                                let beta = tb.mk_range_u8(128, 0xBF);
-                                let c0 = tb.mk_range_u8(0xC0, 0xDF);
-                                let c0s = tb.mk_concats([c0, beta].into_iter());
-                                let e0 = tb.mk_range_u8(0xE0, 0xEF);
-                                let e0s = tb.mk_concats([e0, beta, beta].into_iter());
-                                let f0 = tb.mk_range_u8(0xF0, 0xF7);
-                                let f0s = tb.mk_concats([f0, beta, beta, beta].into_iter());
-                                return Ok(tb.mk_unions([ascii, c0s, e0s, f0s].into_iter()));
-                            }
+                            "utf8" => return Ok(utf8_codepoint_node(tb)),
                             "hex" => {
                                 let nums = tb.mk_range_u8(b'0', b'9');
                                 let lets = tb.mk_range_u8(b'a', b'f');
@@ -2065,6 +2067,9 @@ impl<'s> ResharpParser<'s> {
             Ast::ClassBracketed(c) => match &c.kind {
                 regex_syntax::ast::ClassSet::Item(item) => {
                     if !c.negated && is_universal_perl_pair(item) {
+                        if self.global_ascii_perl || self.global_full_unicode {
+                            return Ok(self.any_codepoint_node(tb));
+                        }
                         return Ok(NodeId::TOP);
                     }
                     if let regex_syntax::ast::ClassSetItem::Perl(p) = item {
@@ -3265,8 +3270,6 @@ impl<'s> ResharpParser<'s> {
     }
 }
 
-/// `[\s\S]`, `[\w\W]`, `[\d\D]` etc into `_` canonicalization.
-/// should really be done as a u32 BDD but good enough for now
 fn is_universal_perl_pair(item: &regex_syntax::ast::ClassSetItem) -> bool {
     use regex_syntax::ast::ClassSetItem;
     let items = match item {

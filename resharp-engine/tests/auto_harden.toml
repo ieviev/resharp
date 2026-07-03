@@ -72,7 +72,7 @@ hardened = false
 
 [[test]]
 pattern = '^([\|\s+\S+]+\s+\|\s*)$'
-hardened = true
+hardened = false
 
 [[test]]
 pattern = 'x(a|_*b)'

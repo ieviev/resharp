@@ -154,7 +154,7 @@ checksum = "dc897dd8d9e8bd1ed8cdad82b5966c3e0ecae09fb1907d58efaa013543185d0a"
 
 [[package]]
 name = "resharp"
-version = "0.6.12"
+version = "0.6.15"
 dependencies = [
  "resharp-algebra",
  "resharp-parser",
@@ -163,7 +163,7 @@ dependencies = [
 
 [[package]]
 name = "resharp-algebra"
-version = "0.6.12"
+version = "0.6.15"
 dependencies = [
  "rustc-hash",
 ]
@@ -180,7 +180,7 @@ dependencies = [
 
 [[package]]
 name = "resharp-parser"
-version = "0.6.12"
+version = "0.6.15"
 dependencies = [
  "regex-syntax",
  "resharp-algebra",

@@ -5,7 +5,12 @@ pub use crate::simd::TSet;
 pub enum Skipper {
     State(MintermSearchValue),
     Prefix(RevTeddySearch),
-    Inner { search: RevTeddySearch, resume: u32 },
+    Inner {
+        search: RevTeddySearch,
+        resume: u32,
+        pruned: u32,
+        window: u32,
+    },
 }
 
 #[cfg_attr(feature = "serialize", derive(serde::Serialize, serde::Deserialize))]

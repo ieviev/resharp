@@ -138,38 +138,56 @@ fn skip_rev(
     conv_b: &mut Option<&mut crate::ldfa::LDFA>,
 ) -> Result<SkipStep, crate::Error> {
     match skipper {
-        Skipper::Inner { search, resume } => {
+        Skipper::Inner {
+            search,
+            resume,
+            pruned,
+            window,
+        } => {
             let resume = *resume;
-            match search.find_rev(data, *pos) {
-                Some(skip_pos) if skip_pos >= *prev_entry => {
-                    *prev_entry = usize::MAX;
-                    if skip_pos == 0 {
-                        return Ok(SkipStep::Done);
-                    }
-                    *pos = skip_pos - 1;
-                    Ok(SkipStep::Continue)
-                }
-                Some(skip_pos) => {
-                    let cb = conv_b.as_deref_mut().unwrap();
-                    if cb.conv_start_matches(b, skip_pos + 1, data)? {
-                        *prev_entry = skip_pos;
-                        *curr = resume;
-                        *pos = skip_pos + 1;
-                        if skip_pos == 0 {
-                            Ok(SkipStep::Continue)
-                        } else {
-                            Ok(SkipStep::Fall)
+            let pruned = *pruned;
+            let window = *window as usize;
+            let orig_pos = *pos;
+            let mut search_from = *pos;
+            loop {
+                match search.find_rev(data, search_from) {
+                    Some(skip_pos) if skip_pos >= *prev_entry => {
+                        if *pos > skip_pos {
+                            return Ok(SkipStep::Fall);
                         }
-                    } else if skip_pos == 0 {
-                        Ok(SkipStep::Done)
-                    } else {
+                        *prev_entry = usize::MAX;
+                        if skip_pos == 0 {
+                            return Ok(SkipStep::Done);
+                        }
                         *pos = skip_pos - 1;
-                        Ok(SkipStep::Continue)
+                        return Ok(SkipStep::Continue);
                     }
-                }
-                None => {
-                    *pos = 0;
-                    Ok(SkipStep::Continue)
+                    Some(skip_pos) => {
+                        let cb = conv_b.as_deref_mut().unwrap();
+                        if cb.conv_start_matches(b, skip_pos + 1, data)? {
+                            *prev_entry = skip_pos;
+                            let entry = (skip_pos + 1 + window).min(orig_pos).max(skip_pos + 1);
+                            *pos = entry;
+                            if entry > skip_pos + 1 {
+                                *curr = pruned;
+                                return Ok(SkipStep::Fall);
+                            }
+                            *curr = resume;
+                            return Ok(if skip_pos == 0 {
+                                SkipStep::Continue
+                            } else {
+                                SkipStep::Fall
+                            });
+                        } else if skip_pos == 0 {
+                            return Ok(SkipStep::Done);
+                        } else {
+                            search_from = skip_pos - 1;
+                        }
+                    }
+                    None => {
+                        *pos = 0;
+                        return Ok(SkipStep::Continue);
+                    }
                 }
             }
         }

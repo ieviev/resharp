@@ -1167,15 +1167,19 @@ impl Regex {
                 }
                 None => 0,
             };
+            #[allow(unused_mut)]
+            let mut window = 0u32;
             #[cfg(feature = "convergence_prefix")]
             if resume != 0 {
                 let b_node = b_node.expect(
                     "convergence prefix (resume != 0) must carry its right-side `b` node",
                 );
+                let b_max = b.get_min_max_length(b_node).1;
+                window = if b_max == u32::MAX { 0 } else { b_max };
                 conv_b = Some(ldfa::LDFA::new_fwd(&mut b, b_node, max_cap)?);
                 conv_prefix = true;
             }
-            rev_ts.install_prefix(&mut b, search, resume as u32)?;
+            rev_ts.install_prefix(&mut b, search, resume as u32, window)?;
         }
         if !b.starts_with_ts(ts_rev_start) {
             rev_ts.ensure_dead_skip();
