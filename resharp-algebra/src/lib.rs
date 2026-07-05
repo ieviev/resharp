@@ -1793,14 +1793,7 @@ impl RegexBuilder {
                 } else {
                     let rels = NullsId(inst.extra);
                     let body_nulls = self.get_nulls_id(inst.left);
-                    let rel_vals: Vec<u32> =
-                        self.mb.nb.get_set_ref(rels).iter().rev().map(|ns| ns.rel).collect();
-                    let mut combined = NullsId::EMPTY;
-                    for &rel in &rel_vals {
-                        let part = self.mb.nb.add_rel(body_nulls, rel);
-                        combined = self.mb.nb.or_id(combined, part);
-                    }
-                    combined
+                    self.mb.nb.union_shifted(body_nulls, rels)
                 };
                 let left_nullability = inst.left.nullability(self);
                 let nulls_right = self.get_nulls_id_w_mask(inst.right, left_nullability);
@@ -2150,21 +2143,16 @@ impl RegexBuilder {
         }
     }
 
-    pub fn nulls_as_vecs(&self) -> Vec<Vec<NullState>> {
-        self.mb
-            .nb
-            .array
-            .iter()
-            .map(|set| set.iter().cloned().collect())
-            .collect()
+    pub fn nulls_as_vecs(&mut self) -> Vec<Vec<NullState>> {
+        self.mb.nb.nulls_as_vecs()
     }
 
     pub fn nulls_count(&self) -> usize {
-        self.mb.nb.array.len()
+        self.mb.nb.nulls_count()
     }
 
-    pub fn nulls_entry_vec(&self, id: u32) -> Vec<NullState> {
-        self.mb.nb.array[id as usize].iter().cloned().collect()
+    pub fn nulls_entry_vec(&mut self, id: u32) -> Vec<NullState> {
+        self.mb.nb.nulls_entry_states(id)
     }
 
     pub fn center_nulls_id(&mut self, nid: NullsId) -> NullsId {
@@ -2637,7 +2625,7 @@ impl RegexBuilder {
 
     pub(crate) fn extract_nulls_mask(&mut self, body: NodeId, mask: Nullability) -> NodeId {
         let nid = self.get_nulls_id(body);
-        let nref = self.mb.nb.get_set_ref(nid).clone();
+        let nref = self.mb.nb.nulls_entry_states(nid.0);
         let mut futures = NodeId::BOT;
         for n in nref.iter() {
             if !n.is_mask_nullable(mask) {
@@ -2873,9 +2861,10 @@ impl RegexBuilder {
 
         if left == NodeId::EPS && self.nullability(right) == Nullability::ALWAYS {
             let right_nulls_id = self.get_nulls_id(right);
-            if self.mb.nb.array[right_nulls_id.0 as usize]
-                .iter()
-                .any(|n| n.rel == 0 && n.mask.has(Nullability::ALWAYS))
+            if self
+                .mb
+                .nb
+                .contains_rel_with_mask(right_nulls_id, 0, Nullability::ALWAYS)
             {
                 return Some(right);
             }
@@ -3740,11 +3729,8 @@ impl RegexBuilder {
             return self.mk_lookahead_internal(la_body, la_tail, u32::MAX);
         }
         debug_assert!(lo <= hi);
-        let mut rels = self.mb.nb.add_rel(NullsId::ALWAYS0, lo);
-        for k in lo + 1..=hi {
-            let part = self.mb.nb.add_rel(NullsId::ALWAYS0, k);
-            rels = self.mb.nb.or_id(rels, part);
-        }
+        let shifts = self.mb.nb.single_run(Nullability::ALWAYS, lo, hi);
+        let rels = self.mb.nb.union_shifted(NullsId::ALWAYS0, shifts);
         self.mk_lookahead_nid(la_body, la_tail, rels)
     }
 
@@ -4176,9 +4162,9 @@ impl RegexBuilder {
     }
 
     #[allow(dead_code)]
-    pub fn pp_nulls(&self, node_id: NodeId) -> String {
+    pub fn pp_nulls(&mut self, node_id: NodeId) -> String {
         let nu = self.get_nulls_id(node_id);
-        let nr = self.mb.nb.get_set_ref(nu);
+        let nr = self.mb.nb.nulls_entry_states(nu.0);
         let s1 = format!("{:?}", nr);
         s1
     }
@@ -4424,6 +4410,10 @@ impl RegexBuilder {
     pub fn mk_range_u8(&mut self, start: u8, end_inclusive: u8) -> NodeId {
         let rangeset = self.solver().range_to_set_id(start, end_inclusive);
         self.mk_pred(rangeset)
+    }
+
+    pub fn mk_pred_from_set(&mut self, set: TSetId) -> NodeId {
+        self.mk_pred(set)
     }
 
     pub fn mk_ranges_u8(&mut self, ranges: &[(u8, u8)]) -> NodeId {
@@ -4819,36 +4809,36 @@ impl RegexBuilder {
                         self.mk_union(p, acc)
                     })
                 } else {
-                    let mut rels_map: FxHashMap<NodeId, NullsId> = FxHashMap::default();
+                    // Merge lookaheads sharing BOTH body and tail (not just tail == MISSING):
+                    // `rel`/`extra` never affects which bytes the node accepts, so
+                    // `Lookahead(body,tail,r1) | Lookahead(body,tail,r2)` ==
+                    // `Lookahead(body,tail,r1|r2)`. Keying by (body, tail) collapses the O(k)
+                    // distinct-rels-per-step nodes this shape produces (bug-14 follow-up).
+                    let mut rels_map: FxHashMap<(NodeId, NodeId), NullsId> = FxHashMap::default();
                     for &p in &parts {
-                        if p.is_lookahead(self)
-                            && self.get_lookahead_tail(p) == NodeId::MISSING
-                            && self.get_extra(p) != u32::MAX
-                        {
+                        if p.is_lookahead(self) && self.get_extra(p) != u32::MAX {
                             let body = self.get_lookahead_inner(p);
+                            let tail = self.get_lookahead_tail(p);
                             let rels = NullsId(self.get_extra(p));
                             rels_map
-                                .entry(body)
+                                .entry((body, tail))
                                 .and_modify(|r| *r = self.mb.nb.or_id(*r, rels))
                                 .or_insert(rels);
                         }
                     }
                     let mut la_acc = NodeId::BOT;
-                    for (body, rels) in rels_map {
+                    for ((body, tail), rels) in rels_map {
                         let lo = self.mb.nb.min_rel(rels);
                         let hi = self.mb.nb.max_rel(rels);
                         let node = if lo == hi {
-                            self.mk_lookahead_internal(body, NodeId::MISSING, hi)
+                            self.mk_lookahead_internal(body, tail, hi)
                         } else {
-                            self.mk_lookahead_nid(body, NodeId::MISSING, rels)
+                            self.mk_lookahead_nid(body, tail, rels)
                         };
                         la_acc = self.mk_union(node, la_acc);
                     }
                     parts.iter().rev().fold(la_acc, |acc, &p| {
-                        if p.is_lookahead(self)
-                            && self.get_lookahead_tail(p) == NodeId::MISSING
-                            && self.get_extra(p) != u32::MAX
-                        {
+                        if p.is_lookahead(self) && self.get_extra(p) != u32::MAX {
                             acc
                         } else {
                             self.mk_union(p, acc)

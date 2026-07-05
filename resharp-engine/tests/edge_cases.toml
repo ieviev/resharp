@@ -367,13 +367,43 @@ input = "a\nb\nc"
 matches = []
 
 [[test]]
-name = "bug2_rev_fwd_dot_W_b"
+name = "rev_fwd_disagree_dot_non_word_star_b"
 pattern = '.\W*b+'
 input = "ba"
 matches = []
 
 [[test]]
-name = "bug2_rev_fwd_S_b"
+name = "rev_fwd_disagree_non_space_plus_b"
 pattern = '\S+b'
 input = "b_"
 matches = []
+
+[[test]]
+name = "bounded_range_boundary_convergence_word_boundary_default_opts"
+pattern = '[a-z]+\.[a-z]{2,4}\b'
+input = "a.push _"
+matches = [[0, 6]]
+
+[[test]]
+name = "bounded_lookahead_range_dot_star"
+pattern = 'a(?=.{2,4}z)'
+input = "az azz azzz azzzz azzzzz"
+matches = [[0, 1], [3, 4], [7, 8], [12, 13], [18, 19]]
+
+[[test]]
+name = "bounded_lookahead_range_zero_lo"
+pattern = 'a(?=.{0,3}z)'
+input = "az azz azzz azzzz"
+matches = [[0, 1], [3, 4], [7, 8], [12, 13]]
+
+[[test]]
+name = "bounded_lookbehind_range"
+pattern = '(?<=.{2,4}a)z'
+input = "1az 12az 123az 1234az 12345az"
+matches = [[7, 8], [13, 14], [20, 21], [28, 29]]
+
+[[test]]
+name = "bounded_lookahead_range_fixed_width"
+pattern = 'a(?=x{5,5})'
+input = "axxxxx axxxx"
+matches = [[0, 1]]

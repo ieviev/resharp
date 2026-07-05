@@ -2904,6 +2904,7 @@ fn convergence_rejected_for_bounded_short_no_anchor() {
         r"0.5.0",
         r"([^\\])sinx",
         "[^\"](\"\")",
+        r"\b\s?<\s?\b",
     ];
     for p in no_conv {
         let opts = RegexOptions::default().unicode(UnicodeMode::Javascript);
@@ -2915,7 +2916,7 @@ fn convergence_rejected_for_bounded_short_no_anchor() {
             re.prefix_kind_name()
         );
     }
-    let conv_ok: &[&str] = &[r"\b\s?<\s?\b", r".cjs\b", r"([^\w]|^)tr\("];
+    let conv_ok: &[&str] = &[r".cjs\b", r"([^\w]|^)tr\("];
     for p in conv_ok {
         let opts = RegexOptions::default().unicode(UnicodeMode::Javascript);
         let re = Regex::with_options(p, opts).unwrap();
@@ -3254,7 +3255,7 @@ fn convergence() {
 }
 
 #[test]
-fn bug3_is_match_vs_find_all_z_lookahead() {
+fn is_match_vs_find_all_agree_end_anchor_lookahead() {
     let re = Regex::new(r"(\z|(?=a)\w)").unwrap();
     let hay = b"0";
     let fa = re.find_all(hay).unwrap();
@@ -3264,7 +3265,7 @@ fn bug3_is_match_vs_find_all_z_lookahead() {
 }
 
 #[test]
-fn bug21_bb_not_idempotent() {
+fn double_negation_not_idempotent() {
     let re = Regex::new(r"\Bb").unwrap();
     let r1 = re.is_match(b"ba").unwrap();
     let r2 = re.is_match(b"ba").unwrap();
@@ -3273,7 +3274,7 @@ fn bug21_bb_not_idempotent() {
 }
 
 #[test]
-fn bug3_is_match_vs_find_all_bu() {
+fn is_match_vs_find_all_agree_short_literal() {
     let re = Regex::new(r"\BU").unwrap();
     let hay = b"Ui";
     println!("{:?}","CALL 1");
@@ -3287,7 +3288,7 @@ fn bug3_is_match_vs_find_all_bu() {
 }
 
 #[test]
-fn bug3_is_match_vs_find_all_z_a_empty() {
+fn is_match_vs_find_all_agree_end_anchor_empty() {
     let re = Regex::new(r"\z\A(?:a){0,1}").unwrap();
     let hay = b"";
     let fa = re.find_all(hay).unwrap();
@@ -3297,7 +3298,7 @@ fn bug3_is_match_vs_find_all_z_a_empty() {
 }
 
 #[test]
-fn bug3_is_match_vs_find_all_lookbehind() {
+fn is_match_vs_find_all_agree_lookbehind() {
     let re = Regex::new(r"(?<=\D?[a-c]+0?)b").unwrap();
     let hay = b"ba";
     let fa = re.find_all(hay).unwrap();
@@ -3307,7 +3308,7 @@ fn bug3_is_match_vs_find_all_lookbehind() {
 }
 
 #[test]
-fn bug4_no_match_sentinel_not_leaked_as_match_end() {
+fn no_match_sentinel_not_leaked_as_match_end() {
     let check = |ms: Vec<resharp::Match>, hay: &[u8]| {
         for m in &ms {
             assert!(
@@ -3342,7 +3343,7 @@ fn bug4_no_match_sentinel_not_leaked_as_match_end() {
 }
 
 #[test]
-fn bug7_negated_perl_classes_not_nullable_in_ascii_mode() {
+fn negated_perl_classes_not_nullable_in_ascii_mode() {
     macro_rules! mk {
         ($pat:expr) => {
             resharp::Regex::with_options(
@@ -3372,7 +3373,7 @@ fn bug7_negated_perl_classes_not_nullable_in_ascii_mode() {
 }
 
 #[test]
-fn bug8_default_and_hardened_find_all_agree() {
+fn default_and_hardened_find_all_agree_lookaround() {
     let cases: &[(&str, &[u8])] = &[
         (r"~(_a+)", b"aaa"),
         (r"~(aa*a)", b"aaa"),
@@ -3407,7 +3408,7 @@ fn compile_wildcard_literal_wildcard_terminates() {
 }
 
 #[test]
-fn bug10_default_and_hardened_find_all_agree() {
+fn default_and_hardened_find_all_agree_alternation() {
     let cases: &[(&str, &[u8])] = &[
         (r"(?<=^)~(0+)", b"\n"),
         (r"(?<=^)~(0+)", b"0\n"),
@@ -3610,7 +3611,7 @@ fn find_all_anchor_in_consumed_region() {
 }
 
 #[test]
-fn bug12_neg_lookahead_class_not_nullable() {
+fn neg_lookahead_class_not_nullable() {
     use resharp::Regex;
     let cases: &[&str] = &[
         r"(?!\w)0+",
@@ -3634,7 +3635,7 @@ fn bug12_neg_lookahead_class_not_nullable() {
 }
 
 #[test]
-fn bug14_nullable_sibling_drops_lookbehind_gate() {
+fn nullable_sibling_drops_lookbehind_gate() {
     use resharp::Regex;
     let rejected: &[&str] = &[
         r"(|(?<=[a-z])b)",
@@ -3651,7 +3652,7 @@ fn bug14_nullable_sibling_drops_lookbehind_gate() {
 }
 
 #[test]
-fn bug27_word_boundary_nullable_composition() {
+fn word_boundary_nullable_composition() {
     let re = resharp::Regex::new(r"\ba{0}\b").unwrap();
     assert_eq!(re.is_match(b"").unwrap(), false, r"\ba{{0}}\b on empty: expected false");
     let re = resharp::Regex::new(r"\Ba{0}\z").unwrap();
@@ -3659,7 +3660,7 @@ fn bug27_word_boundary_nullable_composition() {
 }
 
 #[test]
-fn bug22_is_match_fwd_prefix_not_quadratic() {
+fn is_match_fwd_prefix_not_quadratic() {
     let re = Regex::new(r"(a+)+b").unwrap();
     assert_eq!(re.is_match(b"aaab").unwrap(), true);
     assert_eq!(re.is_match(b"ba").unwrap(), false);
@@ -3730,7 +3731,7 @@ fn concat_wide_star_middle_not_hardened_and_linear() {
 }
 
 #[test]
-fn bug18_find_all_not_quadratic_on_always_nullable() {
+fn find_all_not_quadratic_on_always_nullable() {
     let re = Regex::new("~(a+)").unwrap();
     let result = re.find_all(b"aaa").unwrap();
     assert_eq!(
@@ -3753,7 +3754,7 @@ fn bug18_find_all_not_quadratic_on_always_nullable() {
 }
 
 #[test]
-fn bug16_lookahead_in_lookbehind_rejected() {
+fn lookahead_in_lookbehind_rejected() {
     let rejected = [
         "(?<=$)",
         "((?<=$))",
@@ -3774,7 +3775,7 @@ fn bug16_lookahead_in_lookbehind_rejected() {
 }
 
 #[test]
-fn bug19_optional_anchor_before_class_same_matches() {
+fn optional_anchor_before_class_same_matches() {
     let hay: Vec<u8> = (0..256u16).map(|i| i as u8).collect();
     let dflt = resharp::RegexOptions::default();
     let re_anchored = Regex::with_options(r"$?\w", dflt).unwrap();
@@ -3795,7 +3796,7 @@ fn bug19_optional_anchor_before_class_same_matches() {
 }
 
 #[test]
-fn bug06_universal_class_matches_full_codepoint_in_unicode_modes() {
+fn universal_class_matches_full_codepoint_in_unicode_modes() {
     use resharp::UnicodeMode;
     let ms = |p: &str, h: &[u8], mode: UnicodeMode| -> Vec<(usize, usize)> {
         Regex::with_options(p, resharp::RegexOptions::default().unicode(mode))
@@ -3826,7 +3827,7 @@ fn bug06_universal_class_matches_full_codepoint_in_unicode_modes() {
 }
 
 #[test]
-fn bug20_find_anchored_respects_leading_assertion_at_begin() {
+fn find_anchored_respects_leading_assertion_at_begin() {
     let re = Regex::new(r"\B0").unwrap();
     let hay = b"00";
     assert_eq!(
@@ -3861,7 +3862,7 @@ fn bug20_find_anchored_respects_leading_assertion_at_begin() {
 }
 
 #[test]
-fn bug26_end_before_begin_anchor_matches_empty_string() {
+fn end_before_begin_anchor_matches_empty_string() {
     let re = Regex::new(r"\z\A").unwrap();
     assert_eq!(re.is_match(b"").unwrap(), true, "\\z\\A must match empty string");
     assert_eq!(re.is_match(b"x").unwrap(), false, "\\z\\A must not match non-empty");
@@ -3886,12 +3887,12 @@ fn end_before_begin_anchor_reverse_dead_skips() {
 }
 
 #[test]
-fn bug_hardened_complement_find_all_skips_longer_match() {
+fn hardened_complement_find_all_skips_longer_match() {
     check_hardened_vs_normal("~(.*and.*)", b"__A and B");
 }
 
 #[test]
-fn bug25_mutex_poison_does_not_brick_regex() {
+fn mutex_poison_does_not_brick_regex() {
     use std::panic;
     let re = Regex::new(r"\w+b").unwrap();
     let _ = re.find_all(b"ab");
@@ -3990,7 +3991,7 @@ fn end_anchored_with_leading_lookbehind() {
 }
 
 #[test]
-fn bug28_not_word_boundary_drops_consecutive_matches() {
+fn not_word_boundary_drops_consecutive_matches() {
     for mode in [
         resharp::UnicodeMode::Ascii,
         resharp::UnicodeMode::Javascript,
@@ -4078,7 +4079,7 @@ fn repro_bug05_rev_trivial_assert() {
     }
 }
 #[test]
-fn bug05_rev_trivial_vs_regex_crate_oracle() {
+fn rev_trivial_vs_regex_crate_oracle() {
     let cases: &[(&str, &str)] = &[
         (r"_*$", r"(?s).*$"),
         (r".*$", r".*$"),
@@ -4428,7 +4429,7 @@ fn class_plus_fast_path() {
 }
 
 #[test]
-fn bug07_lowerbound_1_repeat_after_overlapping_prefix() {
+fn lowerbound_1_repeat_after_overlapping_prefix() {
     let cases: &[(&str, &[u8], usize)] = &[
         (r"[ab]\n[b]+\n", b"a\nb\n", 1),
         (r"[ab]\n[b]{1,}\n", b"a\nb\n", 1),
@@ -4457,7 +4458,7 @@ fn bug07_lowerbound_1_repeat_after_overlapping_prefix() {
 }
 
 #[test]
-fn bug09_regex_instance_not_poisoned_after_match() {
+fn regex_instance_not_poisoned_after_match() {
     let re = Regex::new(r"([\(,])\s+|\s+([\),])").unwrap();
     assert!(re.is_match(b"a, b").unwrap());
     for _ in 0..6 {
@@ -4468,3 +4469,65 @@ fn bug09_regex_instance_not_poisoned_after_match() {
     assert_eq!(re2.find_all(b"zzzz").unwrap().len(), 0);
     assert_eq!(re2.find_all(b"a, b").unwrap().len(), 1);
 }
+
+#[test]
+fn two_branch_lookbehind_no_superlinear_blowup() {
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    use std::time::Instant;
+
+    let opts = RegexOptions::default().unicode(UnicodeMode::Javascript);
+    let re = Regex::with_options(r"(?<!(</?[^>]*|\&[^;]*))([^\s<]+)", opts).unwrap();
+    let hay: &[u8] = b"the quick brown fox jumps over the lazy dog while a small server \
+runs inside an emulator or on a remote test device using the client program \
+which connects to this server over a socket and performs various tasks such \
+as reading writing files copying binaries running commands checking status \
+waiting";
+
+    let expected: &[(usize, usize)] = &[
+        (0, 3), (4, 9), (10, 15), (16, 19), (20, 25), (26, 30), (31, 34), (35, 39), (40, 43),
+        (44, 49), (50, 51), (52, 57), (58, 64), (65, 69), (70, 76), (77, 79), (80, 88), (89, 91),
+        (92, 94), (95, 96), (97, 103), (104, 108), (109, 115), (116, 121), (122, 125), (126, 132),
+        (133, 140), (141, 146), (147, 155), (156, 158), (159, 163), (164, 170), (171, 175),
+        (176, 177), (178, 184), (185, 188), (189, 197), (198, 205), (206, 211), (212, 216),
+        (217, 219), (220, 227), (228, 235), (236, 241), (242, 249), (250, 258), (259, 266),
+        (267, 275), (276, 284), (285, 291), (292, 299),
+    ];
+
+    let ms = re.find_all(hay).unwrap();
+    let spans: Vec<(usize, usize)> = ms.iter().map(|m| (m.start, m.end)).collect();
+    assert_eq!(spans, expected, "BUG-14: match results diverged from ground truth");
+
+    let t = Instant::now();
+    re.find_all(hay).unwrap();
+    let elapsed = t.elapsed();
+    assert!(
+        elapsed.as_millis() < 500,
+        "BUG-14 regressed: find_all on {}-byte haystack took {elapsed:?} (was ~4.17s before the \
+         fix; NullsBuilder's per-integer-offset representation made every lookaround op \
+         O(range width) instead of O(runs))",
+        hay.len()
+    );
+
+    // n=299 saturates the first haystack, hiding a SECOND superlinearity: `union_shifted`'s
+    // `rels` can hold many disjoint runs, and OR-ing shifted copies pairwise (rescanning the
+    // whole accumulator each time) was O(runs(shifts)^2) per node, ~O(n^3) overall. ~3.4s at
+    // n=700 before the `merge_overlapping_same_mask` fix, ~80ms after.
+    let long_hay = hay.repeat(20);
+    let long_hay = &long_hay[..700.min(long_hay.len())];
+    let t2 = Instant::now();
+    re.find_all(long_hay).unwrap();
+    let elapsed2 = t2.elapsed();
+    assert!(
+        elapsed2.as_millis() < 3000,
+        "BUG-14 (deeper recurrence) regressed: find_all on a {}-byte haystack took {elapsed2:?} \
+         (was ~3.4s in release / much worse in debug before the union_shifted fix; ~80ms in \
+         release after) -- `rels`/`shifts` can hold many disjoint runs, not one contiguous \
+         range, so `union_shifted_runs` must not call the pairwise `or_runs` once per (body \
+         run, shift run) pair. Threshold is generous (3s) to tolerate debug-build/parallel-test \
+         contention noise while still catching the O(n^3) recurrence, which would blow far past \
+         it.",
+        long_hay.len()
+    );
+}
+
+

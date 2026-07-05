@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import { writeFileSync, readFileSync } from "node:fs";
+import os from "node:os";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const engineDir = resolve(here, "..", "resharp-engine");
@@ -28,14 +29,29 @@ type Row = {
 function patternByName(): Map<string, string> {
     const src = readFileSync(exampleFile, "utf8");
     const map = new Map<string, string>();
-    for (const m of src.matchAll(/\("([^"]+)",\s*r"([^"]*)"/g)) {
-        if (!map.has(m[1])) map.set(m[1], m[2]);
+    const tupleRe = /\(\s*"([^"]+)"\s*,\s*r(#*)"([\s\S]*?)"\2\s*,/g;
+    for (const m of src.matchAll(tupleRe)) {
+        if (!map.has(m[1])) map.set(m[1], m[3]);
     }
     return map;
 }
 
+function lookaroundNames(): Set<string> {
+    const src = readFileSync(exampleFile, "utf8");
+    const names = new Set<string>();
+    for (const arrName of ["LOOKAROUND_SCAN_PATTERNS", "LOOKAROUND_VALIDATE_PATTERNS"]) {
+        const start = src.indexOf(`const ${arrName}`);
+        if (start === -1) throw new Error(`array ${arrName} not found`);
+        const end = src.indexOf("\n];", start);
+        const body = src.slice(start, end);
+        for (const m of body.matchAll(/\(\s*"([^"]+)"/g)) names.add(m[1]);
+    }
+    return names;
+}
+
 function label(name: string, patterns: Map<string, string>): string {
-    const pat = patterns.get(name) ?? name;
+    const pat = patterns.get(name);
+    if (pat === undefined) throw new Error(`no pattern extracted for "${name}"`);
     const shown = pat.length > 30 ? pat.slice(0, 30) + "..." : pat;
     return "`" + shown.replace(/\|/g, "\\|") + "`";
 }
@@ -136,32 +152,57 @@ function cell(rows: Row[], group: Group, pattern: string, engine: Engine, metric
     return speed >= best ? `**${text}**` : text;
 }
 
-function table(rows: Row[], group: Group, metric: "thrpt" | "time", patterns: Map<string, string>): string {
-    const pats = [...new Set(rows.filter((r) => r.group === group).map((r) => r.pattern))];
-    const header = `| Pattern | ${ENGINES.join(" | ")} |`;
-    const sep = `|${"---|".repeat(ENGINES.length + 1)}`;
+function table(
+    rows: Row[],
+    group: Group,
+    metric: "thrpt" | "time",
+    patterns: Map<string, string>,
+    engines: readonly Engine[],
+    include: (pattern: string) => boolean,
+): string {
+    const pats = [...new Set(rows.filter((r) => r.group === group).map((r) => r.pattern))].filter(include);
+    const header = `| Pattern | ${engines.join(" | ")} |`;
+    const sep = `|${"---|".repeat(engines.length + 1)}`;
     const body = pats.map(
-        (p) => `| ${label(p, patterns)} | ${ENGINES.map((e) => cell(rows, group, p, e, metric)).join(" | ")} |`,
+        (p) => `| ${label(p, patterns)} | ${engines.map((e) => cell(rows, group, p, e, metric)).join(" | ")} |`,
     );
     return [header, sep, ...body].join("\n");
 }
 
+function cpuModel(): string {
+    const cpus = os.cpus();
+    if (cpus.length === 0) throw new Error("os.cpus() returned no entries");
+    return cpus[0].model;
+}
+
 process.stdout.write("loading patterns...\n");
 const patterns = patternByName();
+const lookaround = lookaroundNames();
 const rows = parse(run());
 if (rows.length === 0) throw new Error("no benchmark rows parsed");
 process.stdout.write(`parsed ${rows.length} benchmark rows\n`);
 
+const NON_LOOKAROUND_ENGINES = ENGINES;
+const LOOKAROUND_ENGINES = ENGINES.filter((e) => e !== "regex");
+
 const md = [
-    "resharp runs with `UnicodeMode::Full` and `multiline(false)` to match the other engines. Ratios are vs the fastest per row.",
+    "Full benchmark source: [resharp-engine/examples/popular-crates.rs](resharp-engine/examples/popular-crates.rs). Ratios are vs the fastest per row.",
+    "",
+    `CPU: ${cpuModel()}`,
     "",
     "### Scan (find_all over a 1 MiB haystack), throughput",
     "",
-    table(rows, "scan", "thrpt", patterns),
+    table(rows, "scan", "thrpt", patterns, NON_LOOKAROUND_ENGINES, (p) => !lookaround.has(p)),
     "",
     "### Validate (is_match on a single value), latency",
     "",
-    table(rows, "validate", "time", patterns),
+    table(rows, "validate", "time", patterns, NON_LOOKAROUND_ENGINES, (p) => !lookaround.has(p)),
+    "",
+    "### Lookaround (rare in the corpus)",
+    "",
+    table(rows, "scan", "thrpt", patterns, LOOKAROUND_ENGINES, (p) => lookaround.has(p)),
+    "",
+    table(rows, "validate", "time", patterns, LOOKAROUND_ENGINES, (p) => lookaround.has(p)),
     "",
 ].join("\n");
 

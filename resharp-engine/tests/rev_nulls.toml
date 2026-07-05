@@ -148,7 +148,7 @@ input = "aaaa"
 rev_nulls = [3, 2, 1]
 
 [[test]]
-name = "bug10_lb_start_compl_newline"
+name = "lb_start_anchor_compl_newline"
 pattern = '(?<=^)~(0+)'
 input = "\n"
 rev_nulls = [1, 0]

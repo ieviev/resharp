@@ -298,6 +298,43 @@ pub(crate) struct RegexInner {
     pub(crate) fas: Option<fas::FwdDFA>,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+#[cfg_attr(feature = "serialize", derive(serde::Serialize, serde::Deserialize))]
+pub(crate) struct InitialNodeFlags(u8);
+
+impl InitialNodeFlags {
+    const HAS_ANCHORS: u8 = 1 << 0;
+    const HAS_LB: u8 = 1 << 1;
+    const HAS_LA: u8 = 1 << 2;
+
+    pub(crate) fn new(has_anchors: bool, has_lb: bool, has_la: bool) -> Self {
+        let mut bits = 0;
+        if has_anchors {
+            bits |= Self::HAS_ANCHORS;
+        }
+        if has_lb {
+            bits |= Self::HAS_LB;
+        }
+        if has_la {
+            bits |= Self::HAS_LA;
+        }
+        InitialNodeFlags(bits)
+    }
+
+    #[inline]
+    pub(crate) fn has_anchors(self) -> bool {
+        self.0 & Self::HAS_ANCHORS != 0
+    }
+    #[inline]
+    pub(crate) fn has_lb(self) -> bool {
+        self.0 & Self::HAS_LB != 0
+    }
+    #[inline]
+    pub(crate) fn has_la(self) -> bool {
+        self.0 & Self::HAS_LA != 0
+    }
+}
+
 /// Lazily compiled regex instance.
 /// Uses Mutex for interior mutability.
 pub struct Regex {
@@ -328,9 +365,7 @@ pub struct Regex {
     pub(crate) lb_check_bytes: u8,
     pub(crate) fwd_lb_begin_nullable: bool,
     pub(crate) fwd_lb_body_nullable: bool,
-    pub(crate) has_anchors: bool,
-    pub(crate) has_lb: bool,
-    pub(crate) has_la: bool,
+    pub(crate) init_flags: InitialNodeFlags,
     #[cfg(feature = "convergence_prefix")]
     pub(crate) conv_prefix: bool,
     /// fixed-length negative lookbehind reject test paired with an `AnchoredFwd`
@@ -1331,9 +1366,7 @@ impl Regex {
             lb_check_bytes,
             fwd_lb_begin_nullable,
             fwd_lb_body_nullable,
-            has_anchors,
-            has_lb,
-            has_la,
+            init_flags: InitialNodeFlags::new(has_anchors, has_lb, has_la),
             #[cfg(feature = "convergence_prefix")]
             conv_prefix,
             neg_lb,
@@ -1454,7 +1487,7 @@ impl Regex {
         (self.empty_nullable && !self.is_empty_lang).then_some(Match { start: 0, end: 0 })
     }
 
-    /// all non-overlapping leftmost-first matches as `[start, end)` byte ranges.
+    /// all leftmost-longest, non-overlapping matches as `[start, end)` byte ranges.
     ///
     /// ```
     /// let re = resharp::Regex::new(r"\d+").unwrap();
@@ -2145,7 +2178,7 @@ impl Regex {
             return Ok(self.empty_input_match());
         }
         let inner = &mut *self.inner.lock().unwrap_or_else(|e| e.into_inner());
-        if self.has_lb {
+        if self.init_flags.has_lb() {
             // ugly scenario for find_anchored, easier to reject it than to special case it
             return Err(Error::Algebra(resharp_algebra::ResharpError::UnsupportedPattern))
         }

@@ -152,25 +152,48 @@ fn utf8_codepoint_node(tb: &mut TB<'_>) -> NodeId {
 }
 
 fn unicode_ranges_to_node(ranges: &[hir::ClassUnicodeRange], tb: &mut TB<'_>) -> NodeId {
-    let mut nodes = Vec::new();
+    let mut chains: Vec<Vec<(u8, u8)>> = Vec::new();
     for range in ranges {
         for seq in Utf8Sequences::new(range.start(), range.end()) {
             let sl = seq.as_slice();
-            let bytes: Vec<_> = sl.iter().map(|s| (s.start, s.end)).collect();
-            let node = match bytes.len() {
-                1 => tb.mk_range_u8(bytes[0].0, bytes[0].1),
-                n => {
-                    let last = tb.mk_range_u8(bytes[n - 1].0, bytes[n - 1].1);
-                    let mut conc = last;
-                    for i in (0..n - 1).rev() {
-                        let b = tb.mk_range_u8(bytes[i].0, bytes[i].1);
-                        conc = tb.mk_concat(b, conc);
-                    }
-                    conc
-                }
-            };
-            nodes.push(node);
+            chains.push(sl.iter().map(|s| (s.start, s.end)).collect());
         }
+    }
+    build_utf8_chain_trie(&chains, tb)
+}
+
+fn build_utf8_chain_trie(chains: &[Vec<(u8, u8)>], tb: &mut TB<'_>) -> NodeId {
+    if chains.is_empty() {
+        return NodeId::BOT;
+    }
+    let mut leaf_set_id: Option<resharp_algebra::solver::TSetId> = None;
+    let mut rest: Vec<&Vec<(u8, u8)>> = Vec::new();
+    for c in chains {
+        if c.len() == 1 {
+            let rid = tb.solver().range_to_set_id(c[0].0, c[0].1);
+            leaf_set_id = Some(match leaf_set_id {
+                None => rid,
+                Some(acc) => tb.solver().or_id(acc, rid),
+            });
+        } else {
+            rest.push(c);
+        }
+    }
+    let mut groups: Vec<((u8, u8), Vec<Vec<(u8, u8)>>)> = Vec::new();
+    for c in &rest {
+        match groups.last_mut() {
+            Some((head, tails)) if *head == c[0] => tails.push(c[1..].to_vec()),
+            _ => groups.push((c[0], vec![c[1..].to_vec()])),
+        }
+    }
+    let mut nodes = Vec::with_capacity(groups.len() + 1);
+    if let Some(set_id) = leaf_set_id {
+        nodes.push(tb.mk_pred_from_set(set_id));
+    }
+    for (head, tails) in &groups {
+        let tail_node = build_utf8_chain_trie(tails, tb);
+        let head_node = tb.mk_range_u8(head.0, head.1);
+        nodes.push(tb.mk_concat(head_node, tail_node));
     }
     tb.mk_unions(nodes.into_iter())
 }

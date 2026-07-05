@@ -1076,14 +1076,61 @@ fn resume_loops_die_fast(
 }
 
 #[cfg(feature = "convergence_prefix")]
-fn convergence_right_node(b: &RegexBuilder, fwd_node: NodeId, run: &[TSetId]) -> Option<NodeId> {
-    fn head_byte(b: &RegexBuilder, h: NodeId) -> Option<u8> {
-        if !h.is_pred(b) {
-            return None;
-        }
-        let bytes = b.solver_ref().collect_bytes(h.pred_tset(b));
-        (bytes.len() == 1).then(|| bytes[0])
+fn conv_head_byte(b: &RegexBuilder, h: NodeId) -> Option<u8> {
+    if !h.is_pred(b) {
+        return None;
     }
+    let bytes = b.solver_ref().collect_bytes(h.pred_tset(b));
+    (bytes.len() == 1).then(|| bytes[0])
+}
+
+/// Counts occurrences of `lit` in `node`'s language, recursing into
+/// unions and star/plus bodies; a star body containing `lit` counts as 2
+/// since it's never exactly one occurrence.
+#[cfg(feature = "convergence_prefix")]
+fn count_literal_occurrences(b: &RegexBuilder, node: NodeId, lit: &[u8]) -> usize {
+    if node.is_union(b) {
+        return count_literal_occurrences(b, node.left(b), lit)
+            + count_literal_occurrences(b, node.right(b), lit);
+    }
+    if node.is_star(b) {
+        return if count_literal_occurrences(b, node.left(b), lit) > 0 {
+            2
+        } else {
+            0
+        };
+    }
+    let mut spine: Vec<(NodeId, NodeId)> = Vec::new();
+    let mut curr = node;
+    loop {
+        let is_concat = curr.is_concat(b);
+        let head = if is_concat { curr.left(b) } else { curr };
+        spine.push((curr, head));
+        if is_concat {
+            curr = curr.right(b);
+        } else {
+            break;
+        }
+    }
+    let n = spine.len();
+    let mut count = 0;
+    if !lit.is_empty() && lit.len() <= n {
+        for start in 0..=(n - lit.len()) {
+            if (0..lit.len()).all(|k| conv_head_byte(b, spine[start + k].1) == Some(lit[k])) {
+                count += 1;
+            }
+        }
+    }
+    for &(_, head) in &spine {
+        if head.is_union(b) || head.is_star(b) {
+            count += count_literal_occurrences(b, head, lit);
+        }
+    }
+    count
+}
+
+#[cfg(feature = "convergence_prefix")]
+fn convergence_right_node(b: &RegexBuilder, fwd_node: NodeId, run: &[TSetId]) -> Option<NodeId> {
     let lit: Vec<u8> = run
         .iter()
         .rev()
@@ -1110,14 +1157,18 @@ fn convergence_right_node(b: &RegexBuilder, fwd_node: NodeId, run: &[TSetId]) ->
     }
     let mut found: Option<usize> = None;
     for start in 0..=(n - lit.len()) {
-        if (0..lit.len()).all(|k| head_byte(b, spine[start + k].1) == Some(lit[k])) {
+        if (0..lit.len()).all(|k| conv_head_byte(b, spine[start + k].1) == Some(lit[k])) {
             if found.is_some() {
                 return None;
             }
             found = Some(start);
         }
     }
-    let end = found? + lit.len();
+    let start = found?;
+    if count_literal_occurrences(b, fwd_node, &lit) != 1 {
+        return None;
+    }
+    let end = start + lit.len();
     Some(if end >= n { NodeId::EPS } else { spine[end].0 })
 }
 
@@ -1207,6 +1258,9 @@ fn try_convergence_prefix(
         && (b_min >= 2 || b_node.contains_lookaround(b))
         && conv_run_boundary_ambiguous(b, conv_node, &run, b_node)?
     {
+        return Ok(None);
+    }
+    if b_max != u32::MAX && b_min != b_max && (b_min >= 2 || b_node.contains_lookaround(b)) {
         return Ok(None);
     }
     if !force && !resume_loops_die_fast(b, conv_node, &run)? {

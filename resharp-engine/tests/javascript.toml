@@ -314,3 +314,45 @@ name = "signed_decimal_word_boundary_any_exp"
 pattern = '(?:\B-|\b)\d+(?:\.\d+)?(?:[eE][+-]?\d+)?\b'
 input = "    encoding = 'utf8';"
 expect_error = true
+
+[[test]]
+name = "bounded_range_boundary_convergence_word_boundary"
+pattern = '[a-z]+\.[a-z]{2,4}\b'
+input = "a.push _"
+matches = [[0, 6]]
+
+[[test]]
+name = "bounded_range_boundary_no_anchor_dot"
+pattern = '[a-z]+\.[a-z]{2,4}'
+input = "a.bc."
+matches = [[0, 4]]
+
+[[test]]
+name = "bounded_range_boundary_no_anchor_class"
+pattern = '[a-z0-9_-]+\.[a-z]{2,4}'
+input = "a.bc."
+matches = [[0, 4]]
+
+[[test]]
+name = "bounded_range_boundary_no_anchor_dash"
+pattern = '[a-z]+-[a-z]{2,4}'
+input = "a-bc-"
+matches = [[0, 4]]
+
+[[test]]
+name = "double_optional_flanking_literal_no_leading_boundary"
+pattern = '\s?<\s?\b'
+input = "< b"
+matches = [[0, 2]]
+
+[[test]]
+name = "double_optional_flanking_literal_no_word_boundary_at_start"
+pattern = '\b\s?<\s?\b'
+input = "< b"
+matches = []
+
+[[test]]
+name = "double_optional_flanking_literal_lookahead_form"
+pattern = '\s?<\s?(?=[a-z])'
+input = "< b"
+matches = [[0, 2]]

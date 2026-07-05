@@ -1012,19 +1012,19 @@ input = "ab"
 matches = []
 
 [[test]]
-name = "bug13_nested_lookahead_zero_width_c"
+name = "nested_lookahead_zero_width_c"
 pattern = '(?=(?=c)c{1,3})'
 input = "c"
 matches = [[0, 0]]
 
 [[test]]
-name = "bug13_nested_lookahead_zero_width_cc"
+name = "nested_lookahead_zero_width_cc"
 pattern = '(?=(?=c)c{1,3})'
 input = "cc"
 matches = [[0, 0], [1, 1]]
 
 [[test]]
-name = "bug13_nested_lookahead_zero_width_ccc"
+name = "nested_lookahead_zero_width_ccc"
 pattern = '(?=(?=c)c{1,3})'
 input = "ccc"
 matches = [[0, 0], [1, 1], [2, 2]]
