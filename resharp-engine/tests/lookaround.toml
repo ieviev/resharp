@@ -1034,3 +1034,123 @@ name = "convergence_repeated_unit_tail_leftmost"
 pattern = 'a+(?=\W)(?=.*___)'
 input = "aaa ___"
 matches = [[0, 3]]
+
+[[test]]
+name = "quantified_neg_lookahead_body_single_char_excluded"
+pattern = '(?:(?!b)[^\n\r])+'
+input = "aab"
+matches = [[0, 2]]
+
+[[test]]
+name = "neg_lookahead_class_not_nullable_word"
+pattern = '(?!\w)0+'
+input = ""
+matches = []
+
+[[test]]
+name = "neg_lookahead_class_not_nullable_complement"
+pattern = '(?!~(b{0}))[a-z]'
+input = ""
+matches = []
+
+[[test]]
+name = "neg_lookahead_class_not_nullable_group_star_class"
+pattern = '(?!\D)()*\D{2,2}'
+input = ""
+matches = []
+
+[[test]]
+name = "neg_lookahead_class_not_nullable_intersection_group"
+pattern = '(?!\D)(1&[a-c]+)'
+input = ""
+matches = []
+
+[[test]]
+name = "neg_lookahead_class_not_nullable_word_dot_range"
+pattern = '(?!\w)0+.{0,2}'
+input = ""
+matches = []
+
+[[test]]
+name = "neg_lookahead_1byte_body_optional_atom_trailing_lookahead"
+pattern = '(?!a).?c*(?=.)'
+input = "b.."
+matches = [[0, 1], [1, 2], [2, 2]]
+
+[[test]]
+name = "end_anchor_concat_with_lookbehind_and_lookahead"
+pattern = '\z(?<=\w)(?!\w)'
+input = "ab"
+matches = [[2, 2]]
+
+[[test]]
+name = "optional_a_before_lookahead_start_anchor"
+pattern = 'a?(?=\A)'
+input = "ax"
+matches = [[0, 0]]
+
+[[test]]
+name = "star_a_before_lookahead_start_anchor"
+pattern = 'a*(?=\A)'
+input = "ax"
+matches = [[0, 0]]
+
+[[test]]
+name = "dotstar_before_lookahead_start_anchor"
+pattern = '.*(?=\A)'
+input = "-bab"
+matches = [[0, 0]]
+
+[[test]]
+name = "dotstar_before_lookahead_start_anchor_plus"
+pattern = '.*(?=\A+)'
+input = "-bab"
+matches = [[0, 0]]
+
+[[test]]
+name = "lookahead_start_anchor_plus_before_a"
+pattern = '(?=\A+)a'
+input = "ax"
+matches = [[0, 1]]
+
+[[test]]
+name = "lookbehind_newline_end_anchor_bare"
+pattern = '(?<=\n\z)'
+input = "a\nbb"
+matches = []
+ascii = true
+
+[[test]]
+name = "lookbehind_newline_end_anchor_x"
+pattern = '(?<=\n\z)x'
+input = "a\nbb"
+matches = []
+ascii = true
+
+[[test]]
+name = "lookbehind_newline_end_anchor_optional_x_no_match"
+pattern = '(?<=\n\z)x?'
+input = "a\nbb"
+matches = []
+ascii = true
+
+[[test]]
+name = "lookbehind_newline_end_anchor_optional_x_at_end"
+pattern = '(?<=\n\z)x?'
+input = "a\n"
+matches = [[2, 2]]
+ascii = true
+
+[[test]]
+name = "lookbehind_newline_end_anchor_optional_x_present"
+pattern = '(?<=\n\z)x?'
+input = "a\nx"
+matches = []
+ascii = true
+
+[[test]]
+name = "lookbehind_newline_end_anchor_plus_optional_dot"
+pattern = '(?<=\n\z+).?'
+input = "b::-a.-\n-bca."
+matches = []
+ascii = true

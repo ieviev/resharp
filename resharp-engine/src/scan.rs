@@ -150,8 +150,12 @@ fn skip_rev(
             let orig_pos = *pos;
             let mut search_from = *pos;
             loop {
+                #[cfg(feature = "debug")]
+                eprintln!("[skip_rev Inner] search_from={search_from} pos={pos} prev_entry={prev_entry} orig_pos={orig_pos} window={window} resume={resume} pruned={pruned}");
                 match search.find_rev(data, search_from) {
                     Some(skip_pos) if skip_pos >= *prev_entry => {
+                        #[cfg(feature = "debug")]
+                        eprintln!("[skip_rev Inner] branch A skip_pos={skip_pos}");
                         if *pos > skip_pos {
                             return Ok(SkipStep::Fall);
                         }
@@ -164,14 +168,27 @@ fn skip_rev(
                     }
                     Some(skip_pos) => {
                         let cb = conv_b.as_deref_mut().unwrap();
-                        if cb.conv_start_matches(b, skip_pos + 1, data)? {
-                            *prev_entry = skip_pos;
-                            let entry = (skip_pos + 1 + window).min(orig_pos).max(skip_pos + 1);
+                        let matches = cb.conv_start_matches(b, skip_pos + 1, data)?;
+                        #[cfg(feature = "debug")]
+                        eprintln!("[skip_rev Inner] branch B skip_pos={skip_pos} conv_start_matches={matches}");
+                        if matches {
+                            let raw_entry = (skip_pos + 1 + window).min(orig_pos).max(skip_pos + 1);
+                            let mut entry = if raw_entry > skip_pos + 1 {
+                                orig_pos
+                            } else {
+                                raw_entry
+                            };
+                            if resume == pruned {
+                                entry = entry.min(orig_pos);
+                            }
+                            #[cfg(feature = "debug")]
+                            eprintln!("[skip_rev Inner] branch B entry={entry} skip_pos={skip_pos} window={window} orig_pos={orig_pos}");
                             *pos = entry;
                             if entry > skip_pos + 1 {
                                 *curr = pruned;
                                 return Ok(SkipStep::Fall);
                             }
+                            *prev_entry = skip_pos;
                             *curr = resume;
                             return Ok(if skip_pos == 0 {
                                 SkipStep::Continue
@@ -253,32 +270,36 @@ pub(crate) fn collect_rev<const EARLY_EXIT: bool, const SKIP: bool>(
     nulls: &mut StartPositions,
     b: &mut RegexBuilder,
     mut conv_b: Option<&mut crate::ldfa::LDFA>,
+    prev_entry: &mut usize,
 ) -> Result<(u32, usize, bool), crate::Error> {
     let center_table = t.center_table;
     let center_effect_id = t.center_effect_id;
     let minterms_lookup = t.minterms_lookup;
     let mt_log = t.mt_log;
-    let mut prev_entry = usize::MAX;
-    while pos > 1 {
+    loop {
         if SKIP {
             let sid = skip_ids[curr as usize];
             if sid != 0 {
+                let before = (curr, pos);
                 match skip_rev(
                     t,
                     skipper(skip_searchers, sid),
                     data,
                     &mut curr,
                     &mut pos,
-                    &mut prev_entry,
+                    prev_entry,
                     nulls,
                     b,
                     &mut conv_b,
                 )? {
-                    SkipStep::Continue => continue,
-                    SkipStep::Fall => {}
+                    SkipStep::Continue if (curr, pos) != before => continue,
+                    SkipStep::Continue | SkipStep::Fall => {}
                     SkipStep::Done => return Ok((curr, 1, false)),
                 }
             }
+        }
+        if pos <= 1 {
+            break;
         }
         pos -= 1;
         unsafe {
@@ -287,6 +308,8 @@ pub(crate) fn collect_rev<const EARLY_EXIT: bool, const SKIP: bool>(
             if next == DFA_MISSING {
                 return Ok((curr, pos, true));
             }
+            #[cfg(feature = "debug")]
+            eprintln!("[collect_rev step] curr={curr} pos_after_decrement={pos} mt={mt} next={next}");
             curr = next as u32;
             let eid = *center_effect_id.add(curr as usize); // bounds: see `register_state`
             if eid != EID_NONE as _ {
@@ -647,6 +670,8 @@ pub(crate) fn register_state(
     }
     let eff_id = b.get_nulls_id(node);
     let eid = b.center_nulls_id(eff_id);
+    #[cfg(feature = "debug")]
+    eprintln!("[register_state] sid={sid} node={} eff_id={} eid={} full_vec={:?} center_vec={:?}", b.pp(node), eff_id.0, eid.0, b.nulls_entry_vec(eff_id.0), b.nulls_entry_vec(eid.0));
     if sid as usize >= effects_id.len() {
         effects_id.resize(sid as usize + 1, 0u16);
     }

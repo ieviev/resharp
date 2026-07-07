@@ -377,7 +377,7 @@ fn fas_step(
     spawn_allowed: bool,
 ) -> Result<(), Error> {
     let mt = ldfa.mt_lookup[data[pos] as usize] as u32;
-    let trans_idx = (*asid as usize) * fas.stride | mt as usize;
+    let trans_idx = ((*asid as usize) * fas.stride) | mt as usize;
     let cached = unsafe { *fas.trans.get_unchecked(trans_idx) };
     let action_id = if cached != FAS_ACTION_MISSING {
         cached
@@ -403,6 +403,7 @@ fn fas_step(
     Ok(())
 }
 
+#[cfg_attr(feature = "serialize", allow(missing_docs))]
 impl LDFA {
     pub fn scan_fwd_active_set<const ALWAYS_NULLABLE: bool>(
         &mut self,

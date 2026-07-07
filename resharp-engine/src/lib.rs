@@ -63,6 +63,15 @@ pub use stream::StreamState;
 
 #[cfg(feature = "serialize")]
 pub(crate) mod dump;
+#[cfg(feature = "serialize")]
+#[allow(missing_docs)]
+pub use bdfa::BDFA;
+#[cfg(feature = "serialize")]
+#[allow(missing_docs)]
+pub use ldfa::LDFA;
+#[cfg(feature = "serialize")]
+#[allow(missing_docs)]
+pub use prefix::{NegLb, NegLbTerm, PrefixKind};
 
 pub(crate) mod simd;
 
@@ -207,6 +216,10 @@ pub struct RegexOptions {
     pub unbounded_size: bool,
     #[doc(hidden)]
     pub force_convergence: bool,
+    /// disable all prefix-acceleration. much slower,
+    /// but can be useful for sanity checks and serialization
+    #[doc(hidden)]
+    pub disable_prefixes: bool,
 }
 
 impl Default for RegexOptions {
@@ -222,6 +235,7 @@ impl Default for RegexOptions {
             hardened: false,
             unbounded_size: false,
             force_convergence: false,
+            disable_prefixes: false,
         }
     }
 }
@@ -325,7 +339,9 @@ impl InitialNodeFlags {
     pub(crate) fn has_anchors(self) -> bool {
         self.0 & Self::HAS_ANCHORS != 0
     }
+    
     #[inline]
+    #[allow(dead_code)]
     pub(crate) fn has_lb(self) -> bool {
         self.0 & Self::HAS_LB != 0
     }
@@ -349,6 +365,7 @@ pub struct Regex {
     pub(crate) is_empty_lang: bool,
     #[allow(dead_code)]
     pub(crate) fwd_begin_anchored: bool,
+    pub(crate) fwd_lb_stripped: bool,
     #[allow(dead_code)]
     pub(crate) rev_end_anchored: bool,
     /// rev = _*, skip rev pass entirely
@@ -607,6 +624,8 @@ struct Graph {
     nodes: Vec<NodeId>,
 }
 
+const BUILD_PARTIAL_GRAPH_CREATION_BUDGET: u32 = 100_000;
+
 fn build_partial_graph(b: &mut RegexBuilder, start: NodeId, budget: usize) -> Option<Graph> {
     use std::collections::HashMap;
     let mut idx: HashMap<NodeId, usize> = HashMap::from([(start, 0)]);
@@ -614,7 +633,11 @@ fn build_partial_graph(b: &mut RegexBuilder, start: NodeId, budget: usize) -> Op
     let mut nodes: Vec<NodeId> = vec![start];
     let mut queue: Vec<(usize, NodeId)> = vec![(0, start)];
     let mut overflow = false;
+    let node_budget_start = b.num_nodes();
     while let Some((u, node)) = queue.pop() {
+        if b.num_nodes().wrapping_sub(node_budget_start) > BUILD_PARTIAL_GRAPH_CREATION_BUDGET {
+            return None;
+        }
         let sder = b.der(node, Nullability::CENTER).ok()?;
         let mut stack = vec![(sder, TSetId::FULL)];
         b.iter_sat(&mut stack, &mut |_, next, set| {
@@ -749,23 +772,42 @@ fn any_unbounded_lookback(b: &RegexBuilder, node: NodeId) -> bool {
 fn union_branches_distinguishable(b: &mut RegexBuilder, union_node: NodeId) -> bool {
     let mut branches = Vec::new();
     collect_union_branches(b, union_node, &mut branches);
+    union_branches_distinguishable_list(b, &branches)
+}
+
+fn union_branches_distinguishable_list(b: &mut RegexBuilder, branches: &[NodeId]) -> bool {
     let any_lb = branches.iter().any(|n| n.contains_lookbehind(b));
     if !any_lb {
         return true;
     }
+    let union_node_len = branches
+        .iter()
+        .fold((0u32, 0u32), |(mn, mx), &n| {
+            let (bn, bx) = b.get_min_max_length(n);
+            (mn.min(bn), mx.max(bx))
+        });
     // lookbehind defers its reverse-pass null emission by its lookback length.
-    if b.get_min_max_length(union_node).1 > 0
-        && branches.iter().any(|&br| any_unbounded_lookback(b, br))
+    if union_node_len.1 > 0 && branches.iter().any(|&br| any_unbounded_lookback(b, br)) {
+        return false;
+    }
+    let any_anchors = branches.iter().any(|&br| b.contains_anchors(br));
+    if any_anchors
+        && branches
+            .iter()
+            .any(|&br| br.contains_lookbehind(b) && first_lb_in_branch(b, br).is_none())
     {
         return false;
     }
     // this is outside of formally verified territory, careful with changes
-    if b.get_fixed_length(union_node).is_some() {
-        return true;
+    let fixed_lens: Option<Vec<u32>> = branches.iter().map(|&br| b.get_fixed_length(br)).collect();
+    if let Some(lens) = fixed_lens {
+        if lens.iter().all(|&l| l == lens[0]) {
+            return true;
+        }
     }
     let mut firsts: Vec<(bool, TSetId, Option<NodeId>, Option<u32>)> =
         Vec::with_capacity(branches.len());
-    for &br in &branches {
+    for &br in branches {
         let has_lb = br.contains_lookbehind(b);
         let lb_node = if has_lb {
             first_lb_in_branch(b, br)
@@ -882,12 +924,9 @@ fn ensure_supported_rec(
                     }
                     let mut branches = Vec::new();
                     collect_union_branches(b, u, &mut branches);
-                    let mut distributed = b.mk_inter(branches[0], other);
-                    for &br in &branches[1..] {
-                        let arm = b.mk_inter(br, other);
-                        distributed = b.mk_union(distributed, arm);
-                    }
-                    if !union_branches_distinguishable(b, distributed) {
+                    let distributed_branches: Vec<NodeId> =
+                        branches.iter().map(|&br| b.mk_inter(br, other)).collect();
+                    if !union_branches_distinguishable_list(b, &distributed_branches) {
                         return Err(resharp_algebra::ResharpError::UnsupportedPattern);
                     }
                     let other_compatibility =
@@ -915,12 +954,9 @@ fn ensure_supported_rec(
                 }
                 let mut branches = Vec::new();
                 collect_union_branches(b, left, &mut branches);
-                let mut distributed = b.mk_concat(branches[0], right);
-                for &br in &branches[1..] {
-                    let arm = b.mk_concat(br, right);
-                    distributed = b.mk_union(distributed, arm);
-                }
-                if union_branches_distinguishable(b, distributed) {
+                let distributed_branches: Vec<NodeId> =
+                    branches.iter().map(|&br| b.mk_concat(br, right)).collect();
+                if union_branches_distinguishable_list(b, &distributed_branches) {
                     let right_compatibility =
                         ensure_supported_rec(b, right, at_start, strict_lb_start, memo)?;
                     return Ok(combine_compatibility(
@@ -1121,8 +1157,23 @@ impl Regex {
         // TODO: make it configurable to actually check and reject empty lang entriely
         let body_after_begin = {
             let mut cur = node_fwd_simpl;
-            while cur.is_concat(&b) && cur.left(&b) == NodeId::BEGIN {
-                cur = cur.right(&b);
+            loop {
+                if cur.is_concat(&b) && cur.left(&b) == NodeId::BEGIN {
+                    cur = cur.right(&b);
+                    continue;
+                }
+                if cur.is_concat(&b) {
+                    let cur_left = cur.left(&b);
+                    let cur_right = cur.right(&b);
+                    if cur_right == NodeId::BEGIN
+                        && b.contains_lookbehind(cur_left)
+                        && b.nullability(cur_left) == Nullability::ALWAYS
+                    {
+                        cur = cur_right;
+                        continue;
+                    }
+                }
+                break;
             }
             cur
         };
@@ -1142,20 +1193,24 @@ impl Regex {
         let mut opts = opts;
         let has_anchors_pre = b.contains_anchors(node_fwd_simpl);
         let ah = auto_harden(&mut b, fwd_start, has_anchors_pre);
-        if !opts.hardened && ah.full {
+        if ah.full {
             opts.hardened = true;
         }
-        let (selected, rev_skip, _fwd_prefix_wins) = prefix::select_prefix(
-            &mut b,
-            node_fwd_simpl,
-            ts_rev_start,
-            has_look,
-            min_len,
-            max_cap,
-            ah.no_fwd_prefix,
-            opts.hardened,
-            opts.force_convergence,
-        )?;
+        let (selected, rev_skip, _fwd_prefix_wins) = if opts.disable_prefixes {
+            (None, None, false)
+        } else {
+            prefix::select_prefix(
+                &mut b,
+                node_fwd_simpl,
+                ts_rev_start,
+                has_look,
+                min_len,
+                max_cap,
+                ah.no_fwd_prefix,
+                opts.hardened,
+                opts.force_convergence,
+            )?
+        };
         #[cfg(feature = "debug")]
         {
             let kind = match (&selected, &rev_skip) {
@@ -1194,10 +1249,14 @@ impl Regex {
         if let Some((search, resume_node, b_node)) = rev_skip {
             #[cfg(not(feature = "convergence_prefix"))]
             let _ = b_node;
+            #[cfg(feature = "debug")]
+            eprintln!("[conv split] resume_node={:?} b_node={:?}", resume_node.map(|n| b.pp(n)), b_node.map(|n| b.pp(n)));
             let resume = match resume_node {
                 Some(node) => {
                     let pruned_node = rev_ts.state_nodes[rev_ts.pruned as usize];
                     let union = b.mk_union(node, pruned_node);
+                    #[cfg(feature = "debug")]
+                    eprintln!("[conv resume build] node={} pruned_node={} union={}", b.pp(node), b.pp(pruned_node), b.pp(union));
                     rev_ts.get_or_register(&mut b, union)
                 }
                 None => 0,
@@ -1210,7 +1269,11 @@ impl Regex {
                     "convergence prefix (resume != 0) must carry its right-side `b` node",
                 );
                 let b_max = b.get_min_max_length(b_node).1;
-                window = if b_max == u32::MAX { 0 } else { b_max };
+                let fwd_window = if b_max == u32::MAX { 0 } else { b_max };
+                let rev_b_node = b.reverse(b_node)?;
+                let rev_b_node = b.normalize_rev(rev_b_node, 0)?;
+                let rev_window = b.get_min_max_length(rev_b_node).0;
+                window = fwd_window.max(rev_window);
                 conv_b = Some(ldfa::LDFA::new_fwd(&mut b, b_node, max_cap)?);
                 conv_prefix = true;
             }
@@ -1349,6 +1412,7 @@ impl Regex {
                 class_plus.is_some(),
                 &selected,
             ),
+            fwd_lb_stripped: lb_stripped,
             class_plus,
             prefix: selected,
             fixed_length,
@@ -1836,6 +1900,18 @@ impl Regex {
         inner.fwd.scan_fwd_optional(&mut inner.b, pos, input).unwrap()
     }
 
+    #[cfg(feature = "diag")]
+    #[allow(missing_docs)]
+    pub fn scan_fwd_all_nulls_debug(&self, input: &[u8], pos: usize) -> Vec<usize> {
+        let inner = &mut *self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let mut nulls = resharp_algebra::nulls::StartPositions::new();
+        inner
+            .fwd
+            .scan_fwd_all_nulls_from(&mut inner.b, pos, input, &mut nulls)
+            .unwrap();
+        nulls.positions_asc().collect()
+    }
+
     /// Walk RTL step by step, printing the rev-DFA state and its nulls
     /// metadata at each position. Returns the trace as a string.
     #[cfg(feature = "diag")]
@@ -2178,7 +2254,7 @@ impl Regex {
             return Ok(self.empty_input_match());
         }
         let inner = &mut *self.inner.lock().unwrap_or_else(|e| e.into_inner());
-        if self.init_flags.has_lb() {
+        if self.fwd_lb_stripped {
             // ugly scenario for find_anchored, easier to reject it than to special case it
             return Err(Error::Algebra(resharp_algebra::ResharpError::UnsupportedPattern))
         }

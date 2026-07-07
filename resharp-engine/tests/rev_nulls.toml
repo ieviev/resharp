@@ -230,3 +230,87 @@ name = "nullrun_lower_pair_mixed"
 pattern = '[a-z][a-z]'
 input = "abcDefGhi"
 rev_nulls = [7, 4, 1, 0]
+
+[[test]]
+name = "bounded_dot_quantifier_literal_optional_dot_plus"
+pattern = '.{1,3}b.?a+'
+input = "xxxbba"
+rev_nulls = [3, 2, 1, 0]
+
+[[test]]
+name = "lookbehind_nested_positive_lookahead"
+pattern = '(?<!(?=y)b):'
+input = "x:"
+rev_nulls = [1]
+
+[[test]]
+name = "optional_atom_flanked_by_neg_lookahead_and_pos_lookahead"
+pattern = '(?!x)a?(?=-)'
+input = "-"
+rev_nulls = [0]
+
+[[test]]
+name = "optional_atom_flanked_by_two_neg_lookaheads"
+pattern = '(?!x)a?(?!x)'
+input = "b"
+rev_nulls = [0]
+
+[[test]]
+name = "interior_neg_lookahead_between_two_optional_dots"
+pattern = '.?(?!x).?(?!.)'
+input = "ab"
+rev_nulls = [1, 0]
+
+[[test]]
+name = "double_negated_lookahead_plus_star_plus_trailing_lookahead"
+pattern = '(?!(?!.).)a*(?=b)'
+input = "b."
+rev_nulls = [0]
+
+[[test]]
+name = "quantified_prefix_lookahead_optional_atom_trailing_neg_lookahead"
+pattern = 'a*(?=aa)-?(?!xy)'
+input = "aaa"
+rev_nulls = [1, 0]
+
+[[test]]
+name = "quantified_prefix_lookahead_then_star_lookahead_over_extends_past_failed_tail_lookahead"
+pattern = 'a+(?=a.)a*(?=a)'
+input = "aa."
+rev_nulls = [0]
+
+[[test]]
+name = "optional_trailing_lookahead_after_fixed_lookahead_and_optional_atom_does_not_infinite_recurse_at_compile_time"
+pattern = '(?=aa)a?(?=a)?'
+input = "aa"
+rev_nulls = [0]
+
+[[test]]
+name = "optional_trailing_lookahead_after_two_char_group_lookahead_and_dotstar_does_not_infinite_recurse_at_compile_time"
+pattern = '(?=(.)(-)).*(?=:)?'
+input = "b-:acc:ba:b"
+rev_nulls = [0]
+
+[[test]]
+name = "negative_lookbehind_followed_by_optional_positive_lookbehind_does_not_lose_exclusion"
+pattern = '(?<!c)(?<=c)?a'
+input = "ca"
+rev_nulls = []
+
+[[test]]
+name = "convergence_resume_boundary_finds_earlier_literal_occurrence"
+pattern = ':[^c:].+(?=[^ac])'
+input = ":-:-c:"
+rev_nulls = [2, 0]
+
+[[test]]
+name = "optional_fixed_repeat_prefix_then_class_literal_plus_dotstar_finds_match"
+pattern = '(a{3})?[^a:]ba+.+'
+input = "b-bab"
+rev_nulls = [1]
+
+[[test]]
+name = "optional_prefix_class_then_bounded_repeat_with_gap_and_trailing_star_misses_leftmost"
+pattern = '[^bc]?-*b{2}.?b*[c:]'
+input = "bbbc"
+rev_nulls = [1, 0]

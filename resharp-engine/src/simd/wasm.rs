@@ -56,6 +56,10 @@ unsafe fn teddy_chunk_rev<const N: usize>(
 }
 
 #[cfg_attr(debug_assertions, derive(Debug))]
+#[cfg_attr(
+    feature = "serialize",
+    derive(serde::Serialize, serde::Deserialize, Clone)
+)]
 pub struct FwdLiteralSearch {
     pub(crate) needle: Vec<u8>,
     chunks: Vec<u64>,
@@ -324,6 +328,7 @@ unsafe fn linear_scan<const FWD: bool>(
 }
 
 #[cfg_attr(debug_assertions, derive(Debug))]
+#[cfg_attr(feature = "serialize", derive(serde::Serialize, serde::Deserialize))]
 pub struct RevSearchBytes {
     bytes: Vec<u8>,
 }
@@ -362,6 +367,7 @@ impl RevSearchBytes {
 }
 
 #[cfg_attr(debug_assertions, derive(Debug))]
+#[cfg_attr(feature = "serialize", derive(serde::Serialize, serde::Deserialize))]
 pub struct RevSearchRanges {
     ranges: Vec<(u8, u8)>,
 }
@@ -408,6 +414,10 @@ impl RevSearchRanges {
 }
 
 #[cfg_attr(debug_assertions, derive(Debug))]
+#[cfg_attr(
+    feature = "serialize",
+    derive(serde::Serialize, serde::Deserialize, Clone)
+)]
 pub struct FwdRangeSearch {
     len: usize,
     pub(crate) anchor_pos: usize,
@@ -502,6 +512,7 @@ impl FwdRangeSearch {
 }
 
 #[cfg_attr(debug_assertions, derive(Debug))]
+#[cfg_attr(feature = "serialize", derive(serde::Serialize, serde::Deserialize))]
 struct RevTeddyInner {
     len: usize,
     num_simd: usize,
@@ -510,11 +521,13 @@ struct RevTeddyInner {
     tail_offset: usize,
 }
 
+#[cfg_attr(feature = "serialize", derive(serde::Serialize, serde::Deserialize))]
 enum RevSearchInner {
     Teddy(RevTeddyInner),
     Literal(super::RevLiteralInner),
 }
 
+#[cfg_attr(feature = "serialize", derive(serde::Serialize, serde::Deserialize))]
 pub struct RevTeddySearch {
     inner: RevSearchInner,
 }
@@ -688,6 +701,10 @@ impl RevTeddySearch {
 }
 
 #[cfg_attr(debug_assertions, derive(Debug))]
+#[cfg_attr(
+    feature = "serialize",
+    derive(serde::Serialize, serde::Deserialize, Clone)
+)]
 pub struct FwdPrefixSearch {
     len: usize,
     num_simd: usize,

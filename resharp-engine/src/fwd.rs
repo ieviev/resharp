@@ -148,10 +148,10 @@ fn fwd_lb_prefix_impl(
                     max_end - lb_len
                 }
             } else {
-                body_start
+                candidate + 1
             };
         } else {
-            search_start = body_start;
+            search_start = candidate + 1;
         }
     }
 

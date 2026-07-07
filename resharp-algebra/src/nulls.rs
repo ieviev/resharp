@@ -819,6 +819,12 @@ impl NullsBuilder {
             .any(|r| r.lo <= rel && rel <= r.hi && r.mask.has(mask))
     }
 
+    pub fn contains_rel_unconditionally(&mut self, set_id: NullsId, rel: u32) -> bool {
+        self.get_set_ref(set_id)
+            .iter()
+            .any(|r| r.lo <= rel && rel <= r.hi && r.mask == Nullability::ALWAYS)
+    }
+
     pub fn max_rel(&self, set_id: NullsId) -> u32 {
         if let Some(list) = &self.run_list_of[set_id.0 as usize] {
             return list.max;

@@ -165,10 +165,11 @@ fn skip_is_profitable(bytes: &[u8]) -> bool {
     false
 }
 #[cfg_attr(feature = "serialize", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serialize", allow(missing_docs))]
 pub struct LDFA {
     pub pruned: u16,
     #[cfg_attr(feature = "serialize", serde(skip))]
-    pub prune_memo: FxHashMap<NodeId, NodeId>,
+    pub prune_memo: FxHashMap<(NodeId, bool), NodeId>,
     pub begin_table: Vec<u16>,
     pub center_table: Vec<u16>,
     pub effects_id: Vec<u16>,
@@ -191,6 +192,7 @@ pub struct LDFA {
     pub initial_nullability: Nullability,
 }
 
+#[cfg_attr(feature = "serialize", allow(missing_docs))]
 impl LDFA {
     pub fn new_rev(
         b: &mut RegexBuilder,
@@ -228,7 +230,7 @@ impl LDFA {
         let mut center_effect_id: Vec<u16> = vec![EID_NONE as u16; 2];
         let mut effects: Vec<Vec<NullState>> = Vec::new();
 
-        let mut prune_memo: FxHashMap<NodeId, NodeId> = FxHashMap::default();
+        let mut prune_memo: FxHashMap<(NodeId, bool), NodeId> = FxHashMap::default();
 
         // state 2
         register_state(
@@ -874,6 +876,7 @@ impl LDFA {
         nulls: &mut StartPositions,
         b: &mut RegexBuilder,
         conv_b: Option<&mut LDFA>,
+        prev_entry: &mut usize,
     ) -> Result<(u32, usize, bool), Error> {
         if self.can_skip() {
             collect_rev::<EARLY_EXIT, true>(
@@ -886,6 +889,7 @@ impl LDFA {
                 nulls,
                 b,
                 conv_b,
+                prev_entry,
             )
         } else {
             collect_rev::<EARLY_EXIT, false>(
@@ -898,6 +902,7 @@ impl LDFA {
                 nulls,
                 b,
                 None,
+                prev_entry,
             )
         }
     }
@@ -992,6 +997,45 @@ impl LDFA {
         eprintln!("[sfo] return max_end={max_end}");
 
         Ok(found(max_end))
+    }
+
+    #[allow(dead_code)]
+    pub fn scan_fwd_all_nulls_from(
+        &mut self,
+        b: &mut RegexBuilder,
+        pos_begin: usize,
+        data: &[u8],
+        nulls: &mut StartPositions,
+    ) -> Result<(), Error> {
+        let query0 = if pos_begin == 0 { Nullability::BEGIN } else { Nullability::CENTER };
+        if self.initial_nullability.has(query0) {
+            nulls.add(pos_begin);
+        }
+
+        let mt = self.mt_lookup[data[pos_begin] as usize];
+        let mut curr = if pos_begin == 0 {
+            self.begin_table[mt as usize] as u32
+        } else {
+            self.lazy_transition(b, self.pruned, mt as u32)? as u32
+        };
+        if curr <= DFA_DEAD as u32 {
+            return Ok(());
+        }
+        let end = data.len();
+        let mut pos = pos_begin + 1;
+
+        collect_nulls(&self.effects_id, &self.effects, curr, pos, center_or_end(pos == end), nulls);
+        while pos < end && curr > DFA_DEAD as u32 {
+            let mt = self.mt_lookup[data[pos] as usize] as u32;
+            curr = self.lazy_transition(b, as_sid(curr)?, mt)? as u32;
+            pos += 1;
+            if curr <= DFA_DEAD as u32 {
+                break;
+            }
+            collect_nulls(&self.effects_id, &self.effects, curr, pos, center_or_end(pos == end), nulls);
+        }
+
+        Ok(())
     }
 
     /// scan_fwd_all is guaranteed to find a match, given a valid, pre-checked start position
@@ -1464,6 +1508,17 @@ impl LDFA {
         if is_conv {
             let conv_b =
                 conv_b.expect("convergence prefix requires a forward `b` verifier");
+            collect_nulls(
+                &self.effects_id,
+                &self.effects,
+                curr,
+                start_pos,
+                Nullability::CENTER,
+                nulls,
+            );
+            if EARLY_EXIT && !nulls.is_empty() {
+                return Ok(());
+            }
             return self
                 .collect_rev_prefix::<EARLY_EXIT>(b, start_pos, curr, data, nulls, Some(conv_b));
         }
@@ -1497,6 +1552,7 @@ impl LDFA {
         }
 
         let mut pos = start_pos;
+        let mut prev_entry = usize::MAX;
 
         loop {
             let tables = self.scan_tables(data);
@@ -1508,6 +1564,7 @@ impl LDFA {
                 nulls,
                 b,
                 None,
+                &mut prev_entry,
             )?;
 
             if EARLY_EXIT && !nulls.is_empty() {
@@ -1515,7 +1572,7 @@ impl LDFA {
             }
 
             if !cache_miss {
-                self.handle_rev_end(b, as_sid(state)?, data, nulls)?;
+                let _ = self.handle_rev_end(b, as_sid(state)?, data, nulls)?;
                 break;
             }
 
@@ -1569,6 +1626,8 @@ impl LDFA {
             curr = self.pruned as u32;
         }
 
+        let mut prev_entry = usize::MAX;
+
         loop {
             let tables = self.scan_tables(data);
             let (state, new_pos, cache_miss) = self.dispatch_collect_rev::<EARLY_EXIT>(
@@ -1579,6 +1638,7 @@ impl LDFA {
                 nulls,
                 b,
                 conv_b.as_deref_mut(),
+                &mut prev_entry,
             )?;
 
             if EARLY_EXIT && !nulls.is_empty() {
@@ -1592,7 +1652,14 @@ impl LDFA {
                 pos = new_pos + 1;
                 continue;
             } else {
-                self.handle_rev_end(b, as_sid(state)?, data, nulls)?;
+                let new_state = self.handle_rev_end(b, as_sid(state)?, data, nulls)?;
+                let needs_retry = new_state == self.pruned
+                    || nulls.min_pos().map_or(true, |min| min >= prev_entry);
+                if prev_entry != usize::MAX && prev_entry > 0 && needs_retry {
+                    curr = self.pruned as u32;
+                    pos = prev_entry;
+                    continue;
+                }
                 break;
             }
         }
@@ -1606,7 +1673,7 @@ impl LDFA {
         sid: u16,
         data: &[u8],
         nulls: &mut StartPositions,
-    ) -> Result<(), Error> {
+    ) -> Result<u16, Error> {
         let mt = self.mt_lookup[data[0] as usize] as u32;
         #[cfg(feature = "debug")]
         {
@@ -1640,7 +1707,7 @@ impl LDFA {
 
         let effect = self.effects_id[new_state as usize] as u32;
         collect_rev_complex(self.effects.as_ptr(), effect, 0, Nullability::END, nulls);
-        Ok(())
+        Ok(new_state)
     }
 }
 

@@ -1,28 +1,14 @@
 # Features
 
-## Patterns beyond the RE# fragment
+## Extended support for lookarounds compared to original RE# spec
 
-The crate deliberately accepts a superset of the patterns the RE#
-formalization (and the .NET `resharp-dotnet` engine) supports. The gatekeeper
-is `ensure_supported_rec` (`resharp-engine/src/lib.rs`): where the .NET engine
-rejects a whole class of constructs at compile time, this crate accepts some
-of those shapes to unlock practical patterns, e.g.:
+This crate accepts some patterns that the RE# spec (and the .NET
+engine) reject, because they're actually fine and useful, for example:
 
-- lookarounds inside a union, when the union's branches are distinguishable
-  (otherwise `UnsupportedPattern`);
-- a lookbehind-carrying union under an intersection, handled by eagerly
-  distributing `(A|B) & C` to `(A&C)|(B&C)`, which unlocks patterns like
-  `(^abc|def)&.*`.
+- lookarounds inside a union, like `(?<=a)x|y`, as long as the branches are distinguishable
+- a lookbehind-carrying union combined with `&`, like `(^abc|def)&.*`.
 
-Two practical consequences:
-
-- A pattern compiling here is not evidence it is inside the formally verified
-  RE# fragment; portability to other RE# implementations is not implied.
-- The accepted-superset region is newer and has less formal backing than the
-  core fragment; recent fuzzing found most of its soundness issues exactly
-  there. If you need maximum confidence, staying inside the fragment (no
-  lookaround-in-union, no anchors under complement) is the conservative
-  choice.
+such patterns are covered by heuristic checks in the parser
 
 ## Hardened mode
 
@@ -37,7 +23,7 @@ let re = resharp::Regex::with_options(
 ).unwrap();
 ```
 
-Note: RE# auto-hardens many common patterns at compile time, so the default engine is already linear on the bulk of pathological real-world regexes. Reach for `hardened(true)` only when worst-case linearity is a hard requirement (e.g. running untrusted patterns).
+Note: RE# auto-hardens many common patterns at compile time, so the default engine is already linear on the bulk of pathological real-world regexes. Use `hardened(true)` only when worst-case linearity is a hard requirement (e.g. running untrusted patterns).
 
 - With hardened mode, in the worst cases you can expect performance roughly around 100MBs on consumer hardware. Having it disabled can sometimes be more than 10x faster
 

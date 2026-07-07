@@ -10,7 +10,7 @@ pp = '(?=~(\A_*)\z)'
 [[test]]
 name = 'not-begins?'
 pattern = '(?!\A)(?=[A-Z])'
-pp = '(?=[A-Z]_*){∅}❮(&~(\A_*))❯'
+pp = '(?=(~(\A_*)\z&[A-Z]_*))'
 
 [[test]]
 name = 'lookahead_lift_anchor'
@@ -157,12 +157,22 @@ pp = '((?<=_*(\A|\n))|x)\-\-y'
 [[test]]
 name = 'utf8_codepoint'
 pattern = '\p{utf8}'
-pp = '([\x00-\x7F]|[\xC0-\xDF][\x80-\xBF]|[\xE0-\xEF][\x80-\xBF][\x80-\xBF]|[\xF0-\xF7][\x80-\xBF]{3})'
+pp = '([\x00-\x7F]|[\xC0-\xDF][\x80-\xBF]|[\xE0-\xEF][\x80-\xBF]{2}|[\xF0-\xF7][\x80-\xBF]{3})'
 
 [[test]]
 name = 'utf8_constrained_complement'
 pattern = '~(_*abc_*)&\p{utf8}*'
-pp = '(~(_*abc_*)&([\x00-\x7F]|[\xC0-\xDF][\x80-\xBF]|[\xE0-\xEF][\x80-\xBF][\x80-\xBF]|[\xF0-\xF7][\x80-\xBF]{3})*)'
+pp = '(~(_*abc_*)&([\x00-\x7F]|[\xC0-\xDF][\x80-\xBF]|[\xE0-\xEF][\x80-\xBF]{2}|[\xF0-\xF7][\x80-\xBF]{3})*)'
+
+[[test]]
+name = 'trailing_run_of_two_anchors_merges'
+pattern = '\z\A\A'
+pp = '\z\A{2}'
+
+[[test]]
+name = 'trailing_run_of_two_literals_merges'
+pattern = 'baa'
+pp = 'ba{2}'
 
 [[test]]
 name = 'stacked_lookbehind_a_b'
@@ -180,7 +190,7 @@ pattern = '.*|.*(.+)*.+'
 pp = '.*'
 
 [[test]]
-name = 'bug10_lb_start_compl'
+name = 'lookbehind_start_anchor_complement'
 pattern = '(?<=^)~(0+)'
 pp = '(?<=_*(\A|\n))~(0+)'
 

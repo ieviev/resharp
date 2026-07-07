@@ -40,6 +40,10 @@
           "default": false,
           "type": "boolean"
         },
+        "full": {
+          "default": false,
+          "type": "boolean"
+        },
         "ignore": {
           "default": false,
           "type": "boolean"

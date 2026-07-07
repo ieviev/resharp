@@ -30,6 +30,8 @@ pub struct EngineCase {
     #[serde(default)]
     pub javascript: bool,
     #[serde(default)]
+    pub full: bool,
+    #[serde(default)]
     pub prefix_kind: Option<String>,
     #[serde(default)]
     pub not_prefix_kind: Option<String>,

@@ -407,3 +407,163 @@ name = "bounded_lookahead_range_fixed_width"
 pattern = 'a(?=x{5,5})'
 input = "axxxxx axxxx"
 matches = [[0, 1]]
+
+
+[[test]]
+name = "fwd_lb_prefix_line_anchor_newline_b"
+pattern = '^_?'
+input = "\nb"
+matches = [[0, 1], [1, 2]]
+
+[[test]]
+name = "fwd_lb_prefix_line_anchor_double_newline"
+pattern = '^_?'
+input = "\n\n"
+matches = [[0, 1], [1, 2], [2, 2]]
+
+[[test]]
+name = "fwd_lb_prefix_line_anchor_double_newline_b"
+pattern = '^_?'
+input = "\n\nb"
+matches = [[0, 1], [1, 2], [2, 3]]
+
+[[test]]
+name = "fwd_lb_prefix_line_anchor_bounded_repeat_alt"
+pattern = '^{3}([\w]{2,}0{3}|_?)'
+input = "\n\n"
+matches = [[0, 1], [1, 2], [2, 2]]
+
+[[test]]
+name = "fwd_lb_prefix_lookbehind_newline"
+pattern = '(?<=\n)_?'
+input = "\n\n"
+matches = [[1, 2], [2, 2]]
+
+
+[[test]]
+name = "unanchored_false_positive_class_digit_prefix_match"
+pattern = "A00[12]"
+input = "A003"
+matches = []
+
+[[test]]
+name = "unanchored_false_positive_class_digit_no_match"
+pattern = "A00[12]"
+input = "A004"
+matches = []
+
+[[test]]
+name = "unanchored_false_positive_class_digit_prefix_in_filename"
+pattern = "A00[12]"
+input = "sample_A003_chunk_001.txt"
+matches = []
+
+[[test]]
+name = "unanchored_false_positive_alternation_prefix_match"
+pattern = "A001|A002"
+input = "A003"
+matches = []
+
+[[test]]
+name = "unanchored_false_positive_alternation_no_match"
+pattern = "A001|A002"
+input = "A004"
+matches = []
+
+[[test]]
+name = "unanchored_false_positive_class_digit_prefix_match_anchored"
+pattern = "A00[12]"
+input = "A003"
+matches = []
+anchored = true
+
+[[test]]
+name = "unanchored_false_positive_class_digit_no_match_anchored"
+pattern = "A00[12]"
+input = "A004"
+matches = []
+anchored = true
+
+[[test]]
+name = "unanchored_false_positive_class_digit_prefix_in_filename_anchored"
+pattern = "A00[12]"
+input = "sample_A003_chunk_001.txt"
+matches = []
+anchored = true
+
+[[test]]
+name = "unanchored_false_positive_alternation_prefix_match_anchored"
+pattern = "A001|A002"
+input = "A003"
+matches = []
+anchored = true
+
+[[test]]
+name = "unanchored_false_positive_alternation_no_match_anchored"
+pattern = "A001|A002"
+input = "A004"
+matches = []
+anchored = true
+
+
+[[test]]
+name = "always_nullable_negated_class_star_pairs"
+pattern = '[^/]*'
+input = "aa/bb"
+matches = [[0, 2], [2, 2], [3, 5], [5, 5]]
+
+[[test]]
+name = "always_nullable_negated_class_bounded_repeat"
+pattern = '[^/]{0,3}'
+input = "aaaa/b"
+matches = [[0, 3], [3, 4], [4, 4], [5, 6], [6, 6]]
+
+[[test]]
+name = "always_nullable_dot_star_pairs"
+pattern = '.*'
+input = "ab\ncd"
+matches = [[0, 2], [2, 2], [3, 5], [5, 5]]
+
+[[test]]
+name = "always_nullable_digit_bounded_repeat"
+pattern = '\d{0,7}'
+input = "x0y"
+matches = [[0, 0], [1, 2], [2, 2], [3, 3]]
+
+
+[[test]]
+name = "simd_findall_offset1_zerowidth_start_anchor"
+pattern = '^$'
+input = "\n\n"
+matches = [[0, 0], [1, 1], [2, 2]]
+
+[[test]]
+name = "simd_findall_offset1_zerowidth_optional_nul"
+pattern = '^\x00?'
+input = "\n\u0006.\n\u0000"
+matches = [[0, 0], [1, 1], [4, 5]]
+
+
+[[test]]
+name = "sanity_always_nullable_star_alt"
+pattern = 'a*'
+input = "aaa"
+matches = [[0, 3], [3, 3]]
+
+[[test]]
+name = "sanity_always_nullable_alternation_star"
+pattern = '(a|b)*'
+input = "abab"
+matches = [[0, 4], [4, 4]]
+
+[[test]]
+name = "sanity_always_nullable_star_end_anchor"
+pattern = 'a*\z'
+input = "aaa"
+matches = [[0, 3], [3, 3]]
+
+[[test]]
+name = "sanity_always_nullable_dot_star"
+pattern = '.*'
+input = "xy"
+matches = [[0, 2], [2, 2]]

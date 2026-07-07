@@ -19,13 +19,13 @@ fn stream_matches_find_all_for_zero_rep_group_intersection() {
 }
 
 #[test]
-fn bug15_direct_no_catch() {
+fn direct_no_catch() {
     let re = resharp::Regex::new("a&b").unwrap();
     let _ = re.stream(b"aaa");
 }
 
 #[test]
-fn bug15_stream_no_panic_on_extended_operators() {
+fn stream_no_panic_on_extended_operators() {
     let cases: &[(&str, &[u8])] = &[
         ("a&b",             b"aaa"),
         ("(a*&b)",          b"aaa"),
@@ -43,7 +43,7 @@ fn bug15_stream_no_panic_on_extended_operators() {
 }
 
 #[test]
-fn bug9_stream_nonempty_when_is_match_true() {
+fn stream_nonempty_when_is_match_true() {
     let cases: &[(&str, &[u8])] = &[
         (r"\A\z?",  b"a"),
         (r"(?<!b)", b"b"),
@@ -62,7 +62,7 @@ fn bug9_stream_nonempty_when_is_match_true() {
 }
 
 #[test]
-fn repro_bug03_stream_phantom_zerowidth() {
+fn stream_matches_find_all_for_zero_width_patterns() {
     for (p, inp) in [
         (r"(?=c)", "c"),
         (r"\b", "ab"),

@@ -409,3 +409,55 @@ name = "email_boundary_inner_literal"
 pattern = '\b([a-zA-Z0-9])([a-zA-Z0-9\.\_-]+)@([a-zA-Z0-9\.-]+)\.([a-zA-Z]{2,})\b'
 input = "contact a@b.com or x.y_z@sub.example.org, not @bad or foo@bar"
 matches = [[19, 40]]
+
+[[test]]
+name = "word_boundary_after_grouped_trailing_lookahead_capturing"
+pattern = '(a(?= ))\b'
+input = "a b"
+matches = [[0, 1]]
+
+[[test]]
+name = "word_boundary_after_grouped_trailing_lookahead_noncapturing"
+pattern = '(?:a(?= ))\b'
+input = "a b"
+matches = [[0, 1]]
+
+[[test]]
+name = "word_boundary_after_trailing_lookahead_ungrouped"
+pattern = 'a(?= )\b'
+input = "a b"
+matches = [[0, 1]]
+
+[[test]]
+name = "non_word_boundary_after_newline"
+pattern = '\B'
+input = "\ncb"
+matches = [[0, 0], [2, 2]]
+
+[[test]]
+name = "word_boundary_broadened_begin_anchor"
+pattern = '\b11\b'
+input = "11 "
+matches = [[0, 2]]
+
+[[test]]
+name = "word_boundary_after_newline"
+pattern = 'a\b'
+input = "a\nb"
+matches = [[0, 1]]
+ascii = true
+
+[[test]]
+name = "word_boundary_after_newline_anchored"
+pattern = 'a\b'
+input = "a\nb"
+matches = [[0, 1]]
+ascii = true
+anchored = true
+
+[[test]]
+name = "grouped_optional_lookahead_before_non_word_boundary"
+pattern = '((?=x?))\B'
+input = "ba c"
+matches = [[1, 1]]
+ascii = true

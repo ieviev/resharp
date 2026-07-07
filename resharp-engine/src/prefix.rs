@@ -904,6 +904,7 @@ pub(crate) fn build_rev_prefix_search(
     feature = "serialize",
     derive(serde::Serialize, serde::Deserialize, Clone)
 )]
+#[cfg_attr(feature = "serialize", allow(missing_docs))]
 pub enum PrefixKind {
     AnchoredRev,
     AnchoredFwd(crate::accel::FwdPrefixSearch),
@@ -913,6 +914,7 @@ pub enum PrefixKind {
     Convergence,
 }
 
+#[cfg_attr(feature = "serialize", allow(missing_docs))]
 impl PrefixKind {
     #[cfg(feature = "diag")]
     pub(crate) fn is_fwd(&self) -> bool {
@@ -1197,6 +1199,34 @@ fn conv_der_through_set(b: &mut RegexBuilder, node: NodeId, s: TSetId) -> Result
     Ok(NodeId::BOT)
 }
 
+fn conv_left_after_run(
+    b: &mut RegexBuilder,
+    conv_node: NodeId,
+    run: &[TSetId],
+) -> Result<NodeId, Error> {
+    let mut left = conv_node;
+    for &s in run.iter().rev() {
+        left = conv_der_through_set(b, left, s)?;
+        if left == NodeId::BOT {
+            break;
+        }
+    }
+    Ok(left)
+}
+
+fn conv_left_is_bounded(
+    b: &mut RegexBuilder,
+    conv_node: NodeId,
+    run: &[TSetId],
+) -> Result<bool, Error> {
+    let left = conv_left_after_run(b, conv_node, run)?;
+    if left == NodeId::BOT {
+        return Ok(true);
+    }
+    let (_, left_max) = b.get_min_max_length(left);
+    Ok(left_max != u32::MAX)
+}
+
 fn conv_run_boundary_ambiguous(
     b: &mut RegexBuilder,
     conv_node: NodeId,
@@ -1217,15 +1247,16 @@ fn conv_run_boundary_ambiguous(
     if b.solver().and_id(run_core, b_lead) == TSetId::EMPTY {
         return Ok(false);
     }
-    let mut left = conv_node;
-    for &s in run.iter().rev() {
-        left = conv_der_through_set(b, left, s)?;
-        if left == NodeId::BOT {
-            return Ok(true);
-        }
+    let left = conv_left_after_run(b, conv_node, run)?;
+    if left == NodeId::BOT {
+        return Ok(true);
     }
     let left_lead = conv_leading_set(b, left)?;
-    Ok(b.solver().and_id(run_core, left_lead) == TSetId::EMPTY)
+    if b.solver().and_id(run_core, left_lead) == TSetId::EMPTY {
+        return Ok(true);
+    }
+    let (_, left_max) = b.get_min_max_length(left);
+    Ok(left_max != u32::MAX)
 }
 
 #[cfg(feature = "convergence_prefix")]
@@ -1254,8 +1285,14 @@ fn try_convergence_prefix(
         return Ok(None);
     };
     let (b_min, b_max) = b.get_min_max_length(b_node);
-    if b_max == u32::MAX
-        && (b_min >= 2 || b_node.contains_lookaround(b))
+    if b_max == u32::MAX {
+        let needs_check = b_min >= 2
+            || b_node.contains_lookaround(b)
+            || conv_left_is_bounded(b, conv_node, &run)?;
+        if needs_check && conv_run_boundary_ambiguous(b, conv_node, &run, b_node)? {
+            return Ok(None);
+        }
+    } else if b_node.contains_lookaround(b)
         && conv_run_boundary_ambiguous(b, conv_node, &run, b_node)?
     {
         return Ok(None);
@@ -1508,6 +1545,9 @@ pub(crate) fn fwd_lb_class(b: &mut RegexBuilder, lb: NodeId) -> Option<(NodeId, 
         }
         lb_stripped = after;
     }
+    if b.ends_with_end(lb_stripped) {
+        return None;
+    }
     match b.get_fixed_length(lb_stripped) {
         Some(len @ 1..=64) => Some((lb_stripped, len)),
         _ => None,
@@ -1553,11 +1593,13 @@ fn try_build_fwd_lb(
     feature = "serialize",
     derive(serde::Serialize, serde::Deserialize, Clone)
 )]
+#[cfg_attr(feature = "serialize", allow(missing_docs))]
 pub struct NegLbTerm {
     pub len: usize,
     pub classes: Vec<[u64; 4]>,
 }
 
+#[cfg_attr(feature = "serialize", allow(missing_docs))]
 impl NegLbTerm {
     #[inline]
     fn matches(&self, input: &[u8], start: usize) -> bool {
@@ -1582,10 +1624,12 @@ impl NegLbTerm {
     feature = "serialize",
     derive(serde::Serialize, serde::Deserialize, Clone)
 )]
+#[cfg_attr(feature = "serialize", allow(missing_docs))]
 pub struct NegLb {
     pub terms: Vec<NegLbTerm>,
 }
 
+#[cfg_attr(feature = "serialize", allow(missing_docs))]
 impl NegLb {
     #[inline]
     pub(crate) fn rejects(&self, input: &[u8], start: usize) -> bool {

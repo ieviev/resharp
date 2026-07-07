@@ -14,7 +14,8 @@ const RARE_BYTE_FREQ_LIMIT: u16 = 25_000;
 /// when two DFAs arent necessary
 /// this is basically derivative based Aho-Corasick
 #[cfg_attr(feature = "serialize", derive(serde::Serialize, serde::Deserialize))]
-pub(crate) struct BDFA {
+#[cfg_attr(feature = "serialize", allow(missing_docs))]
+pub struct BDFA {
     #[cfg_attr(feature = "serialize", serde(skip))]
     initial_node: NodeId,
     /// states as Counted node chains.
@@ -46,6 +47,7 @@ pub(crate) struct BDFA {
     pub after_prefix: u16,
 }
 
+#[cfg_attr(feature = "serialize", allow(missing_docs))]
 impl BDFA {
     pub fn new(b: &mut RegexBuilder, pattern_node: NodeId) -> Result<Self, Error> {
         let initial_node = b.mk_ordered(pattern_node, NodeId::MISSING, 0);

@@ -1495,9 +1495,13 @@ impl<'s> ResharpParser<'s> {
                     inner
                 }
             }
-            Ast::Lookaround(la) => match la.kind {
-                ast::LookaroundKind::PositiveLookahead
-                | ast::LookaroundKind::PositiveLookbehind => Self::word_char_kind(&la.ast, left),
+            Ast::Lookaround(la) => match (&la.kind, left) {
+                (ast::LookaroundKind::PositiveLookahead, false) => {
+                    Self::word_char_kind(&la.ast, left)
+                }
+                (ast::LookaroundKind::PositiveLookbehind, true) => {
+                    Self::word_char_kind(&la.ast, left)
+                }
                 _ => Unknown,
             },
             Ast::Assertion(a) => match (&a.kind, left) {
@@ -1550,10 +1554,10 @@ impl<'s> ResharpParser<'s> {
         dir: isize,
         translator: &mut Option<Translator>,
         tb: &mut TB<'s>,
-        word_id: NodeId,
-        not_word_id: NodeId,
     ) -> Result<WordCharKind> {
         use WordCharKind::*;
+        let word_id = self.unicode_classes.word;
+        let not_word_id = self.unicode_classes.non_word;
         let fast = Self::concat_neighbor_kind(asts, idx, dir);
         if fast != Unknown {
             return Ok(fast);
@@ -1619,9 +1623,9 @@ impl<'s> ResharpParser<'s> {
             let mut neighbor_node = tb
                 .try_elim_lookarounds(neighbor_node)
                 .ok_or_else(|| self.error(self.span(), ast::ErrorKind::UnsupportedResharpRegex))?;
-            neighbor_node = tb.reverse(neighbor_node).or_else(|_| {
-                Err(self.error(self.span(), ast::ErrorKind::UnsupportedResharpRegex))
-            })?;
+            neighbor_node = tb
+                .reverse(neighbor_node)
+                .map_err(|_| self.error(self.span(), ast::ErrorKind::UnsupportedResharpRegex))?;
             let word_prefix = tb.mk_concat(word_id, NodeId::TS);
             let non_word_prefix = tb.mk_concat(not_word_id, NodeId::TS);
             return if tb.subsumes(word_prefix, neighbor_node) == Some(true) {
@@ -1869,9 +1873,8 @@ impl<'s> ResharpParser<'s> {
             self.unicode_classes.ensure_word_ascii(tb);
         }
         let word_id = self.unicode_classes.word;
-        let not_word_id = self.unicode_classes.non_word;
-        let left = self.resolve_word_kind(asts, idx, -1, translator, tb, word_id, not_word_id)?;
-        let right = self.resolve_word_kind(asts, idx, 1, translator, tb, word_id, not_word_id)?;
+        let left = self.resolve_word_kind(asts, idx, -1, translator, tb)?;
+        let right = self.resolve_word_kind(asts, idx, 1, translator, tb)?;
         let boundary_match = !negated;
         match (left, right) {
             (NonWord, Word) | (Word, NonWord) => Ok((
@@ -2116,6 +2119,7 @@ impl<'s> ResharpParser<'s> {
                 }
             },
             Ast::Repetition(r) => {
+                let rep_span = r.span;
                 let body = self.ast_to_node_id(&r.ast, translator, tb);
                 match body {
                     Ok(body) => match &r.op.kind {
@@ -2130,7 +2134,19 @@ impl<'s> ResharpParser<'s> {
                                 Ok(tb.mk_concat(rep, st))
                             }
 
-                            ast::RepetitionRange::Bounded(n, m) => Ok(tb.mk_repeat(body, *n, *m)),
+                            ast::RepetitionRange::Bounded(n, m) => {
+                                let variance = m.saturating_sub(*n);
+                                let has_fused_tail = (body.is_lookahead(tb)
+                                    && body.right(tb) != NodeId::MISSING)
+                                    || (body.is_lookbehind(tb) && body.right(tb) != NodeId::MISSING);
+                                if (variance >= 2
+                                    && (body.is_lookahead(tb) || body.is_lookbehind(tb)))
+                                    || (variance >= 1 && has_fused_tail)
+                                {
+                                    return Err(self.error(rep_span, ast::ErrorKind::UnsupportedResharpRegex));
+                                }
+                                Ok(tb.mk_repeat(body, *n, *m))
+                            }
                         },
                     },
                     Err(_) => body,
@@ -2144,6 +2160,7 @@ impl<'s> ResharpParser<'s> {
                         let mut rest = body;
                         while tb.get_kind(rest) == Kind::Concat
                             && tb.get_kind(rest.left(tb)) == Kind::Lookbehind
+                            && rest.left(tb).right(tb) == NodeId::MISSING
                         {
                             prefix = tb.mk_concat(prefix, rest.left(tb));
                             rest = rest.right(tb);
