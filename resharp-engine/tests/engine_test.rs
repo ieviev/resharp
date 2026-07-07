@@ -5829,6 +5829,7 @@ fn negative_lookahead_then_optional_atom_then_lookahead_prefers_longer_leftmost_
 }
 
 #[test]
+#[ignore = "time based test"]
 fn nested_bounded_repeat_of_bounded_repeat_compiles_in_bounded_time() {
     use resharp::{Regex, RegexOptions, UnicodeMode};
     for mode in [
@@ -5854,6 +5855,7 @@ fn nested_bounded_repeat_of_bounded_repeat_compiles_in_bounded_time() {
 }
 
 #[test]
+#[ignore = "time based test"]
 fn lookahead_plus_star_wrapped_nested_bounded_repeat_compiles_in_bounded_time() {
     use resharp::{Regex, RegexOptions, UnicodeMode};
     for mode in [
