@@ -43,6 +43,7 @@ struct RegexDump {
     initial_nullability: resharp_algebra::nulls::Nullability,
     fwd_end_nullable: bool,
     fwd_begin_anchored: bool,
+    fwd_lb_stripped: bool,
     rev_end_anchored: bool,
     has_bounded: bool,
     bounded_safe_find_all: bool,
@@ -195,6 +196,7 @@ impl Regex {
             has_anchors: self.init_flags.has_anchors(),
             prefix: self.prefix.clone(),
             fwd_begin_anchored: self.fwd_begin_anchored,
+            fwd_lb_stripped: self.fwd_lb_stripped,
             find_all: self.find_all,
             class_plus: self.class_plus,
             fwd: if uses_fwd {
@@ -277,6 +279,7 @@ impl Regex {
             star_loop: dump.star_loop,
             is_empty_lang: dump.is_empty_lang,
             fwd_begin_anchored: dump.fwd_begin_anchored,
+            fwd_lb_stripped: dump.fwd_lb_stripped,
             find_all: dump.find_all,
             class_plus: dump.class_plus,
             initial_nullability: dump.initial_nullability,
