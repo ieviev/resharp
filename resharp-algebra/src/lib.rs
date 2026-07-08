@@ -2529,7 +2529,11 @@ impl RegexBuilder {
                         || union.right(self).contains_lookbehind(self)
                     {
                         if new_left.is_ts() {
-                            self.mk_concat(new_left, new_right)
+                            let ul = union.left(self);
+                            let ur = union.right(self);
+                            let l = self.mk_concat(new_left, ul);
+                            let r = self.mk_concat(new_left, ur);
+                            self.mk_union(l, r)
                         } else {
                             #[cfg(feature = "debug")]
                             {
@@ -2552,7 +2556,11 @@ impl RegexBuilder {
                         || union.right(self).contains_lookbehind(self)
                     {
                         if new_left.is_ts() {
-                            self.mk_concat(new_left, new_right)
+                            let ul = self.reverse(union.left(self))?;
+                            let ur = self.reverse(union.right(self))?;
+                            let l = self.mk_concat(new_left, ul);
+                            let r = self.mk_concat(new_left, ur);
+                            self.mk_union(l, r)
                         } else {
                             return Err(ResharpError::UnsupportedPattern);
                         }

@@ -4501,6 +4501,22 @@ fn bounded_always_nullable_matches_oracle() {
 }
 
 #[test]
+fn disable_prefixes_also_disables_bounded() {
+    let pat = r"[^\n\r]{0,10}";
+    let normal = Regex::with_options(pat, RegexOptions::default()).unwrap();
+    assert_eq!(normal.find_all_kind_name(), "Bounded", "pat={pat}");
+    let opts = RegexOptions { disable_prefixes: true, ..RegexOptions::default() };
+    let disabled = Regex::with_options(pat, opts).unwrap();
+    assert_ne!(disabled.find_all_kind_name(), "Bounded", "pat={pat}");
+    let hay = b"abcdefghijklmnop";
+    assert_eq!(
+        normal.find_all(hay).unwrap(),
+        disabled.find_all(hay).unwrap(),
+        "pat={pat}"
+    );
+}
+
+#[test]
 fn bounded_range_with_nullable_alt_no_overrun() {
     use resharp::{RegexOptions, UnicodeMode};
     let cases: &[(&str, &str, &[(usize, usize)])] = &[

@@ -1154,3 +1154,36 @@ pattern = '(?<=\n\z+).?'
 input = "b::-a.-\n-bca."
 matches = []
 ascii = true
+
+[[test]]
+name = "optional_group_with_neg_lookahead_in_pos_lookahead_ascii"
+pattern = "(?=((?!zz).?)?b)-*"
+input = "-bb"
+matches = [[0, 1], [1, 1], [2, 2]]
+ascii = true
+
+[[test]]
+name = "optional_group_with_neg_lookahead_in_pos_lookahead_javascript"
+pattern = "(?=((?!zz).?)?b)-*"
+input = "-bb"
+matches = [[0, 1], [1, 1], [2, 2]]
+javascript = true
+
+[[test]]
+name = "optional_group_with_neg_lookahead_in_pos_lookahead_full"
+pattern = "(?=((?!zz).?)?b)-*"
+input = "-bb"
+matches = [[0, 1], [1, 1], [2, 2]]
+full = true
+
+[[test]]
+name = "minimal_union_eps_repro"
+pattern = "(?=(?:(?!zz).?|)b)-*"
+input = "-bb"
+matches = [[0, 1], [1, 1], [2, 2]]
+
+[[test]]
+name = "no_wrapper_group_is_unaffected"
+pattern = "(?=(?!zz).?b)-*"
+input = "-bb"
+matches = [[0, 1], [1, 1], [2, 2]]

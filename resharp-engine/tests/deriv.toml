@@ -42,3 +42,20 @@ pattern = "(?<!ab)x"
 input = "xabx"
 rev = ["?", "?", "?", "?"]
 
+[[test]]
+name = "optional_neg_lookahead_in_lookahead_rev_trace"
+pattern = "(?=((?!zz).?)?b)-*"
+input = "-bb"
+rev = ["?", "?", "?"]
+
+[[test]]
+name = "minimal_union_eps_repro"
+pattern = "(?=(?:(?!zz).?|)b)-*"
+input = "-bb"
+rev = ["?", "?", "?"]
+
+[[test]]
+name = "no_star_tail_rev_check"
+pattern = "(?=((?!zz).?)?b)"
+input = "-bb"
+rev = ["?", "?", "?"]

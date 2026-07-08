@@ -62,7 +62,10 @@ pub(crate) mod stream;
 pub use stream::StreamState;
 
 #[cfg(feature = "serialize")]
-pub(crate) mod dump;
+pub mod dump;
+#[cfg(feature = "serialize")]
+#[allow(missing_docs)]
+pub use dump::RegexDump;
 #[cfg(feature = "serialize")]
 #[allow(missing_docs)]
 pub use bdfa::BDFA;
@@ -1317,7 +1320,8 @@ impl Regex {
         // lots of conditions when something else is better.. possibly removing it entirely
         let always_nullable = initial_nullability == Nullability::ALWAYS;
         let max_len_limit = if always_nullable { 512 } else { 100 };
-        let use_bounded = !has_fwd_prefix
+        let use_bounded = !opts.disable_prefixes
+            && !has_fwd_prefix
             && max_length.is_some()
             && max_len <= max_len_limit
             && !b.contains_lookbehind(node_fwd_simpl)

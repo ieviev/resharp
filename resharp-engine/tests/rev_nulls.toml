@@ -314,3 +314,15 @@ name = "optional_prefix_class_then_bounded_repeat_with_gap_and_trailing_star_mis
 pattern = '[^bc]?-*b{2}.?b*[c:]'
 input = "bbbc"
 rev_nulls = [1, 0]
+
+[[test]]
+name = "optional_group_with_neg_lookahead_in_pos_lookahead"
+pattern = "(?=((?!zz).?)?b)-*"
+input = "-bb"
+rev_nulls = [2, 1, 0]
+
+[[test]]
+name = "neg_lookahead_inside_dot_lookahead_working_case"
+pattern = "(?=.(?!a))"
+input = "aa"
+rev_nulls = [1]
