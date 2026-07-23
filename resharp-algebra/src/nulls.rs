@@ -96,7 +96,7 @@ impl NullRun {
 type Nulls = Vec<NullRun>;
 
 /// Append-only arena of `RunList` nodes, addressed by index instead of `Rc`.
-#[derive(Default)]
+#[derive(Default, Clone)]
 struct RunArena {
     nodes: Vec<(NullRun, Option<u32>)>,
 }
@@ -677,19 +677,20 @@ pub fn collect_nulls(
 }
 
 #[repr(u8)]
-#[derive(Hash, PartialEq, Eq)]
+#[derive(Hash, PartialEq, Eq, Clone)]
 enum Operation {
     Or,
     Inter,
 }
 
-#[derive(Hash, PartialEq, Eq)]
+#[derive(Hash, PartialEq, Eq, Clone)]
 struct Key {
     op: Operation,
     left: NullsId,
     right: NullsId,
 }
 
+#[derive(Clone)]
 pub struct NullsBuilder {
     cache: FxHashMap<Nulls, NullsId>,
     created: FxHashMap<Key, NullsId>,

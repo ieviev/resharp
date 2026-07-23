@@ -193,6 +193,7 @@ struct Metadata {
     nulls: NullsId,
 }
 
+#[derive(Clone)]
 struct MetadataBuilder {
     num_created: u32,
     solver: Solver,
@@ -323,6 +324,7 @@ impl BuilderFlags {
     pub(crate) const SUBSUME: BuilderFlags = BuilderFlags(1);
 }
 
+#[derive(Clone)]
 pub struct RegexBuilder {
     mb: MetadataBuilder,
     temp_vec: Vec<NodeId>,

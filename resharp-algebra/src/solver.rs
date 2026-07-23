@@ -124,6 +124,7 @@ impl TSetId {
 use rustc_hash::FxHashMap;
 use std::collections::BTreeSet;
 
+#[derive(Clone)]
 pub struct Solver {
     cache: FxHashMap<TSet, TSetId>,
     pub array: Vec<TSet>,
