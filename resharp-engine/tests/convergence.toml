@@ -42,7 +42,7 @@ pattern = '\n[ ]*ab([^\n]+)(?=\n)'
 input = "\nabcd\n"
 matches = [[0, 5]]
 javascript = true
-prefix_kind = "Convergence"
+prefix_kind = "AnchoredFwd"
 
 [[test]]
 name = "single_byte_literal_double_sep"

@@ -1319,6 +1319,9 @@ fn try_convergence_prefix(
     }
     let b_potential = calc_potential_start(b, b_node, 16, 64, false)?;
     let b_shape = classify_body_shape(b, b_node, &b_potential);
+    if !force && !matches!(b_shape, NodeShape::TrailingStar) {
+        return Ok(None);
+    }
     let conv_cost = scan_cost(b, &run, Direction::Fwd, b_shape);
     Ok(Some((
         PrefixKind::Convergence,

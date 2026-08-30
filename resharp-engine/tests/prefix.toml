@@ -304,10 +304,9 @@ kind = "Convergence"
 conv_literal = "props"
 
 [[test]]
-name = "trailing_redundant_lookahead_keeps_convergence"
+name = "trailing_redundant_lookahead_rejects_convergence_unbounded_body"
 pattern = '\Wprops.(\w+)(?!\w)'
-kind = "Convergence"
-conv_literal = "props"
+kind = "AnchoredFwd"
 
 [[test]]
 name = "leading_literal_trailing_class_run_anchored_fwd"

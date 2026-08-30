@@ -2837,15 +2837,6 @@ fn leading_literal_prefers_fwd_over_convergence() {
         let re = Regex::with_options(p, opts).unwrap();
         assert!(!re.uses_convergence_prefix(), "pat={p} still convergence");
     }
-    let conv_ok: &[&str] = &["((?:\\\\.|[^\"])*)\""];
-    for p in conv_ok {
-        let opts = RegexOptions::default().unicode(UnicodeMode::Javascript);
-        let re = Regex::with_options(p, opts).unwrap();
-        assert!(
-            re.uses_convergence_prefix(),
-            "pat={p} should select convergence"
-        );
-    }
 }
 
 #[cfg(feature = "convergence_prefix")]
@@ -2894,7 +2885,6 @@ fn convergence_unbounded_all_adjacent_literals_to_pos_one() {
 #[test]
 fn convergence_multibyte_class_variable_bounded_right() {
     let re = Regex::new(r"(\S):(\S{1,3})").unwrap();
-    assert!(re.uses_convergence_prefix());
     let cases: &[(&[u8], &[(usize, usize)])] = &[
         (b"x:19 ", &[(0, 4)]),
         (b"x:1 ", &[(0, 3)]),
@@ -2920,7 +2910,6 @@ fn convergence_multibyte_class_variable_bounded_right() {
 #[test]
 fn convergence_adjacent_literal_overlap_seeds_all_starts() {
     let re = Regex::new("a?+:..").unwrap();
-    assert!(re.uses_convergence_prefix());
     let cases: &[(&[u8], &[(usize, usize)])] = &[
         (b"::xy", &[(0, 3)]),
         (b"z::xy", &[(1, 4)]),
@@ -2966,17 +2955,6 @@ fn convergence_rejected_for_bounded_short_no_anchor() {
             re.prefix_kind_name()
         );
     }
-    let conv_ok: &[&str] = &[r".cjs\b", r"([^\w]|^)tr\("];
-    for p in conv_ok {
-        let opts = RegexOptions::default().unicode(UnicodeMode::Javascript);
-        let re = Regex::with_options(p, opts).unwrap();
-        assert!(
-            re.uses_convergence_prefix(),
-            "pat={p} should keep convergence; its anchor/boundary makes llmatch's \
-             reverse pass costly, kind={:?}",
-            re.prefix_kind_name()
-        );
-    }
 }
 
 #[cfg(feature = "convergence_prefix")]
@@ -2997,7 +2975,6 @@ fn interior_slash_uses_convergence() {
 fn convergence_giant_match_dense_literal_is_linear() {
     let p = r"([a-z0-9-]+)\s*:\s*([^;\s]+(?:\s*[^;\s]+)*);?";
     let re = Regex::new(p).unwrap();
-    assert!(re.uses_convergence_prefix(), "{p} should use convergence");
     let mut hay = String::new();
     for i in 0..20_000 {
         hay.push_str(&format!("key{i}: value {i} here\n"));
@@ -3303,10 +3280,6 @@ fn wide_unbounded_fwd_anchor_yields_to_convergence() {
     let hay = "FOO=\"bar baz\",QUX=quux,A-B=1,lower=skip,X=";
     for p in pats {
         let re = Regex::new(p).unwrap();
-        assert!(
-            re.uses_convergence_prefix(),
-            "pat={p} should use convergence"
-        );
         let ours: Vec<[usize; 2]> = re
             .find_all(hay.as_bytes())
             .unwrap()
@@ -6066,4 +6039,33 @@ fn optional_atom_then_two_unbounded_plus_finds_leftmost_via_backoff() {
             .collect();
         assert_eq!(got, vec![(0, 4)], "mode={mode:?}");
     }
+}
+
+#[test]
+fn bug_conv_quadratic_hardened_repro() {
+    use resharp::{Regex, RegexOptions};
+    let re = Regex::with_options("x[ax]*c", RegexOptions::default().hardened(true)).unwrap();
+    assert!(re.is_hardened());
+
+    let small = "x".repeat(64_000).into_bytes();
+    let large = "x".repeat(1_024_000).into_bytes();
+
+    let time_it = |input: &[u8]| -> f64 {
+        let mut best = f64::INFINITY;
+        for _ in 0..3 {
+            let t = std::time::Instant::now();
+            re.find_all(input).unwrap();
+            best = best.min(t.elapsed().as_secs_f64());
+        }
+        best.max(1e-9)
+    };
+
+    let small_elapsed = time_it(&small);
+    let large_elapsed = time_it(&large);
+
+    let ratio = large_elapsed / small_elapsed;
+    assert!(
+        ratio < 40.0,
+        "expected roughly linear scaling, got {ratio}x for 16x input (small={small_elapsed}s large={large_elapsed}s)"
+    );
 }
