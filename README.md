@@ -31,7 +31,6 @@ On standard patterns RE# matches [`regex`](https://crates.io/crates/regex) throu
 - fail-loud behavior: capacity / lookahead overflow returns `Err` instead of silently degrading
 
 RE# supports `is_match` and `find_all`. No single-match `find`/`captures`, apart from a few special cases like `find_anchored`. See [docs/api.md](docs/api.md) and [docs/features.md](docs/features.md).
-(Capture groups exist behind an experimental feature flag, not recommended for production; see [docs/api.md](docs/api.md).)
 
 ## Syntax extensions
 
