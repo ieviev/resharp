@@ -1099,6 +1099,37 @@ fn hardened_literal_alt() {
     run_file_hardened("literal_alt.toml");
 }
 
+fn check_prefix_vs_disabled(pattern: &str, input: &[u8]) {
+    let re = Regex::new(pattern).unwrap();
+    let re_no_prefix = Regex::with_options(
+        pattern,
+        RegexOptions {
+            disable_prefixes: true,
+            ..RegexOptions::default()
+        },
+    )
+    .unwrap();
+    let with_prefix = re.find_all(input).unwrap();
+    let ground_truth = re_no_prefix.find_all(input).unwrap();
+    assert_eq!(
+        with_prefix,
+        ground_truth,
+        "prefix-selected vs disable_prefixes mismatch: pattern={:?}, input={:?} (kind={:?})",
+        pattern,
+        std::str::from_utf8(input).unwrap_or("<binary>"),
+        re.find_all_kind_name(),
+    );
+}
+
+#[test]
+fn lookbehind_alternation_fwd_lb_prefix_vs_no_prefix() {
+    check_prefix_vs_disabled("(?<=bb|dd)(?:)*", b"db");
+    check_prefix_vs_disabled("(?<=bb|dd)(?:)*", b"bd");
+    check_prefix_vs_disabled("(?<=bb|dd)(?:)*", b"bb");
+    check_prefix_vs_disabled("(?<=bb|dd)(?:)*", b"dd");
+    check_prefix_vs_disabled("(?<=bb|dd)(?:)*", b"dbbd");
+}
+
 #[test]
 fn hardened_pathological() {
     let pattern = r".*[^A-Z]|[A-Z]";
@@ -10004,5 +10035,7 @@ fn convergence_prefix_is_match_no_quadratic() {
         "expected roughly linear scaling, got {ratio}x for 16x input (small={small_elapsed}s large={large_elapsed}s)"
     );
 }
+
+
 
 

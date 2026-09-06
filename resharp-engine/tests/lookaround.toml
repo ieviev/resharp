@@ -1587,3 +1587,30 @@ name = "dot_repeat_negative_lookahead_optional_positive_lookahead"
 pattern = '.{2}(?!.+c).?(?=.+)'
 input = ":cba"
 matches = [[0, 3]]
+
+[[test]]
+name = "lookbehind_alternation_spurious_empty_match_at_eos"
+pattern = '(?<=bb|dd)(?:)*'
+input = "db"
+matches = []
+
+[[test]]
+name = "lookbehind_alternation_spurious_empty_match_at_eos_ascii"
+pattern = '(?<=bb|dd)(?:)*'
+ascii = true
+input = "db"
+matches = []
+
+[[test]]
+name = "lookbehind_alternation_spurious_empty_match_at_eos_full"
+pattern = '(?<=bb|dd)(?:)*'
+full = true
+input = "db"
+matches = []
+
+[[test]]
+name = "lookbehind_alternation_spurious_empty_match_at_eos_javascript"
+pattern = '(?<=bb|dd)(?:)*'
+javascript = true
+input = "db"
+matches = []

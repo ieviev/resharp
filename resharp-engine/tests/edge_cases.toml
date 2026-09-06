@@ -870,3 +870,30 @@ full = true
 input = ""
 matches = [[0, 0]]
 multiline = false
+
+[[test]]
+name = "alternation_repeated_group_impossible_len1_match"
+pattern = '[ac]a|(?:a*dd)*'
+input = "caad"
+matches = [[0, 2], [2, 2], [3, 3], [4, 4]]
+
+[[test]]
+name = "alternation_repeated_group_impossible_len1_match_ascii"
+pattern = '[ac]a|(?:a*dd)*'
+ascii = true
+input = "caad"
+matches = [[0, 2], [2, 2], [3, 3], [4, 4]]
+
+[[test]]
+name = "alternation_repeated_group_impossible_len1_match_full"
+pattern = '[ac]a|(?:a*dd)*'
+full = true
+input = "caad"
+matches = [[0, 2], [2, 2], [3, 3], [4, 4]]
+
+[[test]]
+name = "alternation_repeated_group_impossible_len1_match_javascript"
+pattern = '[ac]a|(?:a*dd)*'
+javascript = true
+input = "caad"
+matches = [[0, 2], [2, 2], [3, 3], [4, 4]]

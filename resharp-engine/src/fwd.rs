@@ -1,4 +1,25 @@
 use crate::{accel::FwdPrefixSearch, ldfa, Error, Match, Regex, RegexBuilder};
+use resharp_algebra::nulls::Nullability;
+
+fn verify_lb_literal(
+    lb_verify: &mut ldfa::LDFA,
+    b: &mut RegexBuilder,
+    pos: usize,
+    lb_len: usize,
+    input: &[u8],
+) -> Result<bool, Error> {
+    let mut state = ldfa::DFA_INITIAL;
+    for i in 0..lb_len {
+        let mt = lb_verify.mt_lookup[input[pos + i] as usize] as u32;
+        state = lb_verify.lazy_transition(b, state, mt)?;
+        if state <= ldfa::DFA_DEAD {
+            return Ok(false);
+        }
+    }
+    Ok(b
+        .nullability(lb_verify.state_nodes[state as usize])
+        .has(Nullability::CENTER))
+}
 
 fn fwd_prefix_impl(
     fwd: &mut ldfa::LDFA,
@@ -69,6 +90,7 @@ fn fwd_prefix_impl(
 
 fn try_emit_zero_width(
     fwd: &mut ldfa::LDFA,
+    lb_verify: &mut ldfa::LDFA,
     b: &mut RegexBuilder,
     lb_len: usize,
     fwd_prefix: &FwdPrefixSearch,
@@ -81,6 +103,9 @@ fn try_emit_zero_width(
     }
     let lb_pos = at - lb_len;
     if fwd_prefix.find_fwd(input, lb_pos) != Some(lb_pos) {
+        return Ok(false);
+    }
+    if !verify_lb_literal(lb_verify, b, lb_pos, lb_len, input)? {
         return Ok(false);
     }
     if fwd.scan_fwd_from(b, ldfa::DFA_INITIAL as u32, at, input)? == Some(at) {
@@ -100,6 +125,7 @@ fn begin_path_matches(begin_classes: &[crate::accel::TSet], input: &[u8]) -> boo
 
 fn fwd_lb_prefix_impl(
     fwd: &mut ldfa::LDFA,
+    lb_verify: &mut ldfa::LDFA,
     b: &mut RegexBuilder,
     lb_len: usize,
     fwd_lb_begin_nullable: bool,
@@ -121,7 +147,7 @@ fn fwd_lb_prefix_impl(
             });
             let mut emitted_zw = false;
             if max_end > body_start && body_nullable {
-                if try_emit_zero_width(fwd, b, lb_len, fwd_prefix, input, max_end, matches)? {
+                if try_emit_zero_width(fwd, lb_verify, b, lb_len, fwd_prefix, input, max_end, matches)? {
                     emitted_zw = true;
                 }
             }
@@ -140,6 +166,10 @@ fn fwd_lb_prefix_impl(
             search_start = candidate + 1;
             continue;
         }
+        if !verify_lb_literal(lb_verify, b, candidate, lb_len, input)? {
+            search_start = candidate + 1;
+            continue;
+        }
         if let Some(max_end) = fwd.scan_fwd_from(
             b,
             ldfa::DFA_INITIAL as u32,
@@ -152,7 +182,7 @@ fn fwd_lb_prefix_impl(
             });
             let mut emitted_zw = false;
             if max_end > body_start && body_nullable {
-                if try_emit_zero_width(fwd, b, lb_len, fwd_prefix, input, max_end, matches)? {
+                if try_emit_zero_width(fwd, lb_verify, b, lb_len, fwd_prefix, input, max_end, matches)? {
                     emitted_zw = true;
                 }
             }
@@ -205,8 +235,13 @@ impl Regex {
         debug_assert!(!input.is_empty());
         let inner = &mut *self.inner.lock().unwrap();
         inner.matches.clear();
+        let lb_verify = inner
+            .lb_verify
+            .as_mut()
+            .ok_or(Error::InternalError("FwdLbPrefix without lb_verify automaton"))?;
         fwd_lb_prefix_impl(
             &mut inner.fwd,
+            lb_verify,
             &mut inner.b,
             self.lb_check_bytes as usize,
             self.fwd_lb_begin_nullable,

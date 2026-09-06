@@ -43,11 +43,31 @@ fn max_end(a: usize, b: usize) -> usize {
     }
 }
 
+#[inline]
+fn combine_val(a_val: usize, a_at: usize, b_val: usize, b_at: usize) -> (usize, usize) {
+    if a_val == NO_END {
+        (b_val, b_at)
+    } else if b_val == NO_END || a_val >= b_val {
+        (a_val, a_at)
+    } else {
+        (b_val, b_at)
+    }
+}
+
 #[derive(Clone, Copy)]
+struct Marker {
+    at: u32,
+    threshold: usize,
+    private: usize,
+}
+
+#[derive(Clone)]
 pub struct SlotEntries {
     head: u32,
     tail: u32,
     max_e: usize,
+    set_at: usize,
+    markers: Vec<Marker>,
 }
 
 pub const SLOT_NIL: u32 = u32::MAX;
@@ -58,6 +78,8 @@ impl Default for SlotEntries {
             head: SLOT_NIL,
             tail: SLOT_NIL,
             max_e: 0,
+            set_at: 0,
+            markers: Vec::new(),
         }
     }
 }
@@ -68,52 +90,103 @@ impl SlotEntries {
         self.head = SLOT_NIL;
         self.tail = SLOT_NIL;
         self.max_e = 0;
+        self.set_at = 0;
+        self.markers.clear();
     }
     #[inline]
     pub fn is_empty(&self) -> bool {
         self.head == SLOT_NIL
     }
     #[inline]
-    fn push_spawn(&mut self, linker: &mut [u32], idx: u32, e: usize) {
+    fn push_spawn(&mut self, linker: &mut [u32], idx: u32, e: usize, pos: usize) {
         linker[idx as usize] = SLOT_NIL;
         if self.is_empty() {
             self.head = idx;
             self.tail = idx;
             self.max_e = e;
+            self.set_at = pos;
         } else {
             linker[self.tail as usize] = idx;
             self.tail = idx;
-            self.max_e = max_end(self.max_e, e);
+            let (v, at) = combine_val(self.max_e, self.set_at, e, pos);
+            self.max_e = v;
+            self.set_at = at;
         }
     }
     #[inline]
-    pub fn extend_e(&mut self, ce: usize) {
+    pub fn extend_e(&mut self, ce: usize, pos: usize) {
         if !self.is_empty() {
-            self.max_e = max_end(self.max_e, ce);
+            let (v, at) = combine_val(self.max_e, self.set_at, ce, pos);
+            self.max_e = v;
+            self.set_at = at;
         }
     }
-    fn merge_from(&mut self, other: &mut Self, ce: Option<usize>, linker: &mut [u32]) {
-        if let Some(ce) = ce {
-            other.extend_e(ce);
-        }
+    fn merge_from(&mut self, other: &mut Self, ce: Option<usize>, linker: &mut [u32], pos: usize) {
         if self.is_empty() {
+            if let Some(ce) = ce {
+                other.extend_e(ce, pos);
+            }
             std::mem::swap(self, other);
             return;
         }
         if other.is_empty() {
+            if let Some(ce) = ce {
+                self.extend_e(ce, pos);
+            }
             return;
+        }
+        self.markers.push(Marker {
+            at: other.head,
+            threshold: pos,
+            private: other.max_e,
+        });
+        self.markers.append(&mut other.markers);
+        if let Some(ce) = ce {
+            let (v, at) = combine_val(self.max_e, self.set_at, ce, pos);
+            self.max_e = v;
+            self.set_at = at;
         }
         linker[self.tail as usize] = other.head;
         self.tail = other.tail;
-        self.max_e = max_end(self.max_e, other.max_e);
         other.clear();
     }
+    fn splice_bare(&mut self, linker: &mut [u32], loser_head: u32, loser_tail: u32, pos: usize) {
+        if self.is_empty() {
+            self.head = loser_head;
+            self.tail = loser_tail;
+            self.set_at = pos;
+            return;
+        }
+        self.markers.push(Marker {
+            at: loser_head,
+            threshold: pos,
+            private: NO_END,
+        });
+        linker[self.tail as usize] = loser_head;
+        self.tail = loser_tail;
+    }
     pub fn drain_to_max(&mut self, linker: &[u32], max: &mut [usize]) {
-        let e = self.max_e;
+        let ongoing_e = self.max_e;
+        let ongoing_at = self.set_at;
         let mut cur = self.head;
+        let mut mi = 0usize;
+        let mut threshold = 0usize;
+        let mut private = NO_END;
         while cur != SLOT_NIL {
             let i = cur as usize;
-            if e != NO_END && e >= i {
+            while mi < self.markers.len() && self.markers[mi].at as usize == i {
+                threshold = self.markers[mi].threshold;
+                private = self.markers[mi].private;
+                mi += 1;
+            }
+            let mut e = NO_END;
+            if private != NO_END && private >= i {
+                e = private;
+            }
+            if ongoing_e != NO_END && ongoing_at >= threshold && ongoing_e >= i {
+                e = max_end(e, ongoing_e);
+            }
+            if e != NO_END {
                 max[i] = max_end(max[i], e);
             }
             cur = linker[i];
@@ -312,22 +385,16 @@ fn fas_apply(
         };
         if (code & FAS_LOW_BIT) != 0 {
             if let Some(ce) = candidate_end {
-                regs[slot].extend_e(ce);
+                regs[slot].extend_e(ce, pos);
             }
             let loser_head = regs[slot].head;
             let loser_tail = regs[slot].tail;
             regs[slot].drain_to_max(linker, max);
             if loser_head != SLOT_NIL {
-                if new_regs[idx].is_empty() {
-                    new_regs[idx].head = loser_head;
-                    new_regs[idx].tail = loser_tail;
-                } else {
-                    linker[new_regs[idx].tail as usize] = loser_head;
-                    new_regs[idx].tail = loser_tail;
-                }
+                new_regs[idx].splice_bare(linker, loser_head, loser_tail, pos);
             }
         } else {
-            new_regs[idx].merge_from(&mut regs[slot], candidate_end, linker);
+            new_regs[idx].merge_from(&mut regs[slot], candidate_end, linker, pos);
         }
     }
     if spawn_allowed {
@@ -344,7 +411,7 @@ fn fas_apply(
                         0
                     };
                     let candidate_end = if candidate_end == data_end { pos } else { candidate_end };
-                    new_regs[idx].push_spawn(linker, pos as u32, candidate_end);
+                    new_regs[idx].push_spawn(linker, pos as u32, candidate_end, pos);
                 }
             }
             idx_u16 => {
@@ -356,7 +423,7 @@ fn fas_apply(
                     0
                 };
                 let candidate_end = if candidate_end == data_end { pos } else { candidate_end };
-                new_regs[idx].push_spawn(linker, pos as u32, candidate_end);
+                new_regs[idx].push_spawn(linker, pos as u32, candidate_end, pos);
             }
         }
     }
@@ -485,7 +552,7 @@ impl LDFA {
                     };
                     let me = if me == data_end { begin_floor } else { me };
                     let mut s0 = SlotEntries::default();
-                    s0.push_spawn(&mut linker, 0u32, me);
+                    s0.push_spawn(&mut linker, 0u32, me, 0);
                     regs.push(s0);
                     asid = fas.register(vec![bs as u16]);
                 }
@@ -549,7 +616,7 @@ impl LDFA {
                         .map(|n| data_end.saturating_sub(n.rel as usize)),
                 };
                 if let Some(ce) = cand_end {
-                    regs[slot].extend_e(ce);
+                    regs[slot].extend_e(ce, data_end);
                 }
             }
         }

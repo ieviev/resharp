@@ -362,6 +362,7 @@ pub(crate) struct RegexInner {
     pub(crate) matches: Vec<Match>,
     pub(crate) bounded: Option<bdfa::BDFA>,
     pub(crate) fas: Option<fas::FwdDFA>,
+    pub(crate) lb_verify: Option<ldfa::LDFA>,
     #[cfg_attr(not(feature = "experimental_capture_groups"), allow(dead_code))]
     pub(crate) capture_root: NodeId,
     #[cfg_attr(not(feature = "experimental_capture_groups"), allow(dead_code))]
@@ -1431,6 +1432,7 @@ impl Regex {
             }
         };
 
+        let mut lb_verify: Option<ldfa::LDFA> = None;
         let (
             fwd_lb_begin_nullable,
             fwd_lb_begin_len,
@@ -1441,8 +1443,9 @@ impl Regex {
             if matches!(selected, Some(prefix::PrefixKind::AnchoredFwdLb(_))) {
                 let lb_node = node_fwd_simpl.left(&b);
                 let lb_inner = b.get_lookbehind_inner(lb_node);
-                let (_, lb_fixed) = prefix::fwd_lb_class(&mut b, lb_node)
+                let (lb_stripped_node, lb_fixed) = prefix::fwd_lb_class(&mut b, lb_node)
                     .ok_or(Error::InternalError("AnchoredFwdLb requires fixed-length lb"))?;
+                lb_verify = Some(ldfa::LDFA::new_fwd(&mut b, lb_stripped_node, max_cap)?);
                 let (begin_nullable, begin_len, begin_classes) =
                     match prefix::fwd_lb_begin_info(&mut b, lb_inner) {
                         prefix::BeginInfo::None => (false, 0, Vec::new()),
@@ -1581,6 +1584,7 @@ impl Regex {
                 matches: Vec::new(),
                 bounded,
                 fas,
+                lb_verify,
                 #[cfg(feature = "convergence_prefix")]
                 conv_b,
                 capture_root: node_fwd_simpl,

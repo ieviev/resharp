@@ -62,6 +62,7 @@ pub struct RegexDump {
     pub has_anchors: bool,
     pub prefix: Option<PrefixKind>,
     pub fwd: Option<LDFA>,
+    pub lb_verify: Option<LDFA>,
     pub rev_ts: Option<LDFA>,
     pub bounded: Option<BDFA>,
     #[cfg(feature = "convergence_prefix")]
@@ -161,6 +162,7 @@ impl Regex {
             return Err(Error::Serialize("capture groups requiring the general tag-tracking DFA are not supported".into()));
         }
         let uses_fwd = !self.has_bounded;
+        let uses_lb_verify = matches!(&self.prefix, Some(PrefixKind::AnchoredFwdLb(_)));
         let uses_rev_ts = !self.fwd_begin_anchored
             && !self.has_bounded
             && !matches!(
@@ -171,6 +173,9 @@ impl Regex {
         let inner = &mut *self.inner.lock().unwrap();
         if uses_fwd {
             precompile_ldfa(&mut inner.fwd, &mut inner.b)?;
+        }
+        if uses_lb_verify {
+            precompile_ldfa(inner.lb_verify.as_mut().unwrap(), &mut inner.b)?;
         }
         if uses_rev_ts {
             precompile_ldfa(&mut inner.rev_ts, &mut inner.b)?;
@@ -216,6 +221,11 @@ impl Regex {
             } else {
                 None
             },
+            lb_verify: if uses_lb_verify {
+                inner.lb_verify.take()
+            } else {
+                None
+            },
             rev_ts: if uses_rev_ts {
                 Some(std::mem::replace(&mut inner.rev_ts, empty_ldfa()))
             } else {
@@ -245,6 +255,9 @@ impl Regex {
         // restore moved-out fields so the source regex stays usable
         if let Some(fwd) = dump.fwd {
             inner.fwd = fwd;
+        }
+        if let Some(lb_verify) = dump.lb_verify {
+            inner.lb_verify = Some(lb_verify);
         }
         if let Some(rev_ts) = dump.rev_ts {
             inner.rev_ts = rev_ts;
@@ -285,6 +298,7 @@ impl Regex {
                 matches: Vec::<Match>::new(),
                 bounded: dump.bounded,
                 fas: None,
+                lb_verify: dump.lb_verify,
                 capture_root: NodeId::MISSING,
                 skeleton: None,
                 capture_dfa: crate::pparse::PosixParser::new(0),
