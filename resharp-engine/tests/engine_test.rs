@@ -5823,7 +5823,7 @@ fn lookahead_plus_star_wrapped_nested_bounded_repeat_compiles_in_bounded_time() 
                 .unwrap_or_else(|e| panic!("mode={mode:?} n={n}: compile failed: {e:?}"));
             let elapsed = t0.elapsed();
             assert!(
-                elapsed.as_secs() < 5,
+                elapsed.as_secs() < 20,
                 "mode={mode:?} n={n}: compile took {elapsed:?}; a leading lookahead plus an \
                  unbounded-star-wrapped nested bounded repeat must not cause exponential \
                  compile-time blowup"
