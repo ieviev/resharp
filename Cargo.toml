@@ -3,7 +3,7 @@ members = ["resharp-algebra", "resharp-parser", "resharp-engine", "resharp-ffi"]
 resolver = "2"
 
 [workspace.package]
-version = "0.6.20"
+version = "0.6.21"
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/ieviev/resharp"
@@ -11,9 +11,9 @@ authors = ["Ian Erik Varatalu"]
 rust-version = "1.70"
 
 [workspace.dependencies]
-resharp-algebra = { version = "0.6.20", path = "resharp-algebra" }
-resharp-parser  = { version = "0.6.20", path = "resharp-parser" }
-resharp         = { version = "0.6.20", path = "resharp-engine" }
+resharp-algebra = { version = "0.6.21", path = "resharp-algebra" }
+resharp-parser  = { version = "0.6.21", path = "resharp-parser" }
+resharp         = { version = "0.6.21", path = "resharp-engine" }
 
 [profile.release]
 lto = true
