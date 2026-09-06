@@ -1872,6 +1872,10 @@ mod prefix_toml {
             if tc.ignore {
                 continue;
             }
+            #[cfg(not(feature = "convergence_prefix"))]
+            if tc.kind.as_deref() == Some("Convergence") || tc.conv_literal.is_some() {
+                continue;
+            }
             let needs_sets =
                 tc.prefix_rev.is_some() || tc.potential_rev.is_some() || tc.potential_fwd.is_some();
             let re = resharp::Regex::new(&tc.pattern);
@@ -5746,6 +5750,7 @@ fn optional_prefix_class_then_bounded_repeat_with_gap_and_trailing_star_finds_le
 }
 
 #[test]
+#[cfg(feature = "convergence_prefix")]
 fn convergence_prefix_no_open_bracket_does_not_hang_or_false_match() {
     use resharp::{Regex, RegexOptions, UnicodeMode};
     let re = Regex::with_options(
@@ -6045,6 +6050,35 @@ fn optional_atom_then_two_unbounded_plus_finds_leftmost_via_backoff() {
 fn bug_conv_quadratic_hardened_repro() {
     use resharp::{Regex, RegexOptions};
     let re = Regex::with_options("x[ax]*c", RegexOptions::default().hardened(true)).unwrap();
+    assert!(re.is_hardened());
+
+    let small = "x".repeat(64_000).into_bytes();
+    let large = "x".repeat(1_024_000).into_bytes();
+
+    let time_it = |input: &[u8]| -> f64 {
+        let mut best = f64::INFINITY;
+        for _ in 0..3 {
+            let t = std::time::Instant::now();
+            re.find_all(input).unwrap();
+            best = best.min(t.elapsed().as_secs_f64());
+        }
+        best.max(1e-9)
+    };
+
+    let small_elapsed = time_it(&small);
+    let large_elapsed = time_it(&large);
+
+    let ratio = large_elapsed / small_elapsed;
+    assert!(
+        ratio < 40.0,
+        "expected roughly linear scaling, got {ratio}x for 16x input (small={small_elapsed}s large={large_elapsed}s)"
+    );
+}
+
+#[test]
+fn hardened_trailing_dotstar_after_dangerous_prefix_no_quadratic() {
+    use resharp::{Regex, RegexOptions};
+    let re = Regex::with_options("x[ax]*c(.|\n)*", RegexOptions::default().hardened(true)).unwrap();
     assert!(re.is_hardened());
 
     let small = "x".repeat(64_000).into_bytes();

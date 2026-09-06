@@ -16,14 +16,14 @@ readme = "../README.md"
 doctest = false
 
 [features]
-default = ["convergence_prefix"]
-# default = []
+default = []
 # experimental, off by default: zero-width / anchored patterns can report phantom
 # matches (see TODO.md). do not enable in production.
 stream = []
 debug = ["resharp-algebra/debug"]
 diag = []
 precompile-tests = []
+# disabled till certain it wont cause blowup
 convergence_prefix = []
 serialize = ["dep:serde", "dep:bincode", "resharp-algebra/serialize"]
 pcre2-bench = ["dep:pcre2"]

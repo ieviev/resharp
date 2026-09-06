@@ -476,9 +476,6 @@ fn classify_body_shape(
     fwd_body: NodeId,
     fwd_potential: &[TSetId],
 ) -> NodeShape {
-    if b.ends_with_ts(fwd_body) {
-        return NodeShape::TrailingStar;
-    }
     let rarest_wide = !fwd_potential.is_empty()
         && fwd_potential
             .iter()
@@ -1187,6 +1184,7 @@ fn conv_leading_set(b: &mut RegexBuilder, node: NodeId) -> Result<TSetId, Error>
     Ok(lead)
 }
 
+#[cfg(feature = "convergence_prefix")]
 fn conv_der_through_set(b: &mut RegexBuilder, node: NodeId, s: TSetId) -> Result<NodeId, Error> {
     let der = b.der(node, Nullability::CENTER)?;
     let mut targets: Vec<(NodeId, TSetId)> = Vec::new();
@@ -1199,6 +1197,7 @@ fn conv_der_through_set(b: &mut RegexBuilder, node: NodeId, s: TSetId) -> Result
     Ok(NodeId::BOT)
 }
 
+#[cfg(feature = "convergence_prefix")]
 fn conv_left_after_run(
     b: &mut RegexBuilder,
     conv_node: NodeId,
@@ -1214,6 +1213,7 @@ fn conv_left_after_run(
     Ok(left)
 }
 
+#[cfg(feature = "convergence_prefix")]
 fn conv_left_is_bounded(
     b: &mut RegexBuilder,
     conv_node: NodeId,
@@ -1227,6 +1227,7 @@ fn conv_left_is_bounded(
     Ok(left_max != u32::MAX)
 }
 
+#[cfg(feature = "convergence_prefix")]
 fn conv_run_boundary_ambiguous(
     b: &mut RegexBuilder,
     conv_node: NodeId,
