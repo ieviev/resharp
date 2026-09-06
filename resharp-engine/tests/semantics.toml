@@ -132,3 +132,21 @@ name = "bounded_eof_survivors_cbac_bca"
 pattern = '(?:a|c?|[cb]ac)'
 input = "bca"
 matches = [[0, 0], [1, 2], [2, 3], [3, 3]]
+
+[[test]]
+name = "is_match_vs_find_all_agree_end_anchor_lookahead"
+pattern = '(\z|(?=a)\w)'
+input = "0"
+matches = [[1, 1]]
+
+[[test]]
+name = "is_match_vs_find_all_agree_end_anchor_empty"
+pattern = '\z\A(?:a){0,1}'
+input = ""
+matches = [[0, 0]]
+
+[[test]]
+name = "is_match_vs_find_all_agree_lookbehind"
+pattern = '(?<=\D?[a-c]+0?)b'
+input = "ba"
+matches = []

@@ -48,7 +48,11 @@ compile_error!(
 
 pub(crate) mod accel;
 pub(crate) mod bdfa;
+#[cfg_attr(not(feature = "experimental_capture_groups"), allow(dead_code))]
+pub(crate) mod captures;
 pub(crate) mod ldfa;
+#[cfg_attr(not(feature = "experimental_capture_groups"), allow(dead_code))]
+pub(crate) mod pparse;
 pub(crate) mod fas;
 pub(crate) mod minterms;
 pub(crate) mod fwd;
@@ -164,19 +168,6 @@ impl From<resharp_algebra::ResharpError> for Error {
     }
 }
 
-/// configuration for pattern compilation and engine behavior.
-///
-/// all options have sensible defaults via [`Default`]. use the builder
-/// methods to override:
-///
-/// ```
-/// use resharp::RegexOptions;
-///
-/// let opts = RegexOptions::default()
-///     .unicode(false)           // ASCII-only \w, \d, \s
-///     .case_insensitive(true)   // global (?i)
-///     .dot_matches_new_line(true); // . matches \n
-/// ```
 /// Coverage of `\w`/`\d`/`\s` and the width of `.` / negated classes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum UnicodeMode {
@@ -195,6 +186,18 @@ pub enum UnicodeMode {
 }
 
 /// Regex configuration, passed to [`Regex::with_options`].
+///
+/// all options have sensible defaults via [`Default`]. use the builder
+/// methods to override:
+///
+/// ```
+/// use resharp::{RegexOptions, UnicodeMode};
+///
+/// let opts = RegexOptions::default()
+///     .unicode(UnicodeMode::Ascii)
+///     .case_insensitive(true)
+///     .dot_matches_new_line(true);
+/// ```
 pub struct RegexOptions {
     /// max cached DFA states, clamped to `u16::MAX` (default: `u16::MAX`).
     pub max_dfa_capacity: usize,
@@ -207,11 +210,16 @@ pub struct RegexOptions {
     pub case_insensitive: bool,
     /// `.` matches `\n` (default: false). `_` always matches any byte.
     pub dot_matches_new_line: bool,
-    /// `^` and `$` match at line boundaries (`\n`) in addition to text
-    /// boundaries (default: true). Disable with `(?-m)` inline or this flag.
+    /// `^`/`$` match start/end of line as well as of input (default: true).
+    /// Disable with `(?-m)` inline or this flag.
     pub multiline: bool,
     /// allow whitespace and `#` comments in the pattern (default: false).
     pub ignore_whitespace: bool,
+    /// when true, every bare `(...)` group captures unnamed, same as writing
+    /// `(??...)` (default: false). Unnamed groups report `None` from
+    /// `capture_names()`; use `(?<name>...)` for a name you can look up.
+    #[cfg(feature = "experimental_capture_groups")]
+    pub implicit_captures: bool,
     /// use hardened forward scan (default: false).
     /// slower, but prevents O(n^2) all-matches blowup on adversarial combinations.
     pub hardened: bool,
@@ -235,6 +243,8 @@ impl Default for RegexOptions {
             dot_matches_new_line: false,
             multiline: true,
             ignore_whitespace: false,
+            #[cfg(feature = "experimental_capture_groups")]
+            implicit_captures: false,
             hardened: false,
             unbounded_size: false,
             force_convergence: false,
@@ -259,7 +269,7 @@ impl RegexOptions {
         self.dot_matches_new_line = yes;
         self
     }
-    /// `^`/`$` match at `\n` (default: true), set false to make `^`/`$` same as `\A`/`\z`.
+    /// `^`/`$` match start/end of line (default: true), false makes them `\A`/`\z`.
     pub fn multiline(mut self, yes: bool) -> Self {
         self.multiline = yes;
         self
@@ -269,7 +279,13 @@ impl RegexOptions {
         self.ignore_whitespace = yes;
         self
     }
-    /// enable hardened mode for untrusted patterns: uses only O(N·S) forward scan (~5-20x constant overhead).
+    /// make every bare `(...)` group capture (auto-indexed, unnamed).
+    #[cfg(feature = "experimental_capture_groups")]
+    pub fn implicit_captures(mut self, yes: bool) -> Self {
+        self.implicit_captures = yes;
+        self
+    }
+    /// enable hardened mode for untrusted patterns: uses only O(N·S) forward scan, slower.
     pub fn hardened(mut self, yes: bool) -> Self {
         self.hardened = yes;
         self
@@ -298,6 +314,39 @@ pub struct Match {
     pub end: usize,
 }
 
+/// Capture group spans of one match, produced by [`Regex::captures_all`].
+/// Index 0 is the whole match, then one slot per capturing group in source
+/// order. A slot is `None` when that group did not participate in the match.
+#[cfg(feature = "experimental_capture_groups")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Captures<'r> {
+    names: &'r [Option<String>],
+    spans: Vec<Option<(usize, usize)>>,
+}
+
+#[cfg(feature = "experimental_capture_groups")]
+impl Captures<'_> {
+    /// Span of group `i`, where 0 is the whole match.
+    pub fn get(&self, i: usize) -> Option<Match> {
+        self.spans
+            .get(i)
+            .copied()
+            .flatten()
+            .map(|(start, end)| Match { start, end })
+    }
+
+    /// Span of the group named `name`.
+    pub fn name(&self, name: &str) -> Option<Match> {
+        let i = self.names.iter().position(|n| n.as_deref() == Some(name))?;
+        self.get(i)
+    }
+
+    /// All slots, whole match first.
+    pub fn spans(&self) -> &[Option<(usize, usize)>] {
+        &self.spans
+    }
+}
+
 pub(crate) struct RegexInner {
     pub(crate) b: RegexBuilder,
     pub(crate) fwd: ldfa::LDFA,
@@ -313,6 +362,12 @@ pub(crate) struct RegexInner {
     pub(crate) matches: Vec<Match>,
     pub(crate) bounded: Option<bdfa::BDFA>,
     pub(crate) fas: Option<fas::FwdDFA>,
+    #[cfg_attr(not(feature = "experimental_capture_groups"), allow(dead_code))]
+    pub(crate) capture_root: NodeId,
+    #[cfg_attr(not(feature = "experimental_capture_groups"), allow(dead_code))]
+    pub(crate) capture_dfa: pparse::PosixParser,
+    #[cfg_attr(not(feature = "experimental_capture_groups"), allow(dead_code))]
+    pub(crate) skeleton: Option<resharp_parser::Skeleton>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
@@ -373,17 +428,17 @@ pub struct Regex {
     pub(crate) rev_end_anchored: bool,
     /// rev = _*, skip rev pass entirely
     pub(crate) initial_nullability: Nullability,
+    #[allow(dead_code)]
     pub(crate) fwd_end_nullable: bool,
-    // unfinished experimental optimizations, will not put these in yet
-    // `Y·_*` shape: at most one match. skip rev+fwd.
-    // pub(crate) trailing_star_anchored_left: bool,
-    // pub(crate) trailing_star_branch_left: bool,
+    pub(crate) rev_end_nullable: bool,
     pub(crate) hardened: bool,
     #[allow(dead_code)]
     pub(crate) has_bounded: bool,
     pub(crate) bounded_safe_find_all: bool,
     pub(crate) lb_check_bytes: u8,
     pub(crate) fwd_lb_begin_nullable: bool,
+    pub(crate) fwd_lb_begin_len: u8,
+    pub(crate) fwd_lb_begin_classes: Vec<crate::accel::TSet>,
     pub(crate) fwd_lb_body_nullable: bool,
     pub(crate) init_flags: InitialNodeFlags,
     #[cfg(feature = "convergence_prefix")]
@@ -391,6 +446,10 @@ pub struct Regex {
     /// fixed-length negative lookbehind reject test paired with an `AnchoredFwd`
     /// body-literal prefix; verifies the lookbehind the SIMD prefix cannot.
     pub(crate) neg_lb: Option<prefix::NegLb>,
+    #[cfg_attr(not(feature = "experimental_capture_groups"), allow(dead_code))]
+    pub(crate) group_names: Vec<Option<String>>,
+    #[cfg_attr(not(any(feature = "experimental_capture_groups", feature = "diag")), allow(dead_code))]
+    pub(crate) captures_dispatch: captures::CaptureDispatch,
     pub(crate) find_all: FindAll,
     pub(crate) class_plus: Option<[u64; 4]>,
     #[cfg(feature = "stream")]
@@ -417,7 +476,7 @@ pub enum FindAll {
     Bounded,
     /// generic rev-collect + fwd-verify.
     Dfa,
-    /// language is `CLASS+` for one frequent byte class; emit maximal runs.
+    /// language is `CLASS+` for one frequent byte class
     ClassPlus,
 }
 
@@ -748,8 +807,27 @@ fn first_lb_in_branch(b: &RegexBuilder, node: NodeId) -> Option<NodeId> {
     None
 }
 
+// mk_neg_lookbehind's shape for (?<!body) is Concat(BEGIN, Compl(Concat(TS, body))); recognize it so lookback bound is body's max length, not the unbounded-looking Compl wrapper
+fn neg_lookbehind_body(b: &RegexBuilder, inner: NodeId) -> Option<NodeId> {
+    if !inner.is_concat(b) || inner.left(b) != NodeId::BEGIN {
+        return None;
+    }
+    let compl = inner.right(b);
+    if !compl.is_compl(b) {
+        return None;
+    }
+    let body_ts = compl.left(b);
+    if !body_ts.is_concat(b) || body_ts.left(b) != NodeId::TS {
+        return None;
+    }
+    Some(body_ts.right(b))
+}
+
 fn lb_is_unbounded(b: &RegexBuilder, lb_node: NodeId) -> bool {
     let inner = b.get_lookbehind_inner(lb_node);
+    if let Some(body) = neg_lookbehind_body(b, inner) {
+        return b.get_min_max_length(body).1 == u32::MAX;
+    }
     let rest = if inner.is_concat(b) && inner.left(b).is_star(b) {
         inner.right(b)
     } else {
@@ -779,6 +857,12 @@ fn union_branches_distinguishable(b: &mut RegexBuilder, union_node: NodeId) -> b
 }
 
 fn union_branches_distinguishable_list(b: &mut RegexBuilder, branches: &[NodeId]) -> bool {
+    // a BOT branch never matches anything; drop it before the geometric disambiguation below or its dead length still gets folded in
+    let branches: Vec<NodeId> = branches.iter().copied().filter(|&n| n != NodeId::BOT).collect();
+    if branches.len() <= 1 {
+        return true;
+    }
+    let branches = branches.as_slice();
     let any_lb = branches.iter().any(|n| n.contains_lookbehind(b));
     if !any_lb {
         return true;
@@ -1009,7 +1093,61 @@ fn ensure_supported_rec(
         Kind::Pred => Ok(None),
         Kind::Begin => Ok(None),
         Kind::End => Ok(None),
+        Kind::Tag => Ok(None),
     }
+}
+
+fn peel_bare_begin_chain(b: &RegexBuilder, node: NodeId) -> NodeId {
+    let mut cur = node;
+    while cur.is_concat(b) && b.is_begin_only_shape(cur.left(b)) {
+        cur = cur.right(b);
+    }
+    cur
+}
+
+fn peel_nullable_lookbehind_prefix_chain(b: &mut RegexBuilder, node: NodeId) -> NodeId {
+    if node.is_concat(b) {
+        let left = node.left(b);
+        if b.contains_lookbehind(left) && b.nullability(left).has(Nullability::BEGIN) {
+            if left.is_lookbehind(b) {
+                let prev = b.get_lookbehind_prev(left);
+                let cont = if prev == NodeId::MISSING { NodeId::EPS } else { prev };
+                let peeled_prev = peel_nullable_lookbehind_prefix_chain(b, cont);
+                let right = peel_nullable_lookbehind_prefix_chain(b, node.right(b));
+                return b.mk_concat(peeled_prev, right);
+            }
+            return peel_nullable_lookbehind_prefix_chain(b, node.right(b));
+        }
+        return node;
+    }
+    if node.is_lookbehind(b) && b.nullability(node).has(Nullability::BEGIN) {
+        let prev = b.get_lookbehind_prev(node);
+        let cont = if prev == NodeId::MISSING { NodeId::EPS } else { prev };
+        return peel_nullable_lookbehind_prefix_chain(b, cont);
+    }
+    node
+}
+
+fn neg_lookbehind_marker_prev_end_nullable(b: &mut RegexBuilder, node: NodeId) -> bool {
+    if !node.is_lookbehind(b) {
+        return false;
+    }
+    let prev = b.get_lookbehind_prev(node);
+    if prev == NodeId::MISSING {
+        return false;
+    }
+    let inner = b.get_lookbehind_inner(node);
+    let is_neg_marker =
+        b.get_kind(inner) == Kind::Begin || (inner.is_concat(b) && inner.left(b) == NodeId::BEGIN);
+    if !is_neg_marker {
+        return false;
+    }
+    b.nullability(prev).has(Nullability::END)
+}
+
+fn body_after_begin_of(b: &mut RegexBuilder, node: NodeId) -> NodeId {
+    let after_bare_begin = peel_bare_begin_chain(b, node);
+    peel_nullable_lookbehind_prefix_chain(b, after_bare_begin)
 }
 
 fn ensure_begin_leading(
@@ -1032,7 +1170,7 @@ fn ensure_begin_leading(
                 Err(resharp_algebra::ResharpError::UnsupportedPattern)
             }
         }
-        Kind::End | Kind::Pred => Ok(()),
+        Kind::End | Kind::Pred | Kind::Tag => Ok(()),
         Kind::Concat => {
             let l = node.left(b);
             ensure_begin_leading(b, l, at_start, memo)?;
@@ -1052,8 +1190,10 @@ fn ensure_begin_leading(
 fn ensure_supported(
     b: &mut RegexBuilder,
     node: NodeId,
+    group_names: &[Option<String>],
 ) -> Result<Option<Compatibility>, resharp_algebra::ResharpError> {
     ensure_begin_leading(b, node, true, &mut std::collections::HashSet::new())?;
+    captures::ensure_captures_supported(b, node, group_names)?;
     ensure_supported_rec(b, node, true, true, &mut std::collections::HashSet::new())
 }
 
@@ -1089,6 +1229,10 @@ impl Regex {
             dot_matches_new_line: opts.dot_matches_new_line,
             multiline: opts.multiline,
             ignore_whitespace: opts.ignore_whitespace,
+            #[cfg(feature = "experimental_capture_groups")]
+            implicit_captures: opts.implicit_captures,
+            #[cfg(not(feature = "experimental_capture_groups"))]
+            implicit_captures: false,
             expanded_ast_limit: if opts.unbounded_size {
                 u64::MAX
             } else {
@@ -1110,14 +1254,15 @@ impl Regex {
                 resharp_parser::DEFAULT_MAX_DEPTH
             },
         };
-        let node = resharp_parser::parse_ast_with(&mut b, pattern, &pflags)?;
-        Self::from_node_inner(b, node, opts, pattern.len())
+        let (node, group_names, skeleton) =
+            resharp_parser::parse_ast_with_names_and_skeleton(&mut b, pattern, &pflags)?;
+        Self::from_node_inner(b, node, opts, pattern.len(), group_names, skeleton)
     }
 
     /// build from a pre-constructed AST node.
     #[doc(hidden)]
     pub fn from_node(b: RegexBuilder, node: NodeId, opts: RegexOptions) -> Result<Regex, Error> {
-        Self::from_node_inner(b, node, opts, 0)
+        Self::from_node_inner(b, node, opts, 0, Vec::new(), None)
     }
 
     fn from_node_inner(
@@ -1125,6 +1270,8 @@ impl Regex {
         node: NodeId,
         opts: RegexOptions,
         pattern_len: usize,
+        group_names: Vec<Option<String>>,
+        skeleton: Option<resharp_parser::Skeleton>,
     ) -> Result<Regex, Error> {
         // sanity check
         let node_limit = if opts.unbounded_size {
@@ -1135,7 +1282,7 @@ impl Regex {
         if b.tree_size(node, node_limit) >= node_limit {
             return Err(Error::PatternTooLarge);
         }
-        let _compatibility = ensure_supported(&mut b, node)?;
+        let _compatibility = ensure_supported(&mut b, node, &group_names)?;
 
         let empty_nullable = b
             .nullability_emptystring(node)
@@ -1158,32 +1305,14 @@ impl Regex {
 
         let is_empty_lang = node_fwd_simpl == NodeId::BOT;
         // TODO: make it configurable to actually check and reject empty lang entriely
-        let body_after_begin = {
-            let mut cur = node_fwd_simpl;
-            loop {
-                if cur.is_concat(&b) && cur.left(&b) == NodeId::BEGIN {
-                    cur = cur.right(&b);
-                    continue;
-                }
-                if cur.is_concat(&b) {
-                    let cur_left = cur.left(&b);
-                    let cur_right = cur.right(&b);
-                    if cur_right == NodeId::BEGIN
-                        && b.contains_lookbehind(cur_left)
-                        && b.nullability(cur_left) == Nullability::ALWAYS
-                    {
-                        cur = cur_right;
-                        continue;
-                    }
-                }
-                break;
-            }
-            cur
-        };
+        let body_after_begin = body_after_begin_of(&mut b, node_fwd_simpl);
         let lb_stripped = fwd_start != body_after_begin;
         let fwd_begin_anchored = b.is_begin_anchored(node_fwd_simpl) && !lb_stripped;
         let has_look = b.contains_look(node_fwd_simpl);
         let rev_node = b.reverse(node_fwd_simpl)?;
+        let rev_end_nullable = initial_nullability.has(Nullability::END)
+            || b.nullability(ts_rev_start).has(Nullability::BEGIN)
+            || neg_lookbehind_marker_prev_end_nullable(&mut b, node_fwd_simpl);
         let rev_end_anchored = b.is_begin_anchored(rev_node) && !fwd_end_nullable;
         let fixed_length = b.get_fixed_length(node_fwd_simpl);
         let (min_len, max_len) = b.get_min_max_length(node_fwd_simpl);
@@ -1239,8 +1368,6 @@ impl Regex {
             // b.simplify_fwd_initial(with_ts)
             with_ts
         };
-        // println!("{:?}", b.pp(node));
-        // println!("{:?}", b.pp(ts_fwd_start));
         #[allow(unused_mut)]
         let mut ts_fwd = ldfa::LDFA::new_fwd(&mut b, ts_fwd_start, max_cap)?;
 
@@ -1304,17 +1431,51 @@ impl Regex {
             }
         };
 
-        let (fwd_lb_begin_nullable, fwd_lb_body_nullable, lb_check_bytes) =
+        let (
+            fwd_lb_begin_nullable,
+            fwd_lb_begin_len,
+            fwd_lb_begin_classes,
+            fwd_lb_body_nullable,
+            lb_check_bytes,
+        ) =
             if matches!(selected, Some(prefix::PrefixKind::AnchoredFwdLb(_))) {
                 let lb_node = node_fwd_simpl.left(&b);
                 let lb_inner = b.get_lookbehind_inner(lb_node);
                 let (_, lb_fixed) = prefix::fwd_lb_class(&mut b, lb_node)
                     .ok_or(Error::InternalError("AnchoredFwdLb requires fixed-length lb"))?;
-                let begin_nullable = b.nullability(lb_inner).has(Nullability::BEGIN);
+                let (begin_nullable, begin_len, begin_classes) =
+                    match prefix::fwd_lb_begin_info(&mut b, lb_inner) {
+                        prefix::BeginInfo::None => (false, 0, Vec::new()),
+                        prefix::BeginInfo::Node(_, 0) => (true, 0, Vec::new()),
+                        prefix::BeginInfo::Node(began, len) => {
+                            let classes = prefix::fwd_lb_begin_classes(&mut b, began, len).ok_or(
+                                Error::InternalError("AnchoredFwdLb begin path has no byte classes"),
+                            )?;
+                            (
+                                true,
+                                u8::try_from(len).map_err(|_| {
+                                    Error::InternalError("AnchoredFwdLb begin_len exceeds u8")
+                                })?,
+                                classes,
+                            )
+                        }
+                        prefix::BeginInfo::Unrepresentable => {
+                            return Err(Error::InternalError(
+                                "AnchoredFwdLb selected with unrepresentable begin path",
+                            ));
+                        }
+                    };
                 let body_nullable = b.nullability(fwd_start) != Nullability::NEVER;
-                (begin_nullable, body_nullable, u8::try_from(lb_fixed).map_err(|_| Error::InternalError("AnchoredFwdLb lb_fixed exceeds u8"))?)
+                (
+                    begin_nullable,
+                    begin_len,
+                    begin_classes,
+                    body_nullable,
+                    u8::try_from(lb_fixed)
+                        .map_err(|_| Error::InternalError("AnchoredFwdLb lb_fixed exceeds u8"))?,
+                )
             } else {
-                (false, false, 0)
+                (false, 0, Vec::new(), false, 0)
             };
 
         // lots of conditions when something else is better.. possibly removing it entirely
@@ -1339,6 +1500,8 @@ impl Regex {
         let has_bounded = bounded.is_some();
         let bounded_safe_find_all = if has_bounded {
             if always_nullable {
+                true
+            } else if max_len < min_len.saturating_add(2) {
                 true
             } else {
                 let inner_match = b.mk_concat(node_fwd_simpl, resharp_algebra::NodeId::TOPPLUS);
@@ -1391,6 +1554,20 @@ impl Regex {
             None
         };
 
+        if b.take_unsupported_lb_fusion() {
+            return Err(Error::Algebra(resharp_algebra::ResharpError::UnsupportedPattern));
+        }
+
+        let captures_dispatch =
+            captures::compute_capture_dispatch(&b, node_fwd_simpl, group_names.len())?;
+
+        let group_names = {
+            let mut named = Vec::with_capacity(group_names.len() + 1);
+            named.push(None);
+            named.extend(group_names);
+            named
+        };
+
         Ok(Regex {
             inner: Mutex::new(RegexInner {
                 b,
@@ -1406,6 +1583,9 @@ impl Regex {
                 fas,
                 #[cfg(feature = "convergence_prefix")]
                 conv_b,
+                capture_root: node_fwd_simpl,
+                capture_dfa: pparse::PosixParser::new(max_cap),
+                skeleton,
             }),
             find_all: compute_find_all(
                 is_empty_lang,
@@ -1428,16 +1608,21 @@ impl Regex {
             rev_end_anchored,
             initial_nullability,
             fwd_end_nullable,
+            rev_end_nullable,
             hardened,
             has_bounded,
             bounded_safe_find_all,
             lb_check_bytes,
             fwd_lb_begin_nullable,
+            fwd_lb_begin_len,
+            fwd_lb_begin_classes,
             fwd_lb_body_nullable,
             init_flags: InitialNodeFlags::new(has_anchors, has_lb, has_la),
             #[cfg(feature = "convergence_prefix")]
             conv_prefix,
             neg_lb,
+            group_names,
+            captures_dispatch,
             #[cfg(feature = "stream")]
             stream_cache: Default::default(),
         })
@@ -1512,6 +1697,16 @@ impl Regex {
             FindAll::Bounded => "Bounded",
             FindAll::FwdPrefix => "FwdPrefix",
             FindAll::FwdLbPrefix => "FwdLbPrefix",
+        }
+    }
+
+    #[cfg(feature = "diag")]
+    #[allow(missing_docs)]
+    pub fn captures_kind_name(&self) -> &'static str {
+        match &self.captures_dispatch {
+            captures::CaptureDispatch::Empty => "Empty",
+            captures::CaptureDispatch::FixedOffsets(_) => "FixedOffsets",
+            captures::CaptureDispatch::Dfa => "Dfa",
         }
     }
 
@@ -1597,6 +1792,94 @@ impl Regex {
                 _ => Err(Error::InternalError("FwdLbPrefix without AnchoredFwdLb prefix")),
             },
         }
+    }
+
+    /// Capture groups of every [`Regex::find_all`] match, in the same order.
+    ///
+    /// ```
+    /// let re = resharp::Regex::new(r"(?<user>[a-z]+)@(?<host>[a-z.]+)").unwrap();
+    /// let caps = re.captures_all(b"joe@ex.com").unwrap();
+    /// assert_eq!(caps[0].get(0), Some(resharp::Match { start: 0, end: 10 }));
+    /// assert_eq!(caps[0].name("host"), Some(resharp::Match { start: 4, end: 10 }));
+    /// ```
+    #[cfg(feature = "experimental_capture_groups")]
+    pub fn captures_all(&self, input: &[u8]) -> Result<Vec<Captures<'_>>, Error> {
+        let matches = self.find_all(input)?;
+        {
+            let inner = &mut *self.inner.lock().unwrap_or_else(|e| e.into_inner());
+            inner.capture_dfa.begin_input(input);
+        }
+        matches.into_iter().map(|m| self.captures_of(input, m)).collect()
+    }
+
+    #[cfg(feature = "experimental_capture_groups")]
+    fn captures_of(&self, input: &[u8], m: Match) -> Result<Captures<'_>, Error> {
+        let mut spans = Vec::with_capacity(self.group_names.len());
+        spans.push(Some((m.start, m.end)));
+        spans.extend(self.captures_at(input, m.start, m.end)?);
+        if spans.len() != self.group_names.len() {
+            return Err(Error::InternalError("capture slot count does not match group count"));
+        }
+        Ok(Captures { names: &self.group_names, spans })
+    }
+
+    #[cfg(feature = "experimental_capture_groups")]
+    fn captures_at(
+        &self,
+        input: &[u8],
+        begin: usize,
+        end: usize,
+    ) -> Result<Vec<Option<(usize, usize)>>, Error> {
+        match &self.captures_dispatch {
+            captures::CaptureDispatch::Empty => return Ok(Vec::new()),
+            captures::CaptureDispatch::FixedOffsets(offsets) => {
+                return Ok(offsets
+                    .iter()
+                    .map(|g| match *g {
+                        captures::GroupOffset::FromBegin { open, close } => {
+                            Some((begin + open as usize, begin + close as usize))
+                        }
+                        captures::GroupOffset::FromEnd { open, close } => {
+                            Some((end - open as usize, end - close as usize))
+                        }
+                    })
+                    .collect());
+            }
+            captures::CaptureDispatch::Dfa => {}
+        }
+        let inner = &mut *self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let RegexInner {
+            ref mut b,
+            ref mut capture_dfa,
+            ref skeleton,
+            capture_root,
+            ..
+        } = *inner;
+        pparse::extract_captures(b, capture_dfa, capture_root, skeleton.as_ref(), input, begin, end)
+    }
+
+    /// Group names, indexed like [`Captures`]. `None` for entry 0 and for
+    /// unnamed captures.
+    ///
+    /// ```
+    /// let re = resharp::Regex::new(r"(?<year>\d{4})-(?<month>\d{2})").unwrap();
+    /// assert_eq!(
+    ///     re.capture_names(),
+    ///     &[None, Some("year".to_string()), Some("month".to_string())]
+    /// );
+    /// ```
+    #[cfg(feature = "experimental_capture_groups")]
+    pub fn capture_names(&self) -> &[Option<String>] {
+        &self.group_names
+    }
+
+    /// Returns the index (as used by [`Captures::get`]) of the given group
+    /// name, or `None` if there is no such named group in this pattern.
+    #[cfg(feature = "experimental_capture_groups")]
+    pub fn capture_index_for_name(&self, name: &str) -> Option<usize> {
+        self.group_names
+            .iter()
+            .position(|n| n.as_deref() == Some(name))
     }
 }
 
@@ -1861,6 +2144,32 @@ impl Regex {
 
     #[cfg(feature = "diag")]
     #[allow(missing_docs)]
+    pub fn diag_flags(&self) -> String {
+        format!("fixed_length={:?} always_nullable={} hardened={} find_all={:?} initial_nullability={:?}", self.fixed_length, self.always_nullable, self.hardened, self.find_all, self.initial_nullability)
+    }
+
+    #[cfg(feature = "diag")]
+    #[allow(missing_docs)]
+    pub fn fwd_effects_debug(&self) -> String {
+        let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let RegexInner { ref mut b, ref fwd, .. } = *inner;
+        let mut out = String::new();
+        for (i, &eid) in fwd.effects_id.iter().enumerate() {
+            if eid != 0 {
+                let nulls: Vec<String> = fwd.effects[eid as usize]
+                    .iter()
+                    .map(|n| format!("(mask={},rel={})", n.mask.0, n.rel))
+                    .collect();
+                let node = fwd.state_nodes.get(i).copied();
+                let pp = node.map(|n| b.pp(n)).unwrap_or_default();
+                out += &format!("  state[{}] node={:?}({}) eid={} nulls=[{}]\n", i, node, pp, eid, nulls.join(", "));
+            }
+        }
+        out
+    }
+
+    #[cfg(feature = "diag")]
+    #[allow(missing_docs)]
     pub fn effects_debug(&self) -> String {
         let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         let rev = &inner.rev_ts;
@@ -1908,12 +2217,14 @@ impl Regex {
     #[allow(missing_docs)]
     pub fn scan_fwd_all_nulls_debug(&self, input: &[u8], pos: usize) -> Vec<usize> {
         let inner = &mut *self.inner.lock().unwrap_or_else(|e| e.into_inner());
-        let mut nulls = resharp_algebra::nulls::StartPositions::new();
+        let mut nulls = Vec::new();
         inner
             .fwd
-            .scan_fwd_all_nulls_from(&mut inner.b, pos, input, &mut nulls)
+            .scan_fwd_all_nulls_to(&mut inner.b, pos, input.len(), input, &mut nulls)
             .unwrap();
-        nulls.positions_asc().collect()
+        nulls.sort_unstable();
+        nulls.dedup();
+        nulls
     }
 
     /// Walk RTL step by step, printing the rev-DFA state and its nulls
@@ -2133,14 +2444,10 @@ impl Regex {
     }
 
     fn find_all_dfa(&self, input: &[u8]) -> Result<Vec<Match>, Error> {
-        if self.fwd_end_nullable {
-            self.find_all_dfa_inner::<true>(input)
-        } else {
-            self.find_all_dfa_inner::<false>(input)
-        }
+        self.find_all_dfa_inner(input)
     }
 
-    fn find_all_dfa_inner<const FWD_NULL: bool>(&self, input: &[u8]) -> Result<Vec<Match>, Error> {
+    fn find_all_dfa_inner(&self, input: &[u8]) -> Result<Vec<Match>, Error> {
         debug_assert!(!input.is_empty());
         let inner = &mut *self.inner.lock().unwrap_or_else(|e| e.into_inner());
         inner.nulls.clear();
@@ -2184,7 +2491,7 @@ impl Regex {
             return Ok(matches.clone());
         }
 
-        if self.initial_nullability.has(Nullability::END) {
+        if self.rev_end_nullable {
             inner.nulls.add(input.len());
         }
         {
@@ -2198,6 +2505,10 @@ impl Regex {
                 let RegexInner { rev_ts, b, nulls, .. } = &mut *inner;
                 rev_ts.collect_rev(b, input.len() - 1, input, nulls, None)?;
             }
+        }
+
+        if self.initial_nullability.has(Nullability::BEGIN) {
+            inner.nulls.add(0);
         }
 
         #[cfg(all(feature = "debug", debug_assertions))]
@@ -2263,6 +2574,16 @@ impl Regex {
             return Err(Error::Algebra(resharp_algebra::ResharpError::UnsupportedPattern))
         }
         Ok(inner.fwd.scan_fwd_optional(&mut inner.b, 0, input)?.map(|end| Match { start: 0, end }))
+    }
+
+    /// whether the whole input matches the pattern, i.e. a match spanning
+    /// `0..input.len()`.
+    ///
+    /// equivalent to checking `find_anchored(input)?.map_or(false, |m| m.end == input.len())`.
+    pub fn is_full_match(&self, input: &[u8]) -> Result<bool, Error> {
+        Ok(self
+            .find_anchored(input)?
+            .is_some_and(|m| m.end == input.len()))
     }
 
     /// longest match anchored at the string end (`\z`).

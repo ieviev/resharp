@@ -1081,3 +1081,350 @@ pattern = '(?<=a)\A'
 input = "a"
 matches = []
 ascii = true
+
+[[test]]
+name = "star_atom_backoff_to_zero_before_caret_lookahead_single"
+pattern = 'a*(?=^)'
+input = "aaa"
+matches = [[0, 0]]
+multiline = false
+
+[[test]]
+name = "star_atom_backoff_to_zero_before_caret_lookahead_same_atom_twice"
+pattern = 'a*a*(?=^)'
+input = "aaa"
+matches = [[0, 0]]
+multiline = false
+
+[[test]]
+name = "star_atom_backoff_to_zero_before_caret_lookahead_two_distinct"
+pattern = 'a*b*(?=^)'
+input = "aaa"
+matches = [[0, 0]]
+multiline = false
+
+[[test]]
+name = "star_atom_backoff_to_zero_before_caret_lookahead_class_second"
+pattern = 'a*[b]*(?=^)'
+input = "aaa"
+matches = [[0, 0]]
+multiline = false
+
+[[test]]
+name = "star_atom_backoff_to_zero_before_caret_lookahead_both_classes"
+pattern = '[a]*[b]*(?=^)'
+input = "aaa"
+matches = [[0, 0]]
+multiline = false
+
+[[test]]
+name = "star_atom_backoff_to_zero_before_caret_lookahead_three_distinct"
+pattern = 'a*b*c*(?=^)'
+input = "aaa"
+matches = [[0, 0]]
+multiline = false
+
+[[test]]
+name = "plus_atom_cannot_backoff_before_caret_lookahead"
+pattern = 'a+b*(?=^)'
+input = "aaa"
+matches = []
+multiline = false
+
+[[test]]
+name = "plus_atom_second_cannot_backoff_before_caret_lookahead"
+pattern = 'a*b+(?=^)'
+input = "aaab"
+matches = []
+multiline = false
+
+[[test]]
+name = "two_star_atoms_before_dollar_lookahead"
+pattern = 'a*b*(?=$)'
+input = "aaa"
+matches = [[0, 3], [3, 3]]
+multiline = false
+
+[[test]]
+name = "end_anchor_before_negative_begin_anchor_lookahead"
+pattern = '\z(?!\A)'
+input = "a"
+matches = [[1, 1]]
+ascii = true
+
+[[test]]
+name = "begin_anchor_before_negative_end_anchor_lookahead"
+pattern = '\A(?!\z)'
+input = "a"
+matches = [[0, 0]]
+ascii = true
+
+[[test]]
+name = "dollar_before_negative_caret_lookahead"
+pattern = '$(?!^)'
+input = "a"
+matches = [[1, 1]]
+multiline = false
+
+[[test]]
+name = "dollar_before_negative_caret_lookahead_empty_input"
+pattern = '$(?!^)'
+input = ""
+matches = []
+multiline = false
+
+[[test]]
+name = "literal_then_dollar_before_negative_caret_lookahead"
+pattern = ':$(?!^)'
+input = "a-c:.:::"
+matches = [[7, 8]]
+multiline = false
+
+[[test]]
+name = "end_anchor_then_begin_anchor_empty_input"
+pattern = '\z\A'
+input = ""
+matches = [[0, 0]]
+ascii = true
+
+[[test]]
+name = "end_anchor_then_begin_anchor_nonempty_input"
+pattern = '\z\A'
+input = "a"
+matches = []
+ascii = true
+
+[[test]]
+name = "doubled_end_anchor_then_begin_anchor_empty_input"
+pattern = '\z\z\A'
+input = ""
+matches = [[0, 0]]
+ascii = true
+
+[[test]]
+name = "doubled_end_anchor_then_begin_anchor_nonempty_input"
+pattern = '\z\z\A'
+input = "a"
+matches = []
+ascii = true
+
+[[test]]
+name = "optional_caret_then_repeated_begin_anchor"
+pattern = '^?\A{2}'
+input = "a"
+matches = [[0, 0]]
+ascii = true
+
+[[test]]
+name = "multiline_caret_with_begin_anchor_lookahead_only_at_zero"
+pattern = '^(?=\A)'
+input = "bbc\n:"
+matches = [[0, 0]]
+multiline = true
+
+[[test]]
+name = "begin_anchor_before_negative_lookbehind_with_end_anchor"
+pattern = '\A(?<!\zx)'
+input = "b"
+matches = [[0, 0]]
+ascii = true
+
+[[test]]
+name = "variable_bounded_dollar_repeat_before_negative_lookbehind"
+pattern = '${1,2}(?<!\zx)'
+input = "-\n"
+matches = [[1, 1], [2, 2]]
+ascii = true
+
+[[test]]
+name = "begin_anchor_lookahead_then_end_anchor_empty_input"
+pattern = '(?=\A)\z'
+input = ""
+matches = [[0, 0]]
+
+[[test]]
+name = "dollar_then_begin_anchor_then_dollar_empty_input"
+pattern = '$\A$'
+input = ""
+matches = [[0, 0]]
+
+[[test]]
+name = "variable_bounded_begin_anchor_repeat_then_optional_caret_then_dot"
+pattern = '\A{1,2}^?.'
+input = "\nab"
+matches = []
+ascii = true
+
+[[test]]
+name = "variable_bounded_begin_anchor_repeat_then_optional_caret_then_three_dots"
+pattern = '\A{1,3}^?(.){3}'
+input = "\nabcdef"
+matches = []
+ascii = true
+
+[[test]]
+name = "bounded_repeat_of_doubled_begin_anchor_then_optional_word_boundary"
+pattern = '(\A{2}){2,3}\b?'
+input = "b"
+matches = [[0, 0]]
+ascii = true
+
+[[test]]
+name = "union_of_end_anchor_and_lookahead_word_char"
+pattern = '(\z|(?=a)\w)'
+input = "0"
+matches = [[1, 1]]
+
+[[test]]
+name = "exact_count_zero_quantified_lookaround_tail_is_epsilon_1"
+pattern = '(?<!(?<!.*)){2,2}${0,0}'
+input = ":\n"
+matches = [[0, 0], [1, 1], [2, 2]]
+
+[[test]]
+name = "exact_count_zero_quantified_lookaround_tail_is_epsilon_1_ascii"
+pattern = '(?<!(?<!.*)){2,2}${0,0}'
+ascii = true
+input = ":\n"
+matches = [[0, 0], [1, 1], [2, 2]]
+
+[[test]]
+name = "exact_count_zero_quantified_lookaround_tail_is_epsilon_1_javascript"
+pattern = '(?<!(?<!.*)){2,2}${0,0}'
+javascript = true
+input = ":\n"
+matches = [[0, 0], [1, 1], [2, 2]]
+
+[[test]]
+name = "exact_count_zero_quantified_lookaround_tail_is_epsilon_1_full"
+pattern = '(?<!(?<!.*)){2,2}${0,0}'
+full = true
+input = ":\n"
+matches = [[0, 0], [1, 1], [2, 2]]
+
+[[test]]
+name = "exact_count_zero_quantified_lookaround_tail_is_epsilon_2"
+pattern = '(?<!(?<!.*)){1,1}${0,0}'
+input = ":\n"
+matches = [[0, 0], [1, 1], [2, 2]]
+
+[[test]]
+name = "exact_count_zero_quantified_lookaround_tail_is_epsilon_2_ascii"
+pattern = '(?<!(?<!.*)){1,1}${0,0}'
+ascii = true
+input = ":\n"
+matches = [[0, 0], [1, 1], [2, 2]]
+
+[[test]]
+name = "exact_count_zero_quantified_lookaround_tail_is_epsilon_2_javascript"
+pattern = '(?<!(?<!.*)){1,1}${0,0}'
+javascript = true
+input = ":\n"
+matches = [[0, 0], [1, 1], [2, 2]]
+
+[[test]]
+name = "exact_count_zero_quantified_lookaround_tail_is_epsilon_2_full"
+pattern = '(?<!(?<!.*)){1,1}${0,0}'
+full = true
+input = ":\n"
+matches = [[0, 0], [1, 1], [2, 2]]
+
+[[test]]
+name = "exact_count_zero_quantified_lookaround_tail_is_epsilon_3"
+pattern = '(?=.*){2,3}${0,0}'
+input = ":\n"
+matches = [[0, 0], [1, 1], [2, 2]]
+
+[[test]]
+name = "exact_count_zero_quantified_lookaround_tail_is_epsilon_3_ascii"
+pattern = '(?=.*){2,3}${0,0}'
+ascii = true
+input = ":\n"
+matches = [[0, 0], [1, 1], [2, 2]]
+
+[[test]]
+name = "exact_count_zero_quantified_lookaround_tail_is_epsilon_3_javascript"
+pattern = '(?=.*){2,3}${0,0}'
+javascript = true
+input = ":\n"
+matches = [[0, 0], [1, 1], [2, 2]]
+
+[[test]]
+name = "exact_count_zero_quantified_lookaround_tail_is_epsilon_3_full"
+pattern = '(?=.*){2,3}${0,0}'
+full = true
+input = ":\n"
+matches = [[0, 0], [1, 1], [2, 2]]
+
+[[test]]
+name = "exact_count_zero_quantified_lookaround_tail_is_epsilon_4"
+pattern = '.{0,0}${0,0}'
+input = ":\n"
+matches = [[0, 0], [1, 1], [2, 2]]
+
+[[test]]
+name = "exact_count_zero_quantified_lookaround_tail_is_epsilon_4_ascii"
+pattern = '.{0,0}${0,0}'
+ascii = true
+input = ":\n"
+matches = [[0, 0], [1, 1], [2, 2]]
+
+[[test]]
+name = "exact_count_zero_quantified_lookaround_tail_is_epsilon_4_javascript"
+pattern = '.{0,0}${0,0}'
+javascript = true
+input = ":\n"
+matches = [[0, 0], [1, 1], [2, 2]]
+
+[[test]]
+name = "exact_count_zero_quantified_lookaround_tail_is_epsilon_4_full"
+pattern = '.{0,0}${0,0}'
+full = true
+input = ":\n"
+matches = [[0, 0], [1, 1], [2, 2]]
+
+[[test]]
+name = "exact_count_zero_quantified_lookaround_tail_is_epsilon_5"
+pattern = '\b{0,0}${0,0}'
+input = ":\n"
+matches = [[0, 0], [1, 1], [2, 2]]
+
+[[test]]
+name = "exact_count_zero_quantified_lookaround_tail_is_epsilon_5_ascii"
+pattern = '\b{0,0}${0,0}'
+ascii = true
+input = ":\n"
+matches = [[0, 0], [1, 1], [2, 2]]
+
+[[test]]
+name = "exact_count_zero_quantified_lookaround_tail_is_epsilon_5_javascript"
+pattern = '\b{0,0}${0,0}'
+javascript = true
+input = ":\n"
+matches = [[0, 0], [1, 1], [2, 2]]
+
+[[test]]
+name = "exact_count_zero_quantified_lookaround_tail_is_epsilon_5_full"
+pattern = '\b{0,0}${0,0}'
+full = true
+input = ":\n"
+matches = [[0, 0], [1, 1], [2, 2]]
+
+[[test]]
+name = "lookahead_optional_a_anchor_word_boundary_drops_match"
+pattern = '(?!x)\A?\Ba.*'
+ascii = true
+input = "aa"
+matches = [[1, 2]]
+
+[[test]]
+name = "bounded_range_lookbehind_with_anchor_drops_end_match"
+pattern = '(?<!c\A){1,2}$?'
+input = "baaa"
+matches = [[0, 0], [1, 1], [2, 2], [3, 3], [4, 4]]
+
+[[test]]
+name = "negated_double_nested_optional_anchor_lookahead_drops_match"
+pattern = '(?!\A?(?!\A))'
+input = "x"
+matches = [[0, 0]]

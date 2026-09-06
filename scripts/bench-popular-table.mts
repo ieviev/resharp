@@ -26,12 +26,15 @@ type Row = {
     thrptBps: number;
 };
 
-function patternByName(): Map<string, string> {
+type PatternPair = { shown: string; resharp: string };
+
+function patternByName(): Map<string, PatternPair> {
     const src = readFileSync(exampleFile, "utf8");
-    const map = new Map<string, string>();
-    const tupleRe = /\(\s*"([^"]+)"\s*,\s*r(#*)"([\s\S]*?)"\2\s*,/g;
+    const map = new Map<string, PatternPair>();
+    const tupleRe =
+        /\(\s*"([^"]+)"\s*,\s*r(#*)"([\s\S]*?)"\2\s*,\s*(?:r(#*)"([\s\S]*?)"\4\s*,?)?/g;
     for (const m of src.matchAll(tupleRe)) {
-        if (!map.has(m[1])) map.set(m[1], m[3]);
+        if (!map.has(m[1])) map.set(m[1], { shown: m[3], resharp: m[5] ?? m[3] });
     }
     return map;
 }
@@ -49,11 +52,12 @@ function lookaroundNames(): Set<string> {
     return names;
 }
 
-function label(name: string, patterns: Map<string, string>): string {
+function label(name: string, patterns: Map<string, PatternPair>): string {
     const pat = patterns.get(name);
     if (pat === undefined) throw new Error(`no pattern extracted for "${name}"`);
-    const shown = pat.length > 30 ? pat.slice(0, 30) + "..." : pat;
-    return "`" + shown.replace(/\|/g, "\\|") + "`";
+    const shown = pat.shown.length > 30 ? pat.shown.slice(0, 30) + "..." : pat.shown;
+    const mark = pat.resharp === pat.shown ? "" : " \\*";
+    return "`" + shown.replace(/\|/g, "\\|") + "`" + mark;
 }
 
 function run(): string {
@@ -66,9 +70,9 @@ function run(): string {
     ];
     process.stdout.write(`running: cargo ${args.join(" ")}\n`);
     process.stdout.write(`cwd: ${engineDir}\n`);
-    process.stdout.write("this builds the example then benches; expect a few minutes...\n");
+    process.stdout.write("this builds the example then benches. expect a few minutes...\n");
     const r = spawnSync("cargo", args, { cwd: engineDir, encoding: "utf8", maxBuffer: 64 << 20, stdio: ["inherit", "pipe", "inherit"] });
-    process.stdout.write("cargo finished; parsing output...\n");
+    process.stdout.write("parsing output...\n");
     if (r.status !== 0) {
         process.stderr.write(r.stdout ?? "");
         process.stderr.write(r.stderr ?? "");
@@ -156,7 +160,7 @@ function table(
     rows: Row[],
     group: Group,
     metric: "thrpt" | "time",
-    patterns: Map<string, string>,
+    patterns: Map<string, PatternPair>,
     engines: readonly Engine[],
     include: (pattern: string) => boolean,
 ): string {
@@ -186,7 +190,7 @@ const NON_LOOKAROUND_ENGINES = ENGINES;
 const LOOKAROUND_ENGINES = ENGINES.filter((e) => e !== "regex");
 
 const md = [
-    "Full benchmark source: [resharp-engine/examples/popular-crates.rs](resharp-engine/examples/popular-crates.rs). Ratios are vs the fastest per row.",
+    "Full benchmark source: [resharp-engine/examples/popular-crates.rs](resharp-engine/examples/popular-crates.rs).",
     "",
     `CPU: ${cpuModel()}`,
     "",
@@ -198,9 +202,11 @@ const md = [
     "",
     table(rows, "validate", "time", patterns, NON_LOOKAROUND_ENGINES, (p) => !lookaround.has(p)),
     "",
-    "### Lookaround (rare in the corpus)",
+    "### Lookaround scan",
     "",
     table(rows, "scan", "thrpt", patterns, LOOKAROUND_ENGINES, (p) => lookaround.has(p)),
+    "",
+    "### Lookaround validate",
     "",
     table(rows, "validate", "time", patterns, LOOKAROUND_ENGINES, (p) => lookaround.has(p)),
     "",

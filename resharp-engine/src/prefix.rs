@@ -6,7 +6,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use crate::Error;
 
 #[cfg(feature = "debug")]
-fn pp_sets(b: &RegexBuilder, sets: &[TSetId]) -> String {
+#[allow(dead_code)]
+pub(crate) fn pp_sets(b: &RegexBuilder, sets: &[TSetId]) -> String {
     sets.iter()
         .map(|&s| b.solver_ref().pp(s))
         .collect::<Vec<_>>()
@@ -1533,13 +1534,121 @@ fn select_prefix_simd(
     Ok((None, None, false, u64::MAX, rev_stripped))
 }
 
+fn begins(b: &mut RegexBuilder, node_id: NodeId) -> NodeId {
+    if !b.contains_anchors(node_id) {
+        return NodeId::BOT;
+    }
+    match b.get_kind(node_id) {
+        Kind::Begin => NodeId::EPS,
+        Kind::Concat => {
+            let left = begins(b, node_id.left(b));
+            if left == NodeId::BOT {
+                return NodeId::BOT;
+            }
+            b.mk_concat(left, node_id.right(b))
+        }
+        Kind::Union => {
+            let left = begins(b, node_id.left(b));
+            let right = begins(b, node_id.right(b));
+            b.mk_union(left, right)
+        }
+        _ => NodeId::BOT,
+    }
+}
+
+fn contains_reachable_begin(b: &RegexBuilder, node_id: NodeId) -> bool {
+    if !b.contains_anchors(node_id) {
+        return false;
+    }
+    match b.get_kind(node_id) {
+        Kind::Begin => true,
+        Kind::Concat => contains_reachable_begin(b, node_id.left(b)),
+        Kind::Union => {
+            contains_reachable_begin(b, node_id.left(b))
+                || contains_reachable_begin(b, node_id.right(b))
+        }
+        _ => false,
+    }
+}
+
+fn peel_to_reachable_begin(b: &mut RegexBuilder, lb_inner: NodeId) -> Option<NodeId> {
+    let mut node = lb_inner;
+    while !contains_reachable_begin(b, node) {
+        let stripped = b.strip_prefix_safe(node);
+        if stripped == node {
+            return None;
+        }
+        node = stripped;
+    }
+    Some(node)
+}
+
+fn has_reachable_begin(b: &mut RegexBuilder, lb_inner: NodeId) -> bool {
+    peel_to_reachable_begin(b, lb_inner).is_some()
+}
+
+fn fwd_lb_begin_node(b: &mut RegexBuilder, lb_inner: NodeId) -> Option<(NodeId, u32)> {
+    let node = peel_to_reachable_begin(b, lb_inner)?;
+    let began = begins(b, node);
+    if began == NodeId::BOT {
+        return None;
+    }
+    let len = b.get_fixed_length(began).filter(|&len| len <= 64)?;
+    Some((began, len))
+}
+
+pub(crate) enum BeginInfo {
+    None,
+    Node(NodeId, u32),
+    Unrepresentable,
+}
+
+pub(crate) fn fwd_lb_begin_info(b: &mut RegexBuilder, lb_inner: NodeId) -> BeginInfo {
+    // has_reachable_begin can't see a \A hidden inside a nested Lookahead/Lookbehind/Compl; bail out rather than assume None if contains_anchors sees one anyway
+    if b.contains_anchors(lb_inner) && !has_reachable_begin(b, lb_inner) {
+        return BeginInfo::Unrepresentable;
+    }
+    if !has_reachable_begin(b, lb_inner) {
+        return BeginInfo::None;
+    }
+    if b.nullability(lb_inner).has(Nullability::BEGIN) {
+        return BeginInfo::Node(NodeId::EPS, 0);
+    }
+    match fwd_lb_begin_node(b, lb_inner) {
+        Some((node, len)) => BeginInfo::Node(node, len),
+        None => BeginInfo::Unrepresentable,
+    }
+}
+
+pub(crate) fn fwd_lb_begin_classes(
+    b: &mut RegexBuilder,
+    began: NodeId,
+    len: u32,
+) -> Option<Vec<crate::accel::TSet>> {
+    let sets = calc_prefix_sets_inner(b, began, false).ok()?;
+    if sets.len() != len as usize {
+        return None;
+    }
+    Some(
+        sets.iter()
+            .map(|&s| crate::accel::TSet::from_bytes(&b.solver().collect_bytes(s)))
+            .collect(),
+    )
+}
+
 /// The positive byte-class a leading lookbehind contributes to a fwd prefix,
 /// plus the lb length consumed. None when there is no usable fixed-length class.
 pub(crate) fn fwd_lb_class(b: &mut RegexBuilder, lb: NodeId) -> Option<(NodeId, u32)> {
     if let Some(pred) = b.neg_lookbehind_prev_pred(lb) {
         return Some((pred, 1));
     }
+    if b.get_lookbehind_prev(lb) != NodeId::MISSING {
+        return None;
+    }
     let lb_inner = b.get_lookbehind_inner(lb);
+    if matches!(fwd_lb_begin_info(b, lb_inner), BeginInfo::Unrepresentable) {
+        return None;
+    }
     let mut lb_stripped = b.nonbegins(lb_inner);
     loop {
         let stripped = b.strip_prefix_safe(lb_stripped);
@@ -1687,6 +1796,9 @@ fn neg_lb_body_and_seq(b: &mut RegexBuilder, node: NodeId) -> Option<(NodeId, Ve
     let lb = node.left(b);
     let body = node.right(b);
     if !lb.is_lookbehind(b) {
+        return None;
+    }
+    if b.get_lookbehind_prev(lb) != NodeId::MISSING {
         return None;
     }
     let inner = b.get_lookbehind_inner(lb);

@@ -19,6 +19,7 @@ impl Nullability {
     pub const END: Nullability = Nullability(0b100);
     pub const NONBEGIN: Nullability = Nullability(0b011);
     pub const EMPTYSTRING: Nullability = Nullability(0b110);
+    pub const TAIL: Nullability = Nullability(0b1000);
     #[inline]
     pub fn has(self, flag: Nullability) -> bool {
         self.0 & flag.0 != 0
@@ -56,6 +57,9 @@ impl NullState {
     }
     pub fn is_mask_nullable(&self, mask: Nullability) -> bool {
         self.mask.and(mask) != Nullability::NEVER
+    }
+    pub fn is_tail(&self) -> bool {
+        self.mask.has(Nullability::TAIL)
     }
 }
 impl Ord for NullState {
@@ -369,10 +373,25 @@ fn normalize_from_states(raw: &std::collections::BTreeSet<NullState>) -> Nulls {
     runs
 }
 
+const MAX_EXPANDED_NULL_STATES: u64 = 1_000_000;
+
 /// Flatten to `Vec<NullState>` in descending `rel` order (matches the old `BTreeSet` order).
 fn expand_to_states(runs: &Nulls) -> Vec<NullState> {
+    let bounded_total: u64 = runs
+        .iter()
+        .map(|r| if r.hi == u32::MAX { 0 } else { (r.hi - r.lo) as u64 + 1 })
+        .sum();
+    assert!(
+        bounded_total <= MAX_EXPANDED_NULL_STATES,
+        "refusing to expand a Nulls run-list with {bounded_total} states (runs={runs:?}): \
+         an unbounded/near-unbounded `rel` domain, not a big-but-finite one"
+    );
     let mut out = Vec::new();
     for r in runs.iter().rev() {
+        if r.hi == u32::MAX {
+            out.push(NullState::new(r.mask.or(Nullability::TAIL), r.lo));
+            continue;
+        }
         for rel in (r.lo..=r.hi).rev() {
             out.push(NullState::new(r.mask, rel));
         }
@@ -387,10 +406,10 @@ fn or_runs(a: &Nulls, b: &Nulls) -> Nulls {
     if b.is_empty() {
         return a.clone();
     }
-    let mut bounds: Vec<u32> = Vec::with_capacity((a.len() + b.len()) * 2);
+    let mut bounds: Vec<u64> = Vec::with_capacity((a.len() + b.len()) * 2);
     for r in a.iter().chain(b.iter()) {
-        bounds.push(r.lo);
-        bounds.push(r.hi + 1);
+        bounds.push(r.lo as u64);
+        bounds.push(r.hi as u64 + 1);
     }
     bounds.sort_unstable();
     bounds.dedup();
@@ -403,12 +422,12 @@ fn or_runs(a: &Nulls, b: &Nulls) -> Nulls {
         let hi = hi_excl - 1;
         let mut mask = Nullability::NEVER;
         for r in a.iter().chain(b.iter()) {
-            if r.lo <= lo && hi <= r.hi {
+            if r.lo as u64 <= lo && hi <= r.hi as u64 {
                 mask = mask.or(r.mask);
             }
         }
         if mask != Nullability::NEVER {
-            push_coalesced(&mut runs, mask, lo, hi);
+            push_coalesced(&mut runs, mask, lo as u32, hi as u32);
         }
     }
     runs
@@ -418,10 +437,10 @@ fn and_runs(a: &Nulls, b: &Nulls) -> Nulls {
     if a.is_empty() || b.is_empty() {
         return Vec::new();
     }
-    let mut bounds: Vec<u32> = Vec::with_capacity((a.len() + b.len()) * 2);
+    let mut bounds: Vec<u64> = Vec::with_capacity((a.len() + b.len()) * 2);
     for r in a.iter().chain(b.iter()) {
-        bounds.push(r.lo);
-        bounds.push(r.hi + 1);
+        bounds.push(r.lo as u64);
+        bounds.push(r.hi as u64 + 1);
     }
     bounds.sort_unstable();
     bounds.dedup();
@@ -432,12 +451,12 @@ fn and_runs(a: &Nulls, b: &Nulls) -> Nulls {
             continue;
         }
         let hi = hi_excl - 1;
-        let ma = a.iter().find(|r| r.lo <= lo && hi <= r.hi).map(|r| r.mask);
-        let mb = b.iter().find(|r| r.lo <= lo && hi <= r.hi).map(|r| r.mask);
+        let ma = a.iter().find(|r| r.lo as u64 <= lo && hi <= r.hi as u64).map(|r| r.mask);
+        let mb = b.iter().find(|r| r.lo as u64 <= lo && hi <= r.hi as u64).map(|r| r.mask);
         if let (Some(ma), Some(mb)) = (ma, mb) {
             let mask = ma.and(mb);
             if mask != Nullability::NEVER {
-                push_coalesced(&mut runs, mask, lo, hi);
+                push_coalesced(&mut runs, mask, lo as u32, hi as u32);
             }
         }
     }
@@ -995,7 +1014,15 @@ impl NullsBuilder {
         if set_id == NullsId::END0 {
             return self.or_id(NullsId::CENTER0, NullsId::BEGIN0);
         }
-        NullsId::EMPTY
+        let runs = self.get_set_ref(set_id).clone();
+        let mut result: Nulls = Vec::new();
+        for r in &runs {
+            let not_mask = Nullability::ALWAYS.and(r.mask.not());
+            if not_mask != Nullability::NEVER {
+                push_coalesced(&mut result, not_mask, r.lo, r.hi);
+            }
+        }
+        self.get_runs_id(result)
     }
 
     // Represents the shift lazily as (root, cumulative offset) instead of rebuilding the run list.

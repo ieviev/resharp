@@ -9,5 +9,8 @@ publish = false
 crate-type = ["cdylib"]
 test = false
 
+[features]
+experimental_capture_groups = ["resharp/experimental_capture_groups"]
+
 [dependencies]
 resharp.workspace = true

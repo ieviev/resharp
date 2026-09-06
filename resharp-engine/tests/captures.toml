@@ -1,0 +1,3052 @@
+description = '''
+capture-group tests, run by tests/captures.rs (`captures_toml`).
+matches = [[start, end]] in utf8 bytes; optional, when omitted only the first
+match is checked. groups = one entry per checked match, one slot per group
+(group 1 first), [] when the group did not participate.
+compile_only, expect_error, kind = captures_kind_name().
+'''
+
+[[test]]
+name = "capture_basic_spans"
+pattern = "(?P<a>\\d+)-(?P<b>\\d+)"
+input = "12-345"
+matches = [[0, 6]]
+groups = [[[0, 2], [3, 6]]]
+
+[[test]]
+name = "capture_greedy_group_takes_longest"
+pattern = "(?P<x>a+)(?P<y>b+)"
+input = "aaabbb"
+matches = [[0, 6]]
+groups = [[[0, 3], [3, 6]]]
+
+[[test]]
+name = "capture_union_records_matched_branch_bb"
+pattern = "(?P<x>a|bb)c"
+input = "bbc"
+matches = [[0, 3]]
+groups = [[[0, 2]]]
+
+[[test]]
+name = "capture_union_records_matched_branch_a"
+pattern = "(?P<x>a|bb)c"
+input = "ac"
+matches = [[0, 2]]
+groups = [[[0, 1]]]
+
+[[test]]
+name = "capture_optional_group_absent"
+pattern = "x(?P<x>a+)?y"
+input = "xy"
+matches = [[0, 2]]
+groups = [[[]]]
+
+[[test]]
+name = "capture_optional_group_present"
+pattern = "x(?P<x>a+)?y"
+input = "xaay"
+matches = [[0, 4]]
+groups = [[[1, 3]]]
+
+[[test]]
+name = "capture_nested_groups"
+pattern = "(?P<x>(?P<y>a)(?P<z>b))c"
+input = "abc"
+matches = [[0, 3]]
+groups = [[[0, 2], [0, 1], [1, 2]]]
+
+[[test]]
+name = "capture_bounded_repetition_keeps_last_iteration"
+pattern = "(?P<x>a){2,3}"
+input = "aaa"
+matches = [[0, 3]]
+groups = [[[2, 3]]]
+
+[[test]]
+name = "capture_bounded_repetition_beyond_min_1"
+pattern = "(?P<x>a){2,3}"
+input = "aa"
+matches = [[0, 2]]
+groups = [[[1, 2]]]
+
+[[test]]
+name = "capture_bounded_repetition_beyond_min_2"
+pattern = "(?P<x>a){1,2}"
+input = "aa"
+matches = [[0, 2]]
+groups = [[[1, 2]]]
+
+[[test]]
+name = "capture_bounded_repetition_beyond_min_3"
+pattern = "(?P<x>a){1,3}"
+input = "aaa"
+matches = [[0, 3]]
+groups = [[[2, 3]]]
+
+[[test]]
+name = "capture_empty_group_spans"
+pattern = "(?P<x>a*)"
+input = ""
+matches = [[0, 0]]
+groups = [[[0, 0]]]
+
+[[test]]
+name = "capture_before_lookahead"
+pattern = "(?P<x>foo)(?=bar)"
+input = "foobar"
+matches = [[0, 3]]
+groups = [[[0, 3]]]
+
+[[test]]
+name = "capture_trailing_lookahead_gates_group_close_across_many_matches"
+pattern = "(?P<x>\\d+)(?=,)"
+input = "1,22,333,4444,5,66,777,8888,9 done"
+matches = [[0, 1], [2, 4], [5, 8], [9, 13], [14, 15], [16, 18], [19, 22], [23, 27]]
+groups = [[[0, 1]], [[2, 4]], [[5, 8]], [[9, 13]], [[14, 15]], [[16, 18]], [[19, 22]], [[23, 27]]]
+
+[[test]]
+name = "capture_leftmost_longest_prefers_longer_group_even_when_listed_second"
+pattern = "(?P<g>a|aaa)\\d"
+input = "aaa5"
+matches = [[0, 4]]
+groups = [[[0, 3]]]
+
+[[test]]
+name = "capture_overall_longest_can_shrink_a_later_group"
+pattern = "(?P<a>a+)(?P<b>a*)"
+input = "aaa"
+matches = [[0, 3]]
+groups = [[[0, 3], [3, 3]]]
+
+[[test]]
+name = "capture_many_groups_arena_offsets_stay_distinct"
+pattern = "(?P<g1>\\w)(?P<g2>\\w)(?P<g3>\\w)(?P<g4>\\w)(?P<g5>\\w)(?P<g6>\\w)(?P<g7>\\w)(?P<g8>\\w)(?P<g9>\\w)(?P<g10>\\w)"
+input = "abcdefghij"
+matches = [[0, 10]]
+groups = [[[0, 1], [1, 2], [2, 3], [3, 4], [4, 5], [5, 6], [6, 7], [7, 8], [8, 9], [9, 10]]]
+
+[[test]]
+name = "capture_case_insensitive_flag"
+pattern = "(?i)(?P<w>hello)"
+input = "HeLLo world"
+matches = [[0, 5]]
+groups = [[[0, 5]]]
+
+[[test]]
+name = "capture_repeated_calls_on_same_regex_are_independent"
+pattern = "(?P<x>\\d+)-(?P<y>\\d+)"
+input = "1-22 333-4"
+matches = [[0, 4], [5, 10]]
+groups = [[[0, 1], [2, 4]], [[5, 8], [9, 10]]]
+
+[[test]]
+name = "capture_bounded_quantifier_before_disjoint_literal_1"
+pattern = "(?P<a>\\d{1,3})\\."
+input = "1."
+matches = [[0, 2]]
+groups = [[[0, 1]]]
+
+[[test]]
+name = "capture_bounded_quantifier_before_disjoint_literal_2"
+pattern = "(?P<a>\\d{1,3})\\."
+input = "12."
+matches = [[0, 3]]
+groups = [[[0, 2]]]
+
+[[test]]
+name = "capture_bounded_quantifier_before_disjoint_literal_3"
+pattern = "(?P<a>\\d{1,3})\\."
+input = "123."
+matches = [[0, 4]]
+groups = [[[0, 3]]]
+
+[[test]]
+name = "capture_bounded_quantifier_before_disjoint_literal_4"
+pattern = "(?P<a>\\d{1,3})\\."
+input = "1234."
+matches = [[1, 5]]
+groups = [[[1, 4]]]
+
+[[test]]
+name = "capture_immediately_after_negative_lookahead_1"
+pattern = "(?!x)(?P<g0>.)"
+input = "c"
+matches = [[0, 1]]
+groups = [[[0, 1]]]
+
+[[test]]
+name = "capture_immediately_after_negative_lookahead_2"
+pattern = "(?!x)(?P<g0>.+)"
+input = "c"
+matches = [[0, 1]]
+groups = [[[0, 1]]]
+
+[[test]]
+name = "capture_immediately_after_negative_lookahead_3"
+pattern = "b*(?!-+[^bc]?)(?P<g0>.+)"
+input = "cc.baa"
+matches = [[0, 6]]
+groups = [[[0, 6]]]
+
+[[test]]
+name = "capture_after_lookahead_kind_1"
+pattern = "(?=.)(?P<g0>.)"
+input = "c"
+matches = [[0, 1]]
+groups = [[[0, 1]]]
+
+[[test]]
+name = "capture_after_lookahead_kind_2"
+pattern = "(?<!x)(?P<g0>.)"
+input = "c"
+matches = [[0, 1]]
+groups = [[[0, 1]]]
+
+[[test]]
+name = "capture_after_lookahead_kind_3"
+pattern = "(?<=^)(?P<g0>.)"
+input = "c"
+matches = [[0, 1]]
+groups = [[[0, 1]]]
+
+[[test]]
+name = "capture_trailing_optional_negative_lookahead_not_participating_2"
+pattern = "a(?P<g0>(?=x))?"
+input = "a"
+matches = [[0, 1]]
+groups = [[[]]]
+
+[[test]]
+name = "capture_mandatory_negative_lookahead_participates_empty_1"
+pattern = "(?P<g0>(?!a))"
+input = ""
+matches = [[0, 0]]
+groups = [[[0, 0]]]
+
+[[test]]
+name = "capture_mandatory_negative_lookahead_participates_empty_2"
+pattern = "(?P<g0>(?![a]+))"
+input = ""
+matches = [[0, 0]]
+groups = [[[0, 0]]]
+
+[[test]]
+name = "capture_mandatory_negative_lookahead_participates_empty_3"
+pattern = "(?P<g0>(?=))"
+input = ""
+matches = [[0, 0]]
+groups = [[[0, 0]]]
+
+[[test]]
+name = "capture_mandatory_negative_lookahead_participates_empty_4"
+pattern = "(?P<g0>(?!a))"
+input = "b"
+matches = [[0, 0], [1, 1]]
+groups = [[[0, 0]], [[1, 1]]]
+
+[[test]]
+name = "capture_optional_actually_consumes_1"
+pattern = "a(?P<g0>a)?"
+input = "aa"
+matches = [[0, 2]]
+groups = [[[1, 2]]]
+
+[[test]]
+name = "capture_optional_actually_consumes_2"
+pattern = "(?P<a>x)(?P<b>y)?(?P<c>z)"
+input = "xz"
+matches = [[0, 2]]
+groups = [[[0, 1], [], [1, 2]]]
+
+[[test]]
+name = "capture_optional_actually_consumes_3"
+pattern = "(?P<a>x)(?P<b>y)?(?P<c>z)"
+input = "xyz"
+matches = [[0, 3]]
+groups = [[[0, 1], [1, 2], [2, 3]]]
+
+[[test]]
+name = "capture_bounded_repeat_nullable_body_trailing_atom_1"
+pattern = "(?P<g0>.*){2,3}.?"
+input = "ab"
+matches = [[0, 2], [2, 2]]
+groups = [[[2, 2]], [[2, 2]]]
+
+[[test]]
+name = "capture_bounded_repeat_nullable_body_trailing_atom_2"
+pattern = "(?P<g0>.*){2,3}.?"
+input = "abc"
+matches = [[0, 3], [3, 3]]
+groups = [[[3, 3]], [[3, 3]]]
+
+[[test]]
+name = "capture_bounded_repeat_nullable_body_trailing_atom_3"
+pattern = "(?P<g0>.*){2,3}.?"
+input = "abcd"
+matches = [[0, 4], [4, 4]]
+groups = [[[4, 4]], [[4, 4]]]
+
+[[test]]
+name = "capture_bounded_repeat_nullable_body_no_trailing_atom"
+pattern = "(?P<g0>.*){2,3}"
+input = "abc"
+matches = [[0, 3], [3, 3]]
+groups = [[[3, 3]], [[3, 3]]]
+
+[[test]]
+name = "capture_bounded_repeat_nullable_body_disjoint_class_tail"
+pattern = "[::]+(?P<g0>.*){2,5}[^a]{0,3}"
+input = "::xyz"
+matches = [[0, 5]]
+groups = [[[5, 5]]]
+
+[[test]]
+name = "capture_mandatory_lookahead_with_trailing_optional_atom_keeps_span"
+pattern = "(?P<g0>.(?!b+)b?)."
+input = "cb-"
+matches = [[1, 3]]
+groups = [[[1, 2]]]
+
+[[test]]
+name = "capture_group_starting_with_start_anchor_participates_1"
+pattern = "(?P<g1>\\A)"
+input = "a"
+matches = [[0, 0]]
+groups = [[[0, 0]]]
+
+[[test]]
+name = "capture_group_starting_with_start_anchor_participates_2"
+pattern = "(?P<g1>\\A.)"
+input = "a"
+matches = [[0, 1]]
+groups = [[[0, 1]]]
+
+[[test]]
+name = "capture_trailing_optional_negative_lookahead_participates_1"
+pattern = "a(?P<g0>(?!x))?"
+input = "a"
+matches = [[0, 1]]
+groups = [[[1, 1]]]
+
+[[test]]
+name = "capture_trailing_optional_positive_lookahead_correctly_declines_2"
+pattern = "a(?P<g0>(?=x))?"
+input = "a"
+matches = [[0, 1]]
+groups = [[[]]]
+
+[[test]]
+name = "capture_zero_progress_optional_after_plus_atom_participates_when_input_is_exhausted"
+pattern = "[^c.]+(?P<g0>(?!.{3}.?))?"
+input = ".a"
+matches = [[1, 2]]
+groups = [[[2, 2]]]
+
+[[test]]
+name = "capture_zero_progress_optional_before_mandatory_atom_participates"
+pattern = "a(?P<g0>(?!x))?b"
+input = "ab"
+matches = [[0, 2]]
+groups = [[[1, 1]]]
+
+[[test]]
+name = "capture_exact_count_repeat_of_multi_atom_lookahead_does_not_corrupt_later_capture"
+pattern = "(?P<g1>(?!.{2}b{3})){3}a+(?P<g2>.{4})."
+input = "aaaabcde"
+matches = [[0, 8]]
+groups = [[[0, 0], [3, 7]]]
+
+[[test]]
+name = "capture_optional_lookahead_before_quantified_tail_participates"
+pattern = "(?P<g0>.(?=a))?.+"
+input = "aa"
+matches = [[0, 2]]
+groups = [[[0, 1]]]
+
+[[test]]
+name = "capture_bounded_range_repeat_of_lookahead_no_corruption"
+pattern = "(?P<g0>(?!x)){1,2}(?P<g3>a+)"
+input = "aa"
+matches = [[0, 2]]
+groups = [[[0, 0], [0, 2]]]
+
+[[test]]
+name = "capture_bounded_range_repeat_disjoint_class_priority"
+pattern = "(?P<g1>(?P<g0>[^:-]){2,3}c*)?.?b"
+input = "xyzcb"
+matches = [[0, 5]]
+groups = [[[0, 4], [2, 3]]]
+
+[[test]]
+name = "capture_wrapping_lookahead_before_star_then_mandatory_tail"
+pattern = "(?P<g0>(?!-)).*(?P<g2>.+)"
+input = "ab"
+matches = [[0, 2]]
+groups = [[[0, 0], [1, 2]]]
+
+[[test]]
+name = "capture_optional_right_after_lookahead_participates_when_it_must"
+pattern = "(?!x)(?P<g1>.)?b"
+input = "ab"
+matches = [[0, 2]]
+groups = [[[0, 1]]]
+
+[[test]]
+name = "capture_bounded_repeat_reentrant_optional_participates_when_last_matches"
+pattern = "(?:(?P<g1>.)?){2}"
+input = "ab"
+matches = [[0, 2], [2, 2]]
+groups = [[[1, 2]], [[]]]
+
+[[test]]
+name = "capture_anchor_alternation_prefix_no_corruption_1"
+pattern = "(?:\\A|x)(?P<g1>a)?b"
+input = "ab"
+matches = [[0, 2]]
+groups = [[[0, 1]]]
+
+[[test]]
+name = "capture_anchor_alternation_prefix_no_corruption_2"
+pattern = "(?:\\A|x)(?P<g1>a)?b"
+input = "b"
+matches = [[0, 1]]
+groups = [[[]]]
+
+[[test]]
+name = "capture_anchor_alternation_prefix_no_corruption_3"
+pattern = "(?:\\A|x)(?P<g1>a)?b"
+input = "xab"
+matches = [[0, 3]]
+groups = [[[1, 2]]]
+
+[[test]]
+name = "capture_fixed_offsets_dispatch_date"
+pattern = "(?P<y>\\d{4})-(?P<m>\\d{2})-(?P<d>\\d{2})"
+input = "2024-01-15"
+matches = [[0, 10]]
+groups = [[[0, 4], [5, 7], [8, 10]]]
+kind = "FixedOffsets"
+
+[[test]]
+name = "capture_fixed_offsets_dispatch_suffix_from_variable_prefix"
+pattern = ".*(?P<g1>bcd)$"
+input = "xxxxxbcd"
+matches = [[0, 8]]
+groups = [[[5, 8]]]
+kind = "FixedOffsets"
+
+[[test]]
+name = "capture_bare_groups_do_not_change_match_spans_two_atoms"
+pattern = '(a)(b)c'
+input = "abc"
+matches = [[0, 3]]
+groups = [[]]
+
+[[test]]
+name = "capture_named_group_does_not_change_match_spans"
+pattern = '(?P<x>a+)b'
+input = "aaab"
+matches = [[0, 4]]
+groups = [[[0, 3]]]
+
+[[test]]
+name = "capture_nested_bare_groups_do_not_change_match_spans"
+pattern = '((a)(b))c'
+input = "abc"
+matches = [[0, 3]]
+groups = [[]]
+
+[[test]]
+name = "capture_bare_alternation_groups_do_not_change_match_spans"
+pattern = '(a|aa)(b|bb)'
+input = "aabb"
+matches = [[0, 4]]
+groups = [[]]
+
+[[test]]
+name = "capture_named_group_inside_lookahead_rejected"
+pattern = '(?=(?P<x>a))b'
+expect_error = true
+
+[[test]]
+name = "capture_named_group_inside_negative_lookahead_rejected"
+pattern = '(?!(?P<x>a))b'
+expect_error = true
+
+[[test]]
+name = "capture_named_group_inside_lookbehind_rejected"
+pattern = '(?<=(?P<x>a))b'
+expect_error = true
+
+[[test]]
+name = "capture_named_group_inside_negative_lookbehind_rejected"
+pattern = '(?<!(?P<x>a))b'
+expect_error = true
+
+[[test]]
+name = "capture_named_group_bound_to_zero_zero_repetitions_rejected"
+pattern = '(?P<g0>a){0,0}'
+expect_error = true
+
+[[test]]
+name = "capture_named_group_bound_to_zero_repetitions_rejected"
+pattern = '(?P<g0>a){0}'
+expect_error = true
+
+[[test]]
+name = "capture_named_group_bound_to_zero_repetitions_before_sibling_rejected"
+pattern = '(?P<g0>a){0}(?P<g1>b)'
+expect_error = true
+
+[[test]]
+name = "capture_named_group_wrapping_zero_repetition_capture_rejected"
+pattern = '(?P<g0>(?P<g1>a){0})'
+expect_error = true
+
+[[test]]
+name = "capture_zero_bound_repetition_of_bare_group_supported"
+pattern = '(a){0}'
+compile_only = true
+
+[[test]]
+name = "capture_zero_zero_bound_repetition_of_bare_group_supported"
+pattern = '(a){0,0}'
+compile_only = true
+
+[[test]]
+name = "capture_zero_bound_repetition_of_non_capturing_group_supported"
+pattern = '(?:a){0}'
+compile_only = true
+
+[[test]]
+name = "capture_named_group_bound_to_zero_one_repetitions_supported"
+pattern = '(?P<g0>a){0,1}'
+compile_only = true
+
+[[test]]
+name = "capture_named_group_optional_supported"
+pattern = '(?P<g0>a)?'
+compile_only = true
+
+[[test]]
+name = "capture_named_group_star_rejected"
+pattern = '(?P<g0>a)*'
+expect_error = true
+
+[[test]]
+name = "capture_optional_wrapping_empty_lookahead_rejected"
+pattern = '(?P<g0>(?=))?'
+expect_error = true
+
+[[test]]
+name = "capture_optional_wrapping_dot_star_lookahead_rejected"
+pattern = '(?P<g0>(?=.*))?'
+expect_error = true
+
+[[test]]
+name = "capture_bounded_repeat_wrapping_dot_star_lookahead_rejected"
+pattern = '(?P<g0>(?=.*)){0,3}'
+expect_error = true
+
+[[test]]
+name = "capture_optional_wrapping_empty_body_rejected"
+pattern = '(?P<g0>)?'
+expect_error = true
+
+[[test]]
+name = "capture_optional_wrapping_optional_atom_rejected"
+pattern = '(?P<g0>a?)?'
+expect_error = true
+
+[[test]]
+name = "capture_optional_wrapping_optional_atom_after_literal_rejected"
+pattern = 'a(?P<g0>a?)?'
+expect_error = true
+
+[[test]]
+name = "capture_optional_wrapping_conditionally_nullable_lookahead_supported"
+pattern = '(?P<g0>(?=a))?'
+compile_only = true
+
+[[test]]
+name = "capture_optional_wrapping_bounded_digit_repeat_supported"
+pattern = '(?P<g0>\d{1,3})?'
+compile_only = true
+
+[[test]]
+name = "capture_optional_wrapping_bounded_dot_repeat_supported"
+pattern = '(?P<g0>.{2,3})?'
+compile_only = true
+
+[[test]]
+name = "capture_tags_eliminated_by_negative_lookbehind_star_rejected"
+pattern = '(?P<g0>(?<!x?))*'
+expect_error = true
+
+[[test]]
+name = "capture_tags_eliminated_by_negative_lookbehind_bounded_dot_empty_language_supported"
+pattern = '(?P<g0>(?<!.{0,3}))'
+input = "xyz"
+matches = []
+
+[[test]]
+name = "capture_tags_eliminated_by_negative_lookbehind_optional_dot_empty_language_supported"
+pattern = '(?P<g0>(?<!.?))'
+input = "xyz"
+matches = []
+
+[[test]]
+name = "capture_tags_eliminated_by_negative_lookbehind_dot_star_empty_language_supported"
+pattern = '(?P<g0>(?<!.*))'
+input = "xyz"
+matches = []
+
+[[test]]
+name = "capture_tags_eliminated_by_negative_lookbehind_zero_one_dot_empty_language_supported"
+pattern = '(?P<g0>(?<!.{0,1}))'
+input = "xyz"
+matches = []
+
+[[test]]
+name = "capture_tags_eliminated_by_negative_lookbehind_bounded_literal_empty_language_supported"
+pattern = '(?P<g0>(?<!x{0,3}))'
+input = "xyz"
+matches = []
+
+[[test]]
+name = "capture_tags_eliminated_by_starred_negative_lookahead_capture_rejected"
+pattern = '(?P<g0>x)?(?P<g2>(?P<g1>(?!x?))*)a'
+expect_error = true
+
+[[test]]
+name = "capture_bare_group_inside_lookahead_supported"
+pattern = '(?=(?:a))b'
+compile_only = true
+
+[[test]]
+name = "capture_parenthesized_group_inside_lookahead_supported"
+pattern = '(?=(a))b'
+compile_only = true
+
+[[test]]
+name = "capture_named_group_plus_rejected"
+pattern = '(?P<x>a)+'
+expect_error = true
+
+[[test]]
+name = "capture_named_group_alternation_star_rejected"
+pattern = '(?P<x>a|aa)*'
+expect_error = true
+
+[[test]]
+name = "capture_named_group_wrapped_in_non_capturing_star_rejected"
+pattern = '(?:(?P<x>a))*'
+expect_error = true
+
+[[test]]
+name = "capture_named_group_star_between_literals_rejected"
+pattern = 'a(?P<x>b)*c'
+expect_error = true
+
+[[test]]
+name = "capture_named_group_exact_repeat_supported"
+pattern = '(?P<x>a){2}'
+input = "aa"
+matches = [[0, 2]]
+groups = [[[1, 2]]]
+
+[[test]]
+name = "capture_outer_repeat_wrapping_bounded_range_capture_min_one"
+pattern = '(?:(?P<g0>b){1,2}){2}'
+input = "bbbb"
+matches = [[0, 4]]
+groups = [[[3, 4]]]
+
+[[test]]
+name = "capture_outer_repeat_wrapping_bounded_range_capture_min_zero"
+pattern = '(?:(?P<g0>b){0,2}){2}'
+input = "bbbb"
+matches = [[0, 4], [4, 4]]
+groups = [[[3, 4]], [[]]]
+
+[[test]]
+name = "capture_optional_group_after_mandatory_atom_exact_repeat"
+pattern = '(?:b(?P<g0>a)?){2}'
+input = "baba"
+matches = [[0, 4]]
+groups = [[[3, 4]]]
+
+[[test]]
+name = "capture_optional_group_after_mandatory_atom_two_two_repeat"
+pattern = '(?:b(?P<g0>a)?){2,2}'
+input = "bab"
+matches = [[0, 3]]
+groups = [[[1, 2]]]
+
+[[test]]
+name = "capture_optional_group_after_mandatory_atom_one_two_repeat"
+pattern = '(?:b(?P<g0>a)?){1,2}'
+input = "baba"
+matches = [[0, 4]]
+groups = [[[3, 4]]]
+
+[[test]]
+name = "capture_outer_capture_around_optional_group_in_repeated_body"
+pattern = '(?P<g1>b(?P<g0>a)?){2}'
+input = "baba"
+matches = [[0, 4]]
+groups = [[[2, 4], [3, 4]]]
+
+[[test]]
+name = "capture_repeated_optional_capture_one_repeat_then_atom"
+pattern = '(?:(?P<g0>.)?){1}a'
+input = "ca"
+groups = [[[0, 1]]]
+
+[[test]]
+name = "capture_repeated_optional_capture_two_repeats_then_atom"
+pattern = '(?:(?P<g0>.)?){2}a'
+input = "xya"
+matches = [[0, 3]]
+groups = [[[1, 2]]]
+
+[[test]]
+name = "capture_repeated_optional_capture_range_repeat_then_atom"
+pattern = '(?:(?P<g0>.)?){1,2}a'
+input = "xya"
+matches = [[0, 3]]
+groups = [[[1, 2]]]
+
+[[test]]
+name = "capture_repeated_optional_capture_three_repeats_then_atom"
+pattern = '(?:(?P<g0>.)?){3}a'
+input = "xyza"
+matches = [[0, 4]]
+groups = [[[2, 3]]]
+
+[[test]]
+name = "capture_repeated_mandatory_capture_then_atom"
+pattern = '(?:(?P<g0>.)){2}a'
+input = "xya"
+matches = [[0, 3]]
+groups = [[[1, 2]]]
+
+[[test]]
+name = "capture_repeated_optional_capture_no_trailing_atom"
+pattern = '(?:(?P<g0>.)?){2}'
+input = "xy"
+matches = [[0, 2], [2, 2]]
+groups = [[[1, 2]], [[]]]
+
+[[test]]
+name = "capture_outer_capture_around_repeated_optional_capture_then_optional_atom"
+pattern = '(?P<g1>(?P<g0>.)?){1,2}.?'
+input = "xyz"
+matches = [[0, 3], [3, 3]]
+groups = [[[1, 2], [1, 2]], [[3, 3], []]]
+
+[[test]]
+name = "capture_leftmost_longest_prefers_longer_alternative"
+pattern = '(?P<w>a|ab)(?P<rest>c|bc)'
+input = "abc"
+groups = [[[0, 2], [2, 3]]]
+
+[[test]]
+name = "capture_bounded_repeat_optional_extra_iteration_runs_after_mandatory_ones"
+pattern = '(?P<g1>.+(?:b.)?){1,2}a'
+input = "xbyza"
+matches = [[0, 5]]
+groups = [[[0, 4]]]
+
+[[test]]
+name = "capture_greedy_star_prefers_more_iterations_over_stale_early_exit_sibling"
+pattern = '(?P<g0>(?!c+))[^b]*(?P<g1>a*).+'
+input = ":-b"
+groups = [[[0, 0], [2, 2]]]
+
+[[test]]
+name = "capture_bounded_repeat_of_reentrant_optional_capture_clears_on_skipped_last_iteration"
+pattern = '(?:(?P<g1>.+)?){2}'
+input = "ab"
+matches = [[0, 2], [2, 2]]
+groups = [[[0, 2]], [[]]]
+
+[[test]]
+name = "capture_reentrant_optional_capture_before_mandatory_literal_still_clears"
+pattern = '(?:(?P<g1>.+)?){2}x'
+input = "abx"
+matches = [[0, 3]]
+groups = [[[0, 2]]]
+
+[[test]]
+name = "capture_reentrant_optional_capture_before_mandatory_atom_in_repeated_unit_clears"
+pattern = '(?:(?P<g0>.)?.){2}'
+input = "abcd"
+matches = [[0, 4]]
+groups = [[[2, 3]]]
+
+[[test]]
+name = "capture_optional_capture_before_repeated_plus_capture"
+pattern = '(?P<g0>..)?(?P<g1>.+){2}'
+input = "abcde"
+matches = [[0, 5]]
+groups = [[[0, 2], [4, 5]]]
+
+[[test]]
+name = "capture_anonymous_group_mixed_with_bare_non_capturing_groups"
+pattern = '(a)(b)(??c)'
+input = "abc"
+groups = [[[2, 3]]]
+
+[[test]]
+name = "capture_anonymous_group_inside_lookahead_rejected"
+pattern = '(?=(??a))b'
+expect_error = true
+
+[[test]]
+name = "capture_anonymous_group_inside_unbounded_repetition_rejected"
+pattern = '(??a)*'
+expect_error = true
+
+[[test]]
+name = "capture_bounded_non_word_repeat_before_non_space_capture_two"
+pattern = '(?P<g1>\W{1,2})(?P<g2>\S+)'
+input = "//!x"
+groups = [[[0, 2], [2, 4]]]
+
+[[test]]
+name = "capture_bounded_non_word_repeat_before_non_space_capture_three"
+pattern = '(?P<g1>\W{1,3})(?P<g2>\S+)'
+input = "///!x"
+groups = [[[0, 3], [3, 5]]]
+
+[[test]]
+name = "capture_anchor_alternation_prefix_gated_optional_capture_ascii"
+pattern = '(?:\A|x)(?:(?P<g1>[^x]+)::)?(?P<g2>[^x]+)'
+input = "ab"
+groups = [[[], [0, 2]]]
+ascii = true
+
+[[test]]
+name = "capture_anchor_alternation_prefix_gated_optional_capture_javascript"
+pattern = '(?:\A|x)(?:(?P<g1>[^x]+)::)?(?P<g2>[^x]+)'
+input = "ab"
+groups = [[[], [0, 2]]]
+javascript = true
+
+[[test]]
+name = "capture_anchor_alternation_prefix_gated_optional_capture_default"
+pattern = '(?:\A|x)(?:(?P<g1>[^x]+)::)?(?P<g2>[^x]+)'
+input = "ab"
+groups = [[[], [0, 2]]]
+
+[[test]]
+name = "capture_anchor_alternation_prefix_gated_optional_capture_full"
+pattern = '(?:\A|x)(?:(?P<g1>[^x]+)::)?(?P<g2>[^x]+)'
+input = "ab"
+groups = [[[], [0, 2]]]
+full = true
+
+[[test]]
+name = "capture_kind_fixed_offsets_date"
+pattern = '(?P<y>\d{4})-(?P<m>\d{2})-(?P<d>\d{2})'
+compile_only = true
+kind = "FixedOffsets"
+
+[[test]]
+name = "capture_kind_fixed_offsets_four_fixed_width_groups"
+pattern = '(?P<g1>\d{4})(?P<g2>\d{4})(?P<g3>\d{4})(?P<g4>\d{4})'
+compile_only = true
+kind = "FixedOffsets"
+
+[[test]]
+name = "capture_kind_fixed_offsets_named_mixed_with_bare_groups"
+pattern = '(a)(?P<x>b)(c)(?P<y>d)'
+compile_only = true
+kind = "FixedOffsets"
+
+[[test]]
+name = "capture_kind_fixed_offsets_named_then_bare_groups"
+pattern = '(?P<a>x)(b)(c)'
+compile_only = true
+kind = "FixedOffsets"
+
+[[test]]
+name = "capture_kind_dfa_variable_width_dotted_quad"
+pattern = '(?P<a>\d{1,3})\.(?P<b>\d{1,3})\.(?P<c>\d{1,3})\.(?P<d>\d{1,3})'
+compile_only = true
+kind = "Dfa"
+
+[[test]]
+name = "capture_kind_dfa_variable_width_email"
+pattern = '(?P<user>[\w.+-]+)@(?P<host>[\w-]+)'
+compile_only = true
+kind = "Dfa"
+
+[[test]]
+name = "capture_kind_dfa_optional_group"
+pattern = '(?P<x>a)?b'
+compile_only = true
+kind = "Dfa"
+
+[[test]]
+name = "capture_kind_dfa_alternation_of_groups"
+pattern = '(?P<x>a)|(?P<x2>bb)'
+compile_only = true
+kind = "Dfa"
+
+[[test]]
+name = "capture_kind_empty_no_capturing_groups"
+pattern = '(a)(b)(c)'
+compile_only = true
+kind = "Empty"
+
+[[test]]
+name = "outer_capture_around_negative_lookahead_loses_greedy_split"
+pattern = '(?P<g2>(?!x)(?P<g1>.*).+)'
+input = "abc"
+matches = [[0, 3]]
+groups = [[[0, 3], [0, 2]]]
+
+[[test]]
+name = "outer_capture_around_negative_lookahead_bounded_repeat_zero_width_separator"
+pattern = '(?P<g4>(?!aa)(?P<g3>.{1,3})(?P<g1>(?=.*))(?P<g2>.+...))'
+input = "abcdefgh"
+matches = [[0, 8]]
+groups = [[[0, 8], [0, 3], [3, 3], [3, 8]]]
+
+[[test]]
+name = "capture_starting_with_A_anchor_before_negative_lookahead_truncates_span"
+pattern = '(?P<g0>\A.*.)(?!x)'
+input = "ab"
+matches = [[0, 2]]
+groups = [[[0, 2]]]
+
+[[test]]
+name = "nested_capture_propagates_wrong_span"
+pattern = '(?P<g1>(?P<g0>\A.*.)(?!x))'
+input = "ab"
+matches = [[0, 2]]
+groups = [[[0, 2], [0, 2]]]
+
+[[test]]
+name = "fuzzer_repro_zero_width_g1_dragged_to_wrong_offset"
+pattern = '(?P<g0>\A[^a.]*.{2,4})(?P<g1>(?=[^a:]*(?!:*.{1,2})))'
+input = "bc::-c-.cc"
+matches = [[0, 10]]
+groups = [[[0, 10], [10, 10]]]
+
+[[test]]
+name = "lookahead_plus_A_anchor_skipped_optional_group_reports_inner_capture"
+pattern = '(?=.)\A(?:(?P<g3>:*)bb)?.'
+input = "ba"
+matches = [[0, 1]]
+groups = [[[]]]
+
+[[test]]
+name = "negative_lookahead_variant_with_enclosing_capture_stays_non_participating"
+pattern = '(?!x)\A(?P<g4>(?P<g3>:*)bb)?.'
+input = "ba"
+matches = [[0, 1]]
+groups = [[[], []]]
+
+[[test]]
+name = "fuzzer_repro_both_groups_non_participating"
+pattern = '(?P<g0>(?=-?\.?))\A(?P<g1>(?!:{1,2}a+))b?(?P<g4>(?P<g3>:*(?P<g2>-{1,1})?)b[:b]+)?(?P<g6>(?P<g5>[^a])?)'
+input = "b-.baaccbba."
+matches = [[0, 2]]
+groups = [[[0, 0], [0, 0], [], [], [], [1, 2], [1, 2]]]
+
+[[test]]
+name = "capture_around_neg_lookahead_A_truncates_later_capture_span"
+pattern = '(?P<g0>(?!\A)).?.(?P<g2>\.?(?!-))'
+input = "abcd"
+groups = [[[1, 1], [3, 3]]]
+
+[[test]]
+name = "capture_around_neg_lookahead_bounded_repeat_variant"
+pattern = '(?P<g0>(?!\A)).?.{2}(?P<g2>\.?(?!-))'
+input = "abcd"
+groups = [[[1, 1], [4, 4]]]
+
+[[test]]
+name = "fuzzer_repro_bounded_negative_lookahead_capture"
+pattern = '[^a]{2}(?P<g0>(?!\A)).?.{2,2}(?P<g2>\.?(?!-+[^b]{2,5}))'
+input = ".a.-a.ba-:."
+groups = [[[4, 4], [7, 7]]]
+
+[[test]]
+name = "fuzzer_repro_zero_width_g1_after_neg_lookahead_A"
+pattern = '(?P<g0>(?=.{0}))\A[^a]?(?P<g1>(?!b\z))[^-a]*[^-a]?'
+input = ".-.acb:."
+groups = [[[0, 0], [1, 1]]]
+
+[[test]]
+name = "mandatory_capture_two_assertion_lookahead_empty_input"
+pattern = '(?P<g0>(?=\A\z))'
+input = ""
+groups = [[[0, 0]]]
+
+[[test]]
+name = "two_different_assertions_no_z"
+pattern = '(?P<g0>(?=\A\B))'
+input = ""
+groups = [[[0, 0]]]
+
+[[test]]
+name = "three_assertions"
+pattern = '(?P<g0>(?=\A\B\z))'
+input = ""
+groups = [[[0, 0]]]
+
+[[test]]
+name = "two_different_assertions_non_empty_input"
+pattern = '(?P<g0>(?=\A\B))'
+input = ".x"
+groups = [[[0, 0]]]
+
+[[test]]
+name = "fuzzer_repro_prefixed_star"
+pattern = '[^c]*(?P<g0>(?=\A\B))'
+input = ""
+groups = [[[0, 0]]]
+
+[[test]]
+name = "second_repro_caret_optional_atom_then_A"
+pattern = '(?P<g0>^a?\A).'
+input = "b-"
+groups = [[[0, 0]]]
+
+[[test]]
+name = "second_repro_dot_optional_atom_then_A"
+pattern = '(?P<g0>^.?\A).'
+input = "b-"
+groups = [[[0, 0]]]
+
+[[test]]
+name = "second_repro_bounded_repeat_atom_then_A"
+pattern = '(?P<g0>^.{0,2}\A).'
+input = "b-"
+groups = [[[0, 0]]]
+
+[[test]]
+name = "capture_around_nullable_lookahead_then_caret_star_then_A"
+pattern = '(?P<g0>(?=a*))^a*\Aa'
+input = "ab"
+groups = [[[0, 0]]]
+
+[[test]]
+name = "capture_around_nullable_lookahead_bounded_repeat_variant"
+pattern = '(?P<g0>(?=c*))^x*\A.{2}'
+input = "c:bb"
+groups = [[[0, 0]]]
+
+[[test]]
+name = "fuzzer_repro_two_groups"
+pattern = '(?P<g0>(?=c*c?))-{0}^\.*\A(?P<g1>[^.-]{2})?'
+input = "c:bb"
+groups = [[[0, 0], [0, 2]]]
+
+[[test]]
+name = "leading_lookahead_plus_A_forced_skip_of_ambiguous_optional"
+pattern = '(?=b)b?\A(?P<g2>.?.)?'
+input = "bb"
+groups = [[[0, 2]]]
+
+[[test]]
+name = "leading_lookahead_dot_variant"
+pattern = '(?=.)b?\A(?P<g2>.?.)?'
+input = "bb"
+groups = [[[0, 2]]]
+
+[[test]]
+name = "negated_class_optional_variant"
+pattern = '(?=.)[^a]?\A(?P<g2>.?.)?'
+input = "bb"
+groups = [[[0, 2]]]
+
+[[test]]
+name = "fuzzer_repro_two_nested_groups"
+pattern = '(?P<g1>(?P<g0>(?=.*.+)))[^c-]?^\A\A(?P<g2>.?a{0,1}.)?[b]?'
+input = "bbca:a-."
+groups = [[[0, 0], [0, 0], [0, 2]]]
+
+[[test]]
+name = "nested_capture_stale_span_after_bounded_repeat_skips_optional"
+pattern = '(?:(?P<g1>(?P<g0>(?!a)).)?.){2}'
+input = "xyz"
+matches = [[0, 3]]
+groups = [[[0, 1], [0, 0]]]
+
+[[test]]
+name = "two_char_body_variant"
+pattern = '(?:(?P<g1>(?P<g0>(?!a))..)?.){2}'
+input = "wxyz"
+matches = [[0, 4]]
+groups = [[[0, 2], [0, 0]]]
+
+[[test]]
+name = "no_stale_span_when_optional_never_participates"
+pattern = '(?:(?P<g1>(?P<g0>(?!a)).)?.){2}'
+input = "xy"
+matches = [[0, 2]]
+groups = [[[], []]]
+
+[[test]]
+name = "both_participate_when_input_long_enough"
+pattern = '(?:(?P<g1>(?P<g0>(?!a)).)?.){2}'
+input = "wxyz"
+matches = [[0, 4]]
+groups = [[[2, 3], [2, 2]]]
+
+[[test]]
+name = "ordinary_nullable_inner_capture_variant"
+pattern = '(?:(?P<g2>(?P<g1>b?).)?.){2}'
+input = "bxby"
+matches = [[0, 4]]
+groups = [[[0, 2], [0, 1]]]
+
+[[test]]
+name = "star_tail_variant"
+pattern = '(?:(?P<g2>(?P<g1>b?).)?.*c){2}'
+input = "xcyc"
+matches = [[0, 4]]
+groups = [[[2, 3], [2, 2]]]
+
+[[test]]
+name = "nested_capture_of_greedy_unbounded_prefix_stays_stale_across_reentry"
+pattern = '(?:(?P<g1>a+(?P<g0>a*))?){2}'
+input = "aaa"
+matches = [[0, 3], [3, 3]]
+groups = [[[0, 3], [3, 3]], [[], []]]
+
+[[test]]
+name = "full_repro_trailing_atoms_after_reentrant_optional"
+pattern = '(?:(?P<g1>.+(?P<g0>.*))?){2}.{2}'
+input = "abcdef"
+matches = [[0, 6]]
+groups = [[[0, 4], [4, 4]]]
+
+[[test]]
+name = "reentrant_optional_without_nesting_still_updates_on_genuine_reentry"
+pattern = '(?:b(?P<g0>a)?){2}'
+input = "baba"
+matches = [[0, 4]]
+groups = [[[3, 4]]]
+
+[[test]]
+name = "bounded_repeat_alternation_branch_not_taken_is_cleared"
+pattern = '(?P<g1>(?P<g2>a)|(?P<g3>b)){2}'
+input = "ab"
+matches = [[0, 2]]
+groups = [[[1, 2], [], [1, 2]]]
+
+[[test]]
+name = "bounded_repeat_alternation_other_direction"
+pattern = '(?P<g1>(?P<g2>a)|(?P<g3>b)){2}'
+input = "ba"
+matches = [[0, 2]]
+groups = [[[1, 2], [1, 2], []]]
+
+[[test]]
+name = "bounded_repeat_three_way_alternation"
+pattern = '(?P<g1>(?P<g2>a)|(?P<g3>b)|(?P<g4>c)){3}'
+input = "abc"
+matches = [[0, 3]]
+groups = [[[2, 3], [], [], [2, 3]]]
+
+[[test]]
+name = "anchor_in_losing_alternation_branch_not_credited_with_capture"
+pattern = '(?P<g1>\Aa)|a'
+input = "ba"
+groups = [[[]]]
+
+[[test]]
+name = "both_branches_named"
+pattern = '(?P<g1>\Aa)|(?P<g2>a)'
+input = "ba"
+groups = [[[], [1, 2]]]
+
+[[test]]
+name = "anchor_true_at_first_match_false_at_second"
+pattern = '(?P<g1>\Aa)|(?P<g2>a)'
+input = "aa"
+matches = [[0, 1], [1, 2]]
+groups = [[[0, 1], [0, 1]], [[], [1, 2]]]
+
+[[test]]
+name = "zero_width_span_impossible_under_any_reading"
+pattern = '(?P<g1>\n|\A|\()\s+'
+input = "x\n  y"
+groups = [[[1, 2]]]
+
+[[test]]
+name = "nested_capture_neg_lookahead_plus_trailing_lookahead_no_infinite_recursion"
+pattern = '(?P<g1>(?P<g0>(?!a))a)?(?!b)'
+input = "a"
+matches = [[0, 0], [1, 1]]
+groups = [[[], []], [[], []]]
+
+[[test]]
+name = "bounded_repeat_final_iteration_takes_zero_width_sibling_clears_stale_parent_and_child"
+pattern = '(?:(?P<g4>(?P<g2>a)b)|(?P<g1>c?)){2}'
+input = "abc"
+matches = [[0, 3], [3, 3]]
+groups = [[[0, 2], [0, 1], [2, 3]], [[], [], [3, 3]]]
+
+[[test]]
+name = "bounded_repeat_final_iteration_takes_z_anchor_sibling_clears_stale_parent_and_child"
+pattern = '(?:(?P<g1>\z)|(?P<g4>(?P<g2>a*)b)){2}'
+input = "ab"
+matches = [[0, 2], [2, 2]]
+groups = [[[2, 2], [0, 2], [0, 1]], [[2, 2], [], []]]
+
+[[test]]
+name = "bounded_repeat_final_iteration_takes_optional_sibling_clears_stale_parent_and_child"
+pattern = '(?:(?P<g1>c?)|(?P<g4>(?P<g2>a*)b)){2}'
+input = "cab"
+matches = [[0, 3], [3, 3]]
+groups = [[[0, 1], [1, 3], [1, 2]], [[3, 3], [], []]]
+
+[[test]]
+name = "nested_optional_child_participates_across_line_break_parent_must_also_participate"
+pattern = '(?:(?P<g1>.(?P<g0>\n?))?){2}'
+input = "a\nbc"
+matches = [[0, 3], [3, 4], [4, 4]]
+groups = [[[2, 3], [3, 3]], [[3, 4], [4, 4]], [[], []]]
+
+[[test]]
+name = "nested_optional_child_no_line_break_still_correct"
+pattern = '(?:(?P<g1>.(?P<g0>\n?))?){2}'
+input = "abcd"
+matches = [[0, 2], [2, 4], [4, 4]]
+groups = [[[1, 2], [2, 2]], [[3, 4], [4, 4]], [[], []]]
+
+[[test]]
+name = "nested_optional_no_second_iteration_both_absent"
+pattern = '(?:(?P<g1>.(?P<g0>\n?))?){2}'
+input = "a"
+matches = [[0, 1], [1, 1]]
+groups = [[[0, 1], [1, 1]], [[], []]]
+
+[[test]]
+name = "nested_optional_child_negated_class_variant"
+pattern = '(?:(?P<g1>.(?P<g0>[^.]?))?){2}'
+input = "abcd"
+matches = [[0, 4], [4, 4]]
+groups = [[[2, 4], [3, 4]], [[], []]]
+
+[[test]]
+name = "nested_optional_child_plus_parent_variant"
+pattern = '(?:(?P<g1>.+(?P<g0>[^.]?))?){2}.+'
+input = "abcdef"
+matches = [[0, 6]]
+groups = [[[0, 5], [5, 5]]]
+
+[[test]]
+name = "zero_progress_positive_lookahead_optional_participates_ascii"
+pattern = '(?P<g0>(?=[^a][^a]))?.d'
+input = "cd"
+groups = [[[0, 0]]]
+ascii = true
+
+[[test]]
+name = "zero_progress_positive_lookahead_optional_participates_default"
+pattern = '(?P<g0>(?=[^a][^a]))?.d'
+input = "cd"
+groups = [[[0, 0]]]
+
+[[test]]
+name = "zero_progress_positive_lookahead_optional_participates_full"
+pattern = '(?P<g0>(?=[^a][^a]))?.d'
+input = "cd"
+groups = [[[0, 0]]]
+full = true
+
+[[test]]
+name = "zero_progress_positive_lookahead_optional_participates_javascript"
+pattern = '(?P<g0>(?=[^a][^a]))?.d'
+input = "cd"
+groups = [[[0, 0]]]
+javascript = true
+
+[[test]]
+name = "zero_progress_positive_lookahead_two_different_negated_classes_participates_default"
+pattern = '(?P<g0>(?=[^a][^b]))?.d'
+input = "cd"
+groups = [[[0, 0]]]
+
+[[test]]
+name = "zero_progress_positive_lookahead_negated_class_and_dot_participates_full"
+pattern = '(?P<g0>(?=[^a].))?.d'
+input = "cd"
+groups = [[[0, 0]]]
+full = true
+
+[[test]]
+name = "zero_progress_positive_lookahead_mandatory_group_still_participates"
+pattern = '(?P<g0>(?=[^a][^a])).d'
+input = "cd"
+groups = [[[0, 0]]]
+
+[[test]]
+name = "zero_progress_positive_lookahead_optional_in_reentrant_repeat_still_participates_from_mandatory_copy"
+pattern = '(?P<g0>(?!x)){1,2}(?P<g3>a+)'
+input = "aa"
+matches = [[0, 2]]
+groups = [[[0, 0], [0, 2]]]
+
+[[test]]
+name = "union_priority_length_tiebreak_is_unicode_mode_independent"
+pattern = "(?P<g2>(?:..|b{1,4})+)a+"
+input = "baa"
+groups = [[[0, 2]]]
+
+[[test]]
+name = "union_priority_length_tiebreak_is_unicode_mode_independent_ascii"
+pattern = "(?P<g2>(?:..|b{1,4})+)a+"
+ascii = true
+input = "baa"
+groups = [[[0, 2]]]
+
+[[test]]
+name = "union_priority_length_tiebreak_is_unicode_mode_independent_javascript"
+pattern = "(?P<g2>(?:..|b{1,4})+)a+"
+javascript = true
+input = "baa"
+groups = [[[0, 2]]]
+
+[[test]]
+name = "union_priority_length_tiebreak_is_unicode_mode_independent_full"
+pattern = "(?P<g2>(?:..|b{1,4})+)a+"
+full = true
+input = "baa"
+groups = [[[0, 2]]]
+
+[[test]]
+name = "final_state_multi_winner_tie_prefers_leftmost_group_length"
+pattern = "(?P<g1>(?P<g0>(?!c))a*)(?P<g3>.(?P<g2>.*))"
+input = "aa.b."
+groups = [[[0, 2], [0, 0], [2, 5], [3, 5]]]
+
+[[test]]
+name = "zero_progress_optional_participation_wins_over_decline_tiebreak"
+pattern = "a(?P<g0>(?!x))?b"
+input = "ab"
+groups = [[[1, 1]]]
+
+[[test]]
+name = "bare_star_before_captured_plus_keeps_stars_own_greediness"
+pattern = "(?P<g0>(?!-)).*(?P<g2>.+)"
+input = "ab"
+groups = [[[0, 0], [1, 2]]]
+
+[[test]]
+name = "union_of_dot_and_dot_tagged_optional_collapses_regardless_of_unicode_mode"
+pattern = ".(?:.(?P<g1>(?:.[c])?)|.)"
+input = "cc"
+groups = [[[2, 2]]]
+
+[[test]]
+name = "union_of_dot_and_dot_tagged_optional_collapses_regardless_of_unicode_mode_ascii"
+pattern = ".(?:.(?P<g1>(?:.[c])?)|.)"
+ascii = true
+input = "cc"
+groups = [[[2, 2]]]
+
+[[test]]
+name = "union_of_dot_and_dot_tagged_optional_collapses_regardless_of_unicode_mode_javascript"
+pattern = ".(?:.(?P<g1>(?:.[c])?)|.)"
+javascript = true
+input = "cc"
+groups = [[[2, 2]]]
+
+[[test]]
+name = "union_of_dot_and_dot_tagged_optional_collapses_regardless_of_unicode_mode_full"
+pattern = ".(?:.(?P<g1>(?:.[c])?)|.)"
+full = true
+input = "cc"
+groups = [[[2, 2]]]
+
+[[test]]
+name = "same_pattern_participates_when_the_optional_prefix_actually_consumes_input"
+pattern = "(?:.(?=[^b])|a?(?P<g1>(?!.a)))?bb"
+input = "abb"
+groups = [[[1, 1]]]
+
+[[test]]
+name = "same_pattern_participates_when_the_optional_prefix_actually_consumes_input_ascii"
+pattern = "(?:.(?=[^b])|a?(?P<g1>(?!.a)))?bb"
+ascii = true
+input = "abb"
+groups = [[[1, 1]]]
+
+[[test]]
+name = "same_pattern_participates_when_the_optional_prefix_actually_consumes_input_javascript"
+pattern = "(?:.(?=[^b])|a?(?P<g1>(?!.a)))?bb"
+javascript = true
+input = "abb"
+groups = [[[1, 1]]]
+
+[[test]]
+name = "same_pattern_participates_when_the_optional_prefix_actually_consumes_input_full"
+pattern = "(?:.(?=[^b])|a?(?P<g1>(?!.a)))?bb"
+full = true
+input = "abb"
+groups = [[[1, 1]]]
+
+[[test]]
+name = "nullable_capture_sibling_of_lookaround_branch_participates_regardless_of_unicode_mode"
+pattern = "(?:.+(?P<g1>.?)|(?P<g2>(?!.))[^a]+)?.+"
+input = "baa"
+groups = [[[2, 2], []]]
+
+[[test]]
+name = "nullable_capture_sibling_of_lookaround_branch_participates_regardless_of_unicode_mode_ascii"
+pattern = "(?:.+(?P<g1>.?)|(?P<g2>(?!.))[^a]+)?.+"
+ascii = true
+input = "baa"
+groups = [[[2, 2], []]]
+
+[[test]]
+name = "nullable_capture_sibling_of_lookaround_branch_participates_regardless_of_unicode_mode_javascript"
+pattern = "(?:.+(?P<g1>.?)|(?P<g2>(?!.))[^a]+)?.+"
+javascript = true
+input = "baa"
+groups = [[[2, 2], []]]
+
+[[test]]
+name = "nullable_capture_sibling_of_lookaround_branch_participates_regardless_of_unicode_mode_full"
+pattern = "(?:.+(?P<g1>.?)|(?P<g2>(?!.))[^a]+)?.+"
+full = true
+input = "baa"
+groups = [[[2, 2], []]]
+
+[[test]]
+name = "mandatory_alternation_union_lets_both_lookaround_branches_participate"
+pattern = "(?:(?P<g0>(?!.-))|(?P<g1>(?=.?)))(?P<g2>.{2})"
+input = "aa"
+groups = [[[0, 0], [0, 0], [0, 2]]]
+
+[[test]]
+name = "mandatory_alternation_union_lets_both_lookaround_branches_participate_ascii"
+pattern = "(?:(?P<g0>(?!.-))|(?P<g1>(?=.?)))(?P<g2>.{2})"
+ascii = true
+input = "aa"
+groups = [[[0, 0], [0, 0], [0, 2]]]
+
+[[test]]
+name = "mandatory_alternation_union_lets_both_lookaround_branches_participate_javascript"
+pattern = "(?:(?P<g0>(?!.-))|(?P<g1>(?=.?)))(?P<g2>.{2})"
+javascript = true
+input = "aa"
+groups = [[[0, 0], [0, 0], [0, 2]]]
+
+[[test]]
+name = "mandatory_alternation_union_lets_both_lookaround_branches_participate_full"
+pattern = "(?:(?P<g0>(?!.-))|(?P<g1>(?=.?)))(?P<g2>.{2})"
+full = true
+input = "aa"
+groups = [[[0, 0], [0, 0], [0, 2]]]
+
+[[test]]
+name = "uncaptured_sibling_branch_does_not_over_decline_nullable_lookahead_capture"
+pattern = "(?:(?P<g0>(?=.*))|(?=b)).-+"
+input = "a-"
+groups = [[[0, 0]]]
+
+[[test]]
+name = "uncaptured_sibling_branch_does_not_over_decline_nullable_lookahead_capture_ascii"
+pattern = "(?:(?P<g0>(?=.*))|(?=b)).-+"
+ascii = true
+input = "a-"
+groups = [[[0, 0]]]
+
+[[test]]
+name = "uncaptured_sibling_branch_does_not_over_decline_nullable_lookahead_capture_javascript"
+pattern = "(?:(?P<g0>(?=.*))|(?=b)).-+"
+javascript = true
+input = "a-"
+groups = [[[0, 0]]]
+
+[[test]]
+name = "uncaptured_sibling_branch_does_not_over_decline_nullable_lookahead_capture_full"
+pattern = "(?:(?P<g0>(?=.*))|(?=b)).-+"
+full = true
+input = "a-"
+groups = [[[0, 0]]]
+
+[[test]]
+name = "mandatory_alternation_lookahead_capture_vs_end_anchor_participates_consistently"
+pattern = ".?(?:(?P<g0>(?=-))|$)[^b]+"
+input = "c-b"
+groups = [[[1, 1]]]
+
+[[test]]
+name = "mandatory_alternation_lookahead_capture_vs_end_anchor_participates_consistently_ascii"
+pattern = ".?(?:(?P<g0>(?=-))|$)[^b]+"
+ascii = true
+input = "c-b"
+groups = [[[1, 1]]]
+
+[[test]]
+name = "mandatory_alternation_lookahead_capture_vs_end_anchor_participates_consistently_javascript"
+pattern = ".?(?:(?P<g0>(?=-))|$)[^b]+"
+javascript = true
+input = "c-b"
+groups = [[[1, 1]]]
+
+[[test]]
+name = "mandatory_alternation_lookahead_capture_vs_end_anchor_participates_consistently_full"
+pattern = ".?(?:(?P<g0>(?=-))|$)[^b]+"
+full = true
+input = "c-b"
+groups = [[[1, 1]]]
+
+[[test]]
+name = "unbounded_greedy_does_not_donate_a_byte_to_trailing_optional_group"
+pattern = ".+(?P<g0>.)?"
+input = "ac"
+groups = [[[]]]
+
+[[test]]
+name = "greedy_donation_fix_holds_across_a_mandatory_atom_and_all_unicode_modes"
+pattern = ".*.(?P<g0>.)?"
+input = "..b"
+groups = [[[]]]
+
+[[test]]
+name = "greedy_donation_fix_holds_across_a_mandatory_atom_and_all_unicode_modes_ascii"
+pattern = ".*.(?P<g0>.)?"
+ascii = true
+input = "..b"
+groups = [[[]]]
+
+[[test]]
+name = "greedy_donation_fix_holds_across_a_mandatory_atom_and_all_unicode_modes_javascript"
+pattern = ".*.(?P<g0>.)?"
+javascript = true
+input = "..b"
+groups = [[[]]]
+
+[[test]]
+name = "greedy_donation_fix_holds_across_a_mandatory_atom_and_all_unicode_modes_full"
+pattern = ".*.(?P<g0>.)?"
+full = true
+input = "..b"
+groups = [[[]]]
+
+[[test]]
+name = "mandatory_capture_with_entirely_optional_body_does_not_donate_a_byte"
+pattern = "[^-a].*(?:\\.+(?P<g1>(?P<g0>.{1,2}c+)?)|a{2}-+)?c*.*"
+input = ".ccb.-.a"
+groups = [[[], []]]
+
+[[test]]
+name = "mandatory_capture_with_entirely_optional_body_does_not_donate_a_byte_ascii"
+pattern = "[^-a].*(?:\\.+(?P<g1>(?P<g0>.{1,2}c+)?)|a{2}-+)?c*.*"
+ascii = true
+input = ".ccb.-.a"
+groups = [[[], []]]
+
+[[test]]
+name = "mandatory_capture_with_entirely_optional_body_does_not_donate_a_byte_javascript"
+pattern = "[^-a].*(?:\\.+(?P<g1>(?P<g0>.{1,2}c+)?)|a{2}-+)?c*.*"
+javascript = true
+input = ".ccb.-.a"
+groups = [[[], []]]
+
+[[test]]
+name = "mandatory_capture_with_entirely_optional_body_does_not_donate_a_byte_full"
+pattern = "[^-a].*(?:\\.+(?P<g1>(?P<g0>.{1,2}c+)?)|a{2}-+)?c*.*"
+full = true
+input = ".ccb.-.a"
+groups = [[[], []]]
+
+[[test]]
+name = "full_javascript_mode_distributed_optional_group_does_not_donate_a_byte"
+pattern = "^.+(?:(?P<g0>(?=b{1,1})b{0}.{3})?a{1,2}|b+)[^b-]+.?"
+input = ":.caba:ac:"
+groups = [[[]]]
+
+[[test]]
+name = "full_javascript_mode_distributed_optional_group_does_not_donate_a_byte_ascii"
+pattern = "^.+(?:(?P<g0>(?=b{1,1})b{0}.{3})?a{1,2}|b+)[^b-]+.?"
+ascii = true
+input = ":.caba:ac:"
+groups = [[[]]]
+
+[[test]]
+name = "full_javascript_mode_distributed_optional_group_does_not_donate_a_byte_javascript"
+pattern = "^.+(?:(?P<g0>(?=b{1,1})b{0}.{3})?a{1,2}|b+)[^b-]+.?"
+javascript = true
+input = ":.caba:ac:"
+groups = [[[]]]
+
+[[test]]
+name = "full_javascript_mode_distributed_optional_group_does_not_donate_a_byte_full"
+pattern = "^.+(?:(?P<g0>(?=b{1,1})b{0}.{3})?a{1,2}|b+)[^b-]+.?"
+full = true
+input = ":.caba:ac:"
+groups = [[[]]]
+
+[[test]]
+name = "lookahead_only_capture_participates_when_sibling_alternative_never_matches"
+pattern = "a(?:(?P<g1>x)|(?P<g2>(?=a+)))?."
+input = "aab"
+groups = [[[], [1, 1]]]
+
+[[test]]
+name = "lookahead_only_capture_participates_when_sibling_alternative_never_matches_ascii"
+pattern = "a(?:(?P<g1>x)|(?P<g2>(?=a+)))?."
+ascii = true
+input = "aab"
+groups = [[[], [1, 1]]]
+
+[[test]]
+name = "lookahead_only_capture_participates_when_sibling_alternative_never_matches_javascript"
+pattern = "a(?:(?P<g1>x)|(?P<g2>(?=a+)))?."
+javascript = true
+input = "aab"
+groups = [[[], [1, 1]]]
+
+[[test]]
+name = "lookahead_only_capture_participates_when_sibling_alternative_never_matches_full"
+pattern = "a(?:(?P<g1>x)|(?P<g2>(?=a+)))?."
+full = true
+input = "aab"
+groups = [[[], [1, 1]]]
+
+[[test]]
+name = "optional_group_between_two_unbounded_runs_of_its_own_atom_claims_the_byte"
+pattern = "a*(?P<g0>b)?b+"
+input = "bb"
+groups = [[[0, 1]]]
+
+[[test]]
+name = "optional_group_between_two_unbounded_runs_of_its_own_atom_claims_the_byte_ascii"
+pattern = "a*(?P<g0>b)?b+"
+ascii = true
+input = "bb"
+groups = [[[0, 1]]]
+
+[[test]]
+name = "optional_group_between_two_unbounded_runs_of_its_own_atom_claims_the_byte_javascript"
+pattern = "a*(?P<g0>b)?b+"
+javascript = true
+input = "bb"
+groups = [[[0, 1]]]
+
+[[test]]
+name = "optional_group_between_two_unbounded_runs_of_its_own_atom_claims_the_byte_full"
+pattern = "a*(?P<g0>b)?b+"
+full = true
+input = "bb"
+groups = [[[0, 1]]]
+
+[[test]]
+name = "ascii_mode_drops_lookahead_capture_participation_that_other_modes_correctly_report"
+pattern = "(?:(?P<g0>(?![^a]).)|[^x]{2}).{0,1}.+"
+input = "a-b"
+groups = [[[0, 1]]]
+
+[[test]]
+name = "ascii_mode_drops_lookahead_capture_participation_that_other_modes_correctly_report_ascii"
+pattern = "(?:(?P<g0>(?![^a]).)|[^x]{2}).{0,1}.+"
+ascii = true
+input = "a-b"
+groups = [[[0, 1]]]
+
+[[test]]
+name = "ascii_mode_drops_lookahead_capture_participation_that_other_modes_correctly_report_javascript"
+pattern = "(?:(?P<g0>(?![^a]).)|[^x]{2}).{0,1}.+"
+javascript = true
+input = "a-b"
+groups = [[[0, 1]]]
+
+[[test]]
+name = "ascii_mode_drops_lookahead_capture_participation_that_other_modes_correctly_report_full"
+pattern = "(?:(?P<g0>(?![^a]).)|[^x]{2}).{0,1}.+"
+full = true
+input = "a-b"
+groups = [[[0, 1]]]
+
+[[test]]
+name = "full_javascript_mode_leaks_lookahead_capture_participation_that_other_modes_correctly_decline"
+pattern = "[^c]+(?P<g2>(?P<g1>(?!.+))[^bc]*b{1,4})?$"
+input = "ab\nb"
+groups = [[[], []]]
+
+[[test]]
+name = "full_javascript_mode_leaks_lookahead_capture_participation_that_other_modes_correctly_decline_ascii"
+pattern = "[^c]+(?P<g2>(?P<g1>(?!.+))[^bc]*b{1,4})?$"
+ascii = true
+input = "ab\nb"
+groups = [[[], []]]
+
+[[test]]
+name = "full_javascript_mode_leaks_lookahead_capture_participation_that_other_modes_correctly_decline_javascript"
+pattern = "[^c]+(?P<g2>(?P<g1>(?!.+))[^bc]*b{1,4})?$"
+javascript = true
+input = "ab\nb"
+groups = [[[], []]]
+
+[[test]]
+name = "full_javascript_mode_leaks_lookahead_capture_participation_that_other_modes_correctly_decline_full"
+pattern = "[^c]+(?P<g2>(?P<g1>(?!.+))[^bc]*b{1,4})?$"
+full = true
+input = "ab\nb"
+groups = [[[], []]]
+
+[[test]]
+name = "full_javascript_mode_leaks_g4_via_union_lookahead_distribution_of_a_shared_class_tail"
+pattern = "\\A(?:b+-?|.?){1,4}[aa]{2}(?P<g0>(?!c[:]))(?:a|(?P<g3>(?P<g1>:{1,2})(?=a+)?(?P<g2>[.b]?))?(?P<g4>(?!c)))?."
+input = "babbbaabbba"
+groups = [[[7, 7], [], [], [], [7, 7]]]
+
+[[test]]
+name = "full_javascript_mode_leaks_g4_via_union_lookahead_distribution_of_a_shared_class_tail_ascii"
+pattern = "\\A(?:b+-?|.?){1,4}[aa]{2}(?P<g0>(?!c[:]))(?:a|(?P<g3>(?P<g1>:{1,2})(?=a+)?(?P<g2>[.b]?))?(?P<g4>(?!c)))?."
+ascii = true
+input = "babbbaabbba"
+groups = [[[7, 7], [], [], [], [7, 7]]]
+
+[[test]]
+name = "full_javascript_mode_leaks_g4_via_union_lookahead_distribution_of_a_shared_class_tail_javascript"
+pattern = "\\A(?:b+-?|.?){1,4}[aa]{2}(?P<g0>(?!c[:]))(?:a|(?P<g3>(?P<g1>:{1,2})(?=a+)?(?P<g2>[.b]?))?(?P<g4>(?!c)))?."
+javascript = true
+input = "babbbaabbba"
+groups = [[[7, 7], [], [], [], [7, 7]]]
+
+[[test]]
+name = "full_javascript_mode_leaks_g4_via_union_lookahead_distribution_of_a_shared_class_tail_full"
+pattern = "\\A(?:b+-?|.?){1,4}[aa]{2}(?P<g0>(?!c[:]))(?:a|(?P<g3>(?P<g1>:{1,2})(?=a+)?(?P<g2>[.b]?))?(?P<g4>(?!c)))?."
+full = true
+input = "babbbaabbba"
+groups = [[[7, 7], [], [], [], [7, 7]]]
+
+[[test]]
+name = "full_javascript_mode_leaks_g1_via_union_lookahead_distribution_of_a_shared_class_tail"
+pattern = ".+(?:(?=(?!.+)a){2}[^c]?|(?P<g1>[^:]{1,3}.{1,1}(?P<g0>a+\\.?[a.]?)?)?){1}aa(?P<g2>(?!\\z[c]{2}))-*"
+input = "cbabbb:aab"
+groups = [[[], [], [9, 9]]]
+
+[[test]]
+name = "full_javascript_mode_leaks_g1_via_union_lookahead_distribution_of_a_shared_class_tail_ascii"
+pattern = ".+(?:(?=(?!.+)a){2}[^c]?|(?P<g1>[^:]{1,3}.{1,1}(?P<g0>a+\\.?[a.]?)?)?){1}aa(?P<g2>(?!\\z[c]{2}))-*"
+ascii = true
+input = "cbabbb:aab"
+groups = [[[], [], [9, 9]]]
+
+[[test]]
+name = "full_javascript_mode_leaks_g1_via_union_lookahead_distribution_of_a_shared_class_tail_javascript"
+pattern = ".+(?:(?=(?!.+)a){2}[^c]?|(?P<g1>[^:]{1,3}.{1,1}(?P<g0>a+\\.?[a.]?)?)?){1}aa(?P<g2>(?!\\z[c]{2}))-*"
+javascript = true
+input = "cbabbb:aab"
+groups = [[[], [], [9, 9]]]
+
+[[test]]
+name = "full_javascript_mode_leaks_g1_via_union_lookahead_distribution_of_a_shared_class_tail_full"
+pattern = ".+(?:(?=(?!.+)a){2}[^c]?|(?P<g1>[^:]{1,3}.{1,1}(?P<g0>a+\\.?[a.]?)?)?){1}aa(?P<g2>(?!\\z[c]{2}))-*"
+full = true
+input = "cbabbb:aab"
+groups = [[[], [], [9, 9]]]
+
+[[test]]
+name = "nonword_boundary_before_declined_literal_star_lets_optional_capture_claim_the_byte"
+pattern = "b{3}\\B\\.*(?P<g0>.)?"
+input = "bbbc"
+groups = [[[3, 4]]]
+
+[[test]]
+name = "nonword_boundary_before_declined_literal_star_lets_optional_capture_claim_the_byte_ascii"
+pattern = "b{3}\\B\\.*(?P<g0>.)?"
+ascii = true
+input = "bbbc"
+groups = [[[3, 4]]]
+
+[[test]]
+name = "nonword_boundary_before_declined_literal_star_lets_optional_capture_claim_the_byte_javascript"
+pattern = "b{3}\\B\\.*(?P<g0>.)?"
+javascript = true
+input = "bbbc"
+groups = [[[3, 4]]]
+
+[[test]]
+name = "nonword_boundary_before_declined_literal_star_lets_optional_capture_claim_the_byte_full"
+pattern = "b{3}\\B\\.*(?P<g0>.)?"
+full = true
+input = "bbbc"
+groups = [[[3, 4]]]
+
+[[test]]
+name = "leading_declined_star_before_optional_capture_with_unbounded_body_before_trailing_unbounded_atom"
+pattern = "b*(?P<g0>.+)?.+"
+input = "acb"
+groups = [[[0, 2]]]
+
+[[test]]
+name = "leading_declined_star_before_optional_capture_with_unbounded_body_before_trailing_unbounded_atom_ascii"
+pattern = "b*(?P<g0>.+)?.+"
+ascii = true
+input = "acb"
+groups = [[[0, 2]]]
+
+[[test]]
+name = "leading_declined_star_before_optional_capture_with_unbounded_body_before_trailing_unbounded_atom_javascript"
+pattern = "b*(?P<g0>.+)?.+"
+javascript = true
+input = "acb"
+groups = [[[0, 2]]]
+
+[[test]]
+name = "leading_declined_star_before_optional_capture_with_unbounded_body_before_trailing_unbounded_atom_full"
+pattern = "b*(?P<g0>.+)?.+"
+full = true
+input = "acb"
+groups = [[[0, 2]]]
+
+[[test]]
+name = "zero_lower_bound_bounded_quantifiers_own_nested_optional_tail_still_competes"
+pattern = "a{0,2}(?P<g0>a)?a?"
+input = "a"
+groups = [[[]]]
+
+[[test]]
+name = "zero_lower_bound_bounded_quantifiers_own_nested_optional_tail_still_competes_ascii"
+pattern = "a{0,2}(?P<g0>a)?a?"
+ascii = true
+input = "a"
+groups = [[[]]]
+
+[[test]]
+name = "zero_lower_bound_bounded_quantifiers_own_nested_optional_tail_still_competes_javascript"
+pattern = "a{0,2}(?P<g0>a)?a?"
+javascript = true
+input = "a"
+groups = [[[]]]
+
+[[test]]
+name = "zero_lower_bound_bounded_quantifiers_own_nested_optional_tail_still_competes_full"
+pattern = "a{0,2}(?P<g0>a)?a?"
+full = true
+input = "a"
+groups = [[[]]]
+
+[[test]]
+name = "old_narrow_predecessor_class_does_not_donate_risk_through_a_wider_mandatory_atom"
+pattern = "a*.(?P<g0>.+b+)?\\.*[^-].+"
+input = ".abb."
+groups = [[[1, 3]]]
+
+[[test]]
+name = "old_narrow_predecessor_class_does_not_donate_risk_through_a_wider_mandatory_atom_ascii"
+pattern = "a*.(?P<g0>.+b+)?\\.*[^-].+"
+ascii = true
+input = ".abb."
+groups = [[[1, 3]]]
+
+[[test]]
+name = "old_narrow_predecessor_class_does_not_donate_risk_through_a_wider_mandatory_atom_javascript"
+pattern = "a*.(?P<g0>.+b+)?\\.*[^-].+"
+javascript = true
+input = ".abb."
+groups = [[[1, 3]]]
+
+[[test]]
+name = "old_narrow_predecessor_class_does_not_donate_risk_through_a_wider_mandatory_atom_full"
+pattern = "a*.(?P<g0>.+b+)?\\.*[^-].+"
+full = true
+input = ".abb."
+groups = [[[1, 3]]]
+
+[[test]]
+name = "lookahead_capture_in_chosen_longer_branch_still_participates_when_sibling_is_a_bare_atom"
+pattern = "b(?:.(?P<g0>(?=c))|[^.])?"
+input = "bbc"
+groups = [[[2, 2]]]
+
+[[test]]
+name = "lookahead_capture_in_chosen_longer_branch_still_participates_when_sibling_is_a_bare_atom_ascii"
+pattern = "b(?:.(?P<g0>(?=c))|[^.])?"
+ascii = true
+input = "bbc"
+groups = [[[2, 2]]]
+
+[[test]]
+name = "lookahead_capture_in_chosen_longer_branch_still_participates_when_sibling_is_a_bare_atom_javascript"
+pattern = "b(?:.(?P<g0>(?=c))|[^.])?"
+javascript = true
+input = "bbc"
+groups = [[[2, 2]]]
+
+[[test]]
+name = "lookahead_capture_in_chosen_longer_branch_still_participates_when_sibling_is_a_bare_atom_full"
+pattern = "b(?:.(?P<g0>(?=c))|[^.])?"
+full = true
+input = "bbc"
+groups = [[[2, 2]]]
+
+[[test]]
+name = "consuming_and_zero_width_union_arms_both_participate_under_variable_length_tail"
+pattern = ".{1}(?:(?P<g0>(?!b{2}))|(?P<g1>(?:c|d)+))?.+"
+input = "-c:"
+groups = [[[1, 1], [1, 2]]]
+
+[[test]]
+name = "consuming_and_zero_width_union_arms_both_participate_under_variable_length_tail_ascii"
+pattern = ".{1}(?:(?P<g0>(?!b{2}))|(?P<g1>(?:c|d)+))?.+"
+ascii = true
+input = "-c:"
+groups = [[[1, 1], [1, 2]]]
+
+[[test]]
+name = "consuming_and_zero_width_union_arms_both_participate_under_variable_length_tail_javascript"
+pattern = ".{1}(?:(?P<g0>(?!b{2}))|(?P<g1>(?:c|d)+))?.+"
+javascript = true
+input = "-c:"
+groups = [[[1, 1], [1, 2]]]
+
+[[test]]
+name = "consuming_and_zero_width_union_arms_both_participate_under_variable_length_tail_full"
+pattern = ".{1}(?:(?P<g0>(?!b{2}))|(?P<g1>(?:c|d)+))?.+"
+full = true
+input = "-c:"
+groups = [[[1, 1], [1, 2]]]
+
+[[test]]
+name = "shared_prefix_maximizes_before_alternation_branch_choice"
+pattern = ".+(?:(?P<g0>a+.+)|:.*)"
+input = "ba:c"
+groups = [[[]]]
+
+[[test]]
+name = "shared_prefix_maximizes_before_alternation_branch_choice_ascii"
+pattern = ".+(?:(?P<g0>a+.+)|:.*)"
+ascii = true
+input = "ba:c"
+groups = [[[]]]
+
+[[test]]
+name = "shared_prefix_maximizes_before_alternation_branch_choice_javascript"
+pattern = ".+(?:(?P<g0>a+.+)|:.*)"
+javascript = true
+input = "ba:c"
+groups = [[[]]]
+
+[[test]]
+name = "shared_prefix_maximizes_before_alternation_branch_choice_full"
+pattern = ".+(?:(?P<g0>a+.+)|:.*)"
+full = true
+input = "ba:c"
+groups = [[[]]]
+
+[[test]]
+name = "original_unminimized_repro_declines_g0_via_longer_shared_prefix"
+pattern = ".+(?:(?P<g0>(?:a+[^a]{2,3}.+|.{0,2}-)+)|:.*)"
+input = "cba:bbc:"
+groups = [[[]]]
+
+[[test]]
+name = "original_unminimized_repro_declines_g0_via_longer_shared_prefix_ascii"
+pattern = ".+(?:(?P<g0>(?:a+[^a]{2,3}.+|.{0,2}-)+)|:.*)"
+ascii = true
+input = "cba:bbc:"
+groups = [[[]]]
+
+[[test]]
+name = "original_unminimized_repro_declines_g0_via_longer_shared_prefix_javascript"
+pattern = ".+(?:(?P<g0>(?:a+[^a]{2,3}.+|.{0,2}-)+)|:.*)"
+javascript = true
+input = "cba:bbc:"
+groups = [[[]]]
+
+[[test]]
+name = "original_unminimized_repro_declines_g0_via_longer_shared_prefix_full"
+pattern = ".+(?:(?P<g0>(?:a+[^a]{2,3}.+|.{0,2}-)+)|:.*)"
+full = true
+input = "cba:bbc:"
+groups = [[[]]]
+
+[[test]]
+name = "two_way_tie_among_star_landing_spots_before_a_mandatory_class_atom_keeps_the_optional_capture"
+pattern = ".*[^a](?P<g0>.)?.?"
+input = "zza"
+groups = [[[2, 3]]]
+
+[[test]]
+name = "two_way_tie_among_star_landing_spots_before_a_mandatory_class_atom_keeps_the_optional_capture_ascii"
+pattern = ".*[^a](?P<g0>.)?.?"
+ascii = true
+input = "zza"
+groups = [[[2, 3]]]
+
+[[test]]
+name = "two_way_tie_among_star_landing_spots_before_a_mandatory_class_atom_keeps_the_optional_capture_javascript"
+pattern = ".*[^a](?P<g0>.)?.?"
+javascript = true
+input = "zza"
+groups = [[[2, 3]]]
+
+[[test]]
+name = "two_way_tie_among_star_landing_spots_before_a_mandatory_class_atom_keeps_the_optional_capture_full"
+pattern = ".*[^a](?P<g0>.)?.?"
+full = true
+input = "zza"
+groups = [[[2, 3]]]
+
+[[test]]
+name = "narrow_predecessor_star_still_forces_decline_when_it_can_reach_further"
+pattern = "z+[^a](?P<g0>.)?"
+input = "zzb"
+groups = [[[]]]
+
+[[test]]
+name = "narrow_predecessor_star_still_forces_decline_when_it_can_reach_further_ascii"
+pattern = "z+[^a](?P<g0>.)?"
+ascii = true
+input = "zzb"
+groups = [[[]]]
+
+[[test]]
+name = "narrow_predecessor_star_still_forces_decline_when_it_can_reach_further_javascript"
+pattern = "z+[^a](?P<g0>.)?"
+javascript = true
+input = "zzb"
+groups = [[[]]]
+
+[[test]]
+name = "narrow_predecessor_star_still_forces_decline_when_it_can_reach_further_full"
+pattern = "z+[^a](?P<g0>.)?"
+full = true
+input = "zzb"
+groups = [[[]]]
+
+[[test]]
+name = "star_forced_to_retreat_to_zero_for_a_lookahead_still_lets_trailing_optional_capture_participate"
+pattern = "a*(?P<g0>(?=aa))(?P<g1>.)?"
+input = "aa-b"
+groups = [[[0, 0], [0, 1]]]
+
+[[test]]
+name = "star_forced_to_retreat_to_zero_for_a_lookahead_still_lets_trailing_optional_capture_participate_ascii"
+pattern = "a*(?P<g0>(?=aa))(?P<g1>.)?"
+ascii = true
+input = "aa-b"
+groups = [[[0, 0], [0, 1]]]
+
+[[test]]
+name = "star_forced_to_retreat_to_zero_for_a_lookahead_still_lets_trailing_optional_capture_participate_javascript"
+pattern = "a*(?P<g0>(?=aa))(?P<g1>.)?"
+javascript = true
+input = "aa-b"
+groups = [[[0, 0], [0, 1]]]
+
+[[test]]
+name = "star_forced_to_retreat_to_zero_for_a_lookahead_still_lets_trailing_optional_capture_participate_full"
+pattern = "a*(?P<g0>(?=aa))(?P<g1>.)?"
+full = true
+input = "aa-b"
+groups = [[[0, 0], [0, 1]]]
+
+[[test]]
+name = "earlier_optional_atom_greedily_takes_its_own_span_before_a_later_optional_sibling_can_claim_more"
+pattern = "(?P<g2>(?P<g0>.{0,1})(?P<g1>-{2,3})?).+"
+input = "--:"
+groups = [[[0, 1], [0, 1], []]]
+
+[[test]]
+name = "earlier_optional_atom_greedily_takes_its_own_span_before_a_later_optional_sibling_can_claim_more_ascii"
+pattern = "(?P<g2>(?P<g0>.{0,1})(?P<g1>-{2,3})?).+"
+ascii = true
+input = "--:"
+groups = [[[0, 1], [0, 1], []]]
+
+[[test]]
+name = "earlier_optional_atom_greedily_takes_its_own_span_before_a_later_optional_sibling_can_claim_more_javascript"
+pattern = "(?P<g2>(?P<g0>.{0,1})(?P<g1>-{2,3})?).+"
+javascript = true
+input = "--:"
+groups = [[[0, 1], [0, 1], []]]
+
+[[test]]
+name = "earlier_optional_atom_greedily_takes_its_own_span_before_a_later_optional_sibling_can_claim_more_full"
+pattern = "(?P<g2>(?P<g0>.{0,1})(?P<g1>-{2,3})?).+"
+full = true
+input = "--:"
+groups = [[[0, 1], [0, 1], []]]
+
+[[test]]
+name = "original_unminimized_repro_lets_g0_take_its_own_dash_first"
+pattern = ".b{1,1}[b]?(?P<g3>(?P<g2>[:]*(?P<g0>.{0,1})(?P<g1>-{2,3})?).+)"
+input = "::ac:b--:ab:-"
+groups = [[[6, 13], [6, 7], [6, 7], []]]
+
+[[test]]
+name = "original_unminimized_repro_lets_g0_take_its_own_dash_first_ascii"
+pattern = ".b{1,1}[b]?(?P<g3>(?P<g2>[:]*(?P<g0>.{0,1})(?P<g1>-{2,3})?).+)"
+ascii = true
+input = "::ac:b--:ab:-"
+groups = [[[6, 13], [6, 7], [6, 7], []]]
+
+[[test]]
+name = "original_unminimized_repro_lets_g0_take_its_own_dash_first_javascript"
+pattern = ".b{1,1}[b]?(?P<g3>(?P<g2>[:]*(?P<g0>.{0,1})(?P<g1>-{2,3})?).+)"
+javascript = true
+input = "::ac:b--:ab:-"
+groups = [[[6, 13], [6, 7], [6, 7], []]]
+
+[[test]]
+name = "original_unminimized_repro_lets_g0_take_its_own_dash_first_full"
+pattern = ".b{1,1}[b]?(?P<g3>(?P<g2>[:]*(?P<g0>.{0,1})(?P<g1>-{2,3})?).+)"
+full = true
+input = "::ac:b--:ab:-"
+groups = [[[6, 13], [6, 7], [6, 7], []]]
+
+[[test]]
+name = "zero_width_participating_alternative_beats_a_nonparticipating_consuming_sibling"
+pattern = "(?:(?P<g0>(?<=x*))|.).+"
+input = "ab"
+groups = [[[0, 0]]]
+
+[[test]]
+name = "zero_width_participating_alternative_beats_a_nonparticipating_consuming_sibling_ascii"
+pattern = "(?:(?P<g0>(?<=x*))|.).+"
+ascii = true
+input = "ab"
+groups = [[[0, 0]]]
+
+[[test]]
+name = "zero_width_participating_alternative_beats_a_nonparticipating_consuming_sibling_javascript"
+pattern = "(?:(?P<g0>(?<=x*))|.).+"
+javascript = true
+input = "ab"
+groups = [[[0, 0]]]
+
+[[test]]
+name = "zero_width_participating_alternative_beats_a_nonparticipating_consuming_sibling_full"
+pattern = "(?:(?P<g0>(?<=x*))|.).+"
+full = true
+input = "ab"
+groups = [[[0, 0]]]
+
+[[test]]
+name = "fully_zero_width_optional_arm_after_exhausted_unbounded_predecessor_participates"
+pattern = "[^c.]+(?P<g0>(?!.{3}.?))?"
+input = ".a"
+groups = [[[2, 2]]]
+
+[[test]]
+name = "fully_zero_width_optional_arm_after_exhausted_unbounded_predecessor_participates_ascii"
+pattern = "[^c.]+(?P<g0>(?!.{3}.?))?"
+ascii = true
+input = ".a"
+groups = [[[2, 2]]]
+
+[[test]]
+name = "fully_zero_width_optional_arm_after_exhausted_unbounded_predecessor_participates_javascript"
+pattern = "[^c.]+(?P<g0>(?!.{3}.?))?"
+javascript = true
+input = ".a"
+groups = [[[2, 2]]]
+
+[[test]]
+name = "fully_zero_width_optional_arm_after_exhausted_unbounded_predecessor_participates_full"
+pattern = "[^c.]+(?P<g0>(?!.{3}.?))?"
+full = true
+input = ".a"
+groups = [[[2, 2]]]
+
+[[test]]
+name = "unbounded_predecessor_before_a_tied_mandatory_union_does_not_flip_its_own_tie_break"
+pattern = "a+(?:(?P<g0>a)|a)"
+input = "aa"
+groups = [[[1, 2]]]
+
+[[test]]
+name = "unbounded_predecessor_before_a_tied_mandatory_union_does_not_flip_its_own_tie_break_ascii"
+pattern = "a+(?:(?P<g0>a)|a)"
+ascii = true
+input = "aa"
+groups = [[[1, 2]]]
+
+[[test]]
+name = "unbounded_predecessor_before_a_tied_mandatory_union_does_not_flip_its_own_tie_break_javascript"
+pattern = "a+(?:(?P<g0>a)|a)"
+javascript = true
+input = "aa"
+groups = [[[1, 2]]]
+
+[[test]]
+name = "unbounded_predecessor_before_a_tied_mandatory_union_does_not_flip_its_own_tie_break_full"
+pattern = "a+(?:(?P<g0>a)|a)"
+full = true
+input = "aa"
+groups = [[[1, 2]]]
+
+[[test]]
+name = "unbounded_predecessor_then_fixed_count_atom_still_lets_a_tied_optional_capture_participate"
+pattern = "a+.{2}(?P<g0>a)?.+"
+input = "a:aaa"
+groups = [[[3, 4]]]
+
+[[test]]
+name = "unbounded_predecessor_then_fixed_count_atom_still_lets_a_tied_optional_capture_participate_ascii"
+pattern = "a+.{2}(?P<g0>a)?.+"
+ascii = true
+input = "a:aaa"
+groups = [[[3, 4]]]
+
+[[test]]
+name = "unbounded_predecessor_then_fixed_count_atom_still_lets_a_tied_optional_capture_participate_javascript"
+pattern = "a+.{2}(?P<g0>a)?.+"
+javascript = true
+input = "a:aaa"
+groups = [[[3, 4]]]
+
+[[test]]
+name = "unbounded_predecessor_then_fixed_count_atom_still_lets_a_tied_optional_capture_participate_full"
+pattern = "a+.{2}(?P<g0>a)?.+"
+full = true
+input = "a:aaa"
+groups = [[[3, 4]]]
+
+[[test]]
+name = "narrow_predecessor_still_declines_through_a_predecessor_declines_through_a_narrow_gap_fix"
+pattern = "z+[^a](?P<g0>.)?"
+input = "zzb"
+groups = [[[]]]
+
+[[test]]
+name = "narrow_predecessor_still_declines_through_a_predecessor_declines_through_a_narrow_gap_fix_ascii"
+pattern = "z+[^a](?P<g0>.)?"
+ascii = true
+input = "zzb"
+groups = [[[]]]
+
+[[test]]
+name = "narrow_predecessor_still_declines_through_a_predecessor_declines_through_a_narrow_gap_fix_javascript"
+pattern = "z+[^a](?P<g0>.)?"
+javascript = true
+input = "zzb"
+groups = [[[]]]
+
+[[test]]
+name = "narrow_predecessor_still_declines_through_a_predecessor_declines_through_a_narrow_gap_fix_full"
+pattern = "z+[^a](?P<g0>.)?"
+full = true
+input = "zzb"
+groups = [[[]]]
+
+[[test]]
+name = "unbounded_predecessor_before_a_tied_union_still_participates_when_the_other_arm_is_a_multi_atom_sequence"
+pattern = "a+(?:(?P<g0>.)|..*)"
+input = "ab"
+groups = [[[1, 2]]]
+
+[[test]]
+name = "unbounded_predecessor_before_a_tied_union_still_participates_when_the_other_arm_is_a_multi_atom_sequence_ascii"
+pattern = "a+(?:(?P<g0>.)|..*)"
+ascii = true
+input = "ab"
+groups = [[[1, 2]]]
+
+[[test]]
+name = "unbounded_predecessor_before_a_tied_union_still_participates_when_the_other_arm_is_a_multi_atom_sequence_javascript"
+pattern = "a+(?:(?P<g0>.)|..*)"
+javascript = true
+input = "ab"
+groups = [[[1, 2]]]
+
+[[test]]
+name = "unbounded_predecessor_before_a_tied_union_still_participates_when_the_other_arm_is_a_multi_atom_sequence_full"
+pattern = "a+(?:(?P<g0>.)|..*)"
+full = true
+input = "ab"
+groups = [[[1, 2]]]
+
+[[test]]
+name = "a_blocked_leading_star_of_a_different_class_does_not_widen_the_next_stars_predecessor_set"
+pattern = "b*\\.*(?P<g0>..)?.*"
+input = ".bc"
+groups = [[[1, 3]]]
+
+[[test]]
+name = "a_blocked_leading_star_of_a_different_class_does_not_widen_the_next_stars_predecessor_set_ascii"
+pattern = "b*\\.*(?P<g0>..)?.*"
+ascii = true
+input = ".bc"
+groups = [[[1, 3]]]
+
+[[test]]
+name = "a_blocked_leading_star_of_a_different_class_does_not_widen_the_next_stars_predecessor_set_javascript"
+pattern = "b*\\.*(?P<g0>..)?.*"
+javascript = true
+input = ".bc"
+groups = [[[1, 3]]]
+
+[[test]]
+name = "a_blocked_leading_star_of_a_different_class_does_not_widen_the_next_stars_predecessor_set_full"
+pattern = "b*\\.*(?P<g0>..)?.*"
+full = true
+input = ".bc"
+groups = [[[1, 3]]]
+
+[[test]]
+name = "a_nullable_single_byte_atom_between_a_star_and_a_tied_optional_capture_is_still_tracked_as_an_intervening_atom"
+pattern = ":*a?(?P<g0>.*c)?.*"
+input = "a:c"
+groups = [[[1, 3]]]
+
+[[test]]
+name = "a_nullable_single_byte_atom_between_a_star_and_a_tied_optional_capture_is_still_tracked_as_an_intervening_atom_ascii"
+pattern = ":*a?(?P<g0>.*c)?.*"
+ascii = true
+input = "a:c"
+groups = [[[1, 3]]]
+
+[[test]]
+name = "a_nullable_single_byte_atom_between_a_star_and_a_tied_optional_capture_is_still_tracked_as_an_intervening_atom_javascript"
+pattern = ":*a?(?P<g0>.*c)?.*"
+javascript = true
+input = "a:c"
+groups = [[[1, 3]]]
+
+[[test]]
+name = "a_nullable_single_byte_atom_between_a_star_and_a_tied_optional_capture_is_still_tracked_as_an_intervening_atom_full"
+pattern = ":*a?(?P<g0>.*c)?.*"
+full = true
+input = "a:c"
+groups = [[[1, 3]]]
+
+[[test]]
+name = "a_non_participating_capture_nested_deep_inside_a_lookaheads_tail_must_not_spuriously_flag_an_unrelated_earlier_optional_atom"
+pattern = "(?:(?P<g0>[^a]{2,3})?|.*).?(?=a)(?P<g1>x)?a.+"
+input = ".bbaa."
+groups = [[[0, 3], []]]
+
+[[test]]
+name = "a_non_participating_capture_nested_deep_inside_a_lookaheads_tail_must_not_spuriously_flag_an_unrelated_earlier_optional_atom_ascii"
+pattern = "(?:(?P<g0>[^a]{2,3})?|.*).?(?=a)(?P<g1>x)?a.+"
+ascii = true
+input = ".bbaa."
+groups = [[[0, 3], []]]
+
+[[test]]
+name = "a_non_participating_capture_nested_deep_inside_a_lookaheads_tail_must_not_spuriously_flag_an_unrelated_earlier_optional_atom_javascript"
+pattern = "(?:(?P<g0>[^a]{2,3})?|.*).?(?=a)(?P<g1>x)?a.+"
+javascript = true
+input = ".bbaa."
+groups = [[[0, 3], []]]
+
+[[test]]
+name = "a_non_participating_capture_nested_deep_inside_a_lookaheads_tail_must_not_spuriously_flag_an_unrelated_earlier_optional_atom_full"
+pattern = "(?:(?P<g0>[^a]{2,3})?|.*).?(?=a)(?P<g1>x)?a.+"
+full = true
+input = ".bbaa."
+groups = [[[0, 3], []]]
+
+[[test]]
+name = "a_leftmost_fixed_count_optional_capture_wins_a_tie_against_a_later_optional_capture_even_though_the_later_ones_span_is_longer"
+pattern = "(?P<g0>..)?.+(?P<g1>.+)?"
+input = "abcd"
+groups = [[[0, 2], []]]
+
+[[test]]
+name = "a_leftmost_fixed_count_optional_capture_wins_a_tie_against_a_later_optional_capture_even_though_the_later_ones_span_is_longer_ascii"
+pattern = "(?P<g0>..)?.+(?P<g1>.+)?"
+ascii = true
+input = "abcd"
+groups = [[[0, 2], []]]
+
+[[test]]
+name = "a_leftmost_fixed_count_optional_capture_wins_a_tie_against_a_later_optional_capture_even_though_the_later_ones_span_is_longer_javascript"
+pattern = "(?P<g0>..)?.+(?P<g1>.+)?"
+javascript = true
+input = "abcd"
+groups = [[[0, 2], []]]
+
+[[test]]
+name = "a_leftmost_fixed_count_optional_capture_wins_a_tie_against_a_later_optional_capture_even_though_the_later_ones_span_is_longer_full"
+pattern = "(?P<g0>..)?.+(?P<g1>.+)?"
+full = true
+input = "abcd"
+groups = [[[0, 2], []]]
+
+[[test]]
+name = "a_farther_unbounded_predecessor_of_a_different_class_can_still_absorb_a_byte_the_nearer_one_blocks"
+pattern = ".+[^b]+(?P<g1>.+.+)?"
+input = "a-b:"
+groups = [[[]]]
+
+[[test]]
+name = "a_farther_unbounded_predecessor_of_a_different_class_can_still_absorb_a_byte_the_nearer_one_blocks_ascii"
+pattern = ".+[^b]+(?P<g1>.+.+)?"
+ascii = true
+input = "a-b:"
+groups = [[[]]]
+
+[[test]]
+name = "a_farther_unbounded_predecessor_of_a_different_class_can_still_absorb_a_byte_the_nearer_one_blocks_javascript"
+pattern = ".+[^b]+(?P<g1>.+.+)?"
+javascript = true
+input = "a-b:"
+groups = [[[]]]
+
+[[test]]
+name = "a_farther_unbounded_predecessor_of_a_different_class_can_still_absorb_a_byte_the_nearer_one_blocks_full"
+pattern = ".+[^b]+(?P<g1>.+.+)?"
+full = true
+input = "a-b:"
+groups = [[[]]]
+
+[[test]]
+name = "greedy_plus_own_eaten_amount_tie_declines_trailing_optional_capture"
+pattern = ".+(?=.).(?P<g0>.)?"
+input = "aaa"
+groups = [[[]]]
+
+[[test]]
+name = "greedy_plus_own_eaten_amount_tie_declines_trailing_optional_capture_ascii"
+pattern = ".+(?=.).(?P<g0>.)?"
+ascii = true
+input = "aaa"
+groups = [[[]]]
+
+[[test]]
+name = "greedy_plus_own_eaten_amount_tie_declines_trailing_optional_capture_javascript"
+pattern = ".+(?=.).(?P<g0>.)?"
+javascript = true
+input = "aaa"
+groups = [[[]]]
+
+[[test]]
+name = "greedy_plus_own_eaten_amount_tie_declines_trailing_optional_capture_full"
+pattern = ".+(?=.).(?P<g0>.)?"
+full = true
+input = "aaa"
+groups = [[[]]]
+
+[[test]]
+name = "optional_group_capture_followed_by_star_participates"
+pattern = ".+(?:(?P<g1>(?!.))b*)?"
+input = "aa"
+groups = [[[2, 2]]]
+
+[[test]]
+name = "optional_group_capture_followed_by_star_participates_ascii"
+pattern = ".+(?:(?P<g1>(?!.))b*)?"
+ascii = true
+input = "aa"
+groups = [[[2, 2]]]
+
+[[test]]
+name = "optional_group_capture_followed_by_star_participates_javascript"
+pattern = ".+(?:(?P<g1>(?!.))b*)?"
+javascript = true
+input = "aa"
+groups = [[[2, 2]]]
+
+[[test]]
+name = "optional_group_capture_followed_by_star_participates_full"
+pattern = ".+(?:(?P<g1>(?!.))b*)?"
+full = true
+input = "aa"
+groups = [[[2, 2]]]
+
+[[test]]
+name = "mandatory_alternation_end_lookahead_capture_participates"
+pattern = ".+(?:.|(?P<g0>(?!.)))"
+input = "aa"
+groups = [[[2, 2]]]
+
+[[test]]
+name = "mandatory_alternation_end_lookahead_capture_participates_ascii"
+pattern = ".+(?:.|(?P<g0>(?!.)))"
+ascii = true
+input = "aa"
+groups = [[[2, 2]]]
+
+[[test]]
+name = "mandatory_alternation_end_lookahead_capture_participates_javascript"
+pattern = ".+(?:.|(?P<g0>(?!.)))"
+javascript = true
+input = "aa"
+groups = [[[2, 2]]]
+
+[[test]]
+name = "mandatory_alternation_end_lookahead_capture_participates_full"
+pattern = ".+(?:.|(?P<g0>(?!.)))"
+full = true
+input = "aa"
+groups = [[[2, 2]]]
+
+[[test]]
+name = "real_capture_predecessor_declining_check_falls_back_to_generic_risk"
+pattern = "(?P<g0>.)?(?P<g1>(?!bc)b(?=.))?.?(?P<g2>.)"
+input = "aba"
+groups = [[[0, 1], [1, 2], [2, 3]]]
+
+[[test]]
+name = "real_capture_predecessor_declining_check_falls_back_to_generic_risk_ascii"
+pattern = "(?P<g0>.)?(?P<g1>(?!bc)b(?=.))?.?(?P<g2>.)"
+ascii = true
+input = "aba"
+groups = [[[0, 1], [1, 2], [2, 3]]]
+
+[[test]]
+name = "real_capture_predecessor_declining_check_falls_back_to_generic_risk_javascript"
+pattern = "(?P<g0>.)?(?P<g1>(?!bc)b(?=.))?.?(?P<g2>.)"
+javascript = true
+input = "aba"
+groups = [[[0, 1], [1, 2], [2, 3]]]
+
+[[test]]
+name = "real_capture_predecessor_declining_check_falls_back_to_generic_risk_full"
+pattern = "(?P<g0>.)?(?P<g1>(?!bc)b(?=.))?.?(?P<g2>.)"
+full = true
+input = "aba"
+groups = [[[0, 1], [1, 2], [2, 3]]]
+
+[[test]]
+name = "disjoint_class_after_always_declining_optional_reanchors"
+pattern = ".*a?[^ba](?P<g0>.{2})?.{0,2}"
+input = "ca."
+groups = [[[]]]
+
+[[test]]
+name = "disjoint_class_after_always_declining_optional_reanchors_ascii"
+pattern = ".*a?[^ba](?P<g0>.{2})?.{0,2}"
+ascii = true
+input = "ca."
+groups = [[[]]]
+
+[[test]]
+name = "disjoint_class_after_always_declining_optional_reanchors_javascript"
+pattern = ".*a?[^ba](?P<g0>.{2})?.{0,2}"
+javascript = true
+input = "ca."
+groups = [[[]]]
+
+[[test]]
+name = "disjoint_class_after_always_declining_optional_reanchors_full"
+pattern = ".*a?[^ba](?P<g0>.{2})?.{0,2}"
+full = true
+input = "ca."
+groups = [[[]]]
+
+[[test]]
+name = "own_repeat_range_tail_does_not_shadow_a_live_predecessor"
+pattern = "a?.{1,2}(?P<g0>.{2,3})?.*"
+input = ".ab."
+groups = [[[2, 4]]]
+
+[[test]]
+name = "own_repeat_range_tail_does_not_shadow_a_live_predecessor_ascii"
+pattern = "a?.{1,2}(?P<g0>.{2,3})?.*"
+ascii = true
+input = ".ab."
+groups = [[[2, 4]]]
+
+[[test]]
+name = "own_repeat_range_tail_does_not_shadow_a_live_predecessor_javascript"
+pattern = "a?.{1,2}(?P<g0>.{2,3})?.*"
+javascript = true
+input = ".ab."
+groups = [[[2, 4]]]
+
+[[test]]
+name = "own_repeat_range_tail_does_not_shadow_a_live_predecessor_full"
+pattern = "a?.{1,2}(?P<g0>.{2,3})?.*"
+full = true
+input = ".ab."
+groups = [[[2, 4]]]
+
+[[test]]
+name = "disjoint_mandatory_atom_after_transparent_optional_promotes_fallback_predecessor"
+pattern = ".*x?a(?P<g0>.+)?"
+input = "aa"
+groups = [[[]]]
+
+[[test]]
+name = "disjoint_mandatory_atom_after_transparent_optional_promotes_fallback_predecessor_ascii"
+pattern = ".*x?a(?P<g0>.+)?"
+ascii = true
+input = "aa"
+groups = [[[]]]
+
+[[test]]
+name = "disjoint_mandatory_atom_after_transparent_optional_promotes_fallback_predecessor_javascript"
+pattern = ".*x?a(?P<g0>.+)?"
+javascript = true
+input = "aa"
+groups = [[[]]]
+
+[[test]]
+name = "disjoint_mandatory_atom_after_transparent_optional_promotes_fallback_predecessor_full"
+pattern = ".*x?a(?P<g0>.+)?"
+full = true
+input = "aa"
+groups = [[[]]]
+
+[[test]]
+name = "bounded_range_tail_merging_into_a_same_class_predecessor_keeps_its_own_intervening_atom"
+pattern = ".?.{1,2}(?P<g0>.+)?.*"
+input = "aaaa"
+groups = [[[3, 4]]]
+
+[[test]]
+name = "bounded_range_tail_merging_into_a_same_class_predecessor_keeps_its_own_intervening_atom_ascii"
+pattern = ".?.{1,2}(?P<g0>.+)?.*"
+ascii = true
+input = "aaaa"
+groups = [[[3, 4]]]
+
+[[test]]
+name = "bounded_range_tail_merging_into_a_same_class_predecessor_keeps_its_own_intervening_atom_javascript"
+pattern = ".?.{1,2}(?P<g0>.+)?.*"
+javascript = true
+input = "aaaa"
+groups = [[[3, 4]]]
+
+[[test]]
+name = "bounded_range_tail_merging_into_a_same_class_predecessor_keeps_its_own_intervening_atom_full"
+pattern = ".?.{1,2}(?P<g0>.+)?.*"
+full = true
+input = "aaaa"
+groups = [[[3, 4]]]
+
+[[test]]
+name = "a_lookaround_immediately_followed_by_a_capturing_group_does_not_steal_a_byte_from_an_earlier_optional_capture"
+pattern = ".?(?P<g2>.+)?(?P<g3>(?!bb)).*.?"
+input = "aaa"
+groups = [[[1, 3], [3, 3]]]
+
+[[test]]
+name = "a_lookaround_immediately_followed_by_a_capturing_group_does_not_steal_a_byte_from_an_earlier_optional_capture_ascii"
+pattern = ".?(?P<g2>.+)?(?P<g3>(?!bb)).*.?"
+ascii = true
+input = "aaa"
+groups = [[[1, 3], [3, 3]]]
+
+[[test]]
+name = "a_lookaround_immediately_followed_by_a_capturing_group_does_not_steal_a_byte_from_an_earlier_optional_capture_javascript"
+pattern = ".?(?P<g2>.+)?(?P<g3>(?!bb)).*.?"
+javascript = true
+input = "aaa"
+groups = [[[1, 3], [3, 3]]]
+
+[[test]]
+name = "a_lookaround_immediately_followed_by_a_capturing_group_does_not_steal_a_byte_from_an_earlier_optional_capture_full"
+pattern = ".?(?P<g2>.+)?(?P<g3>(?!bb)).*.?"
+full = true
+input = "aaa"
+groups = [[[1, 3], [3, 3]]]
+
+[[test]]
+name = "optional_capture_after_lookahead_arm_of_enclosing_optional_union_does_not_participate"
+pattern = "(?P<g3>(?:.+c|(?=b))?(?P<g2>.)?.*)..a"
+input = ".bc.ca"
+groups = [[[0, 3], []]]
+
+[[test]]
+name = "optional_capture_after_lookahead_arm_of_enclosing_optional_union_does_not_participate_ascii"
+pattern = "(?P<g3>(?:.+c|(?=b))?(?P<g2>.)?.*)..a"
+ascii = true
+input = ".bc.ca"
+groups = [[[0, 3], []]]
+
+[[test]]
+name = "optional_capture_after_lookahead_arm_of_enclosing_optional_union_does_not_participate_javascript"
+pattern = "(?P<g3>(?:.+c|(?=b))?(?P<g2>.)?.*)..a"
+javascript = true
+input = ".bc.ca"
+groups = [[[0, 3], []]]
+
+[[test]]
+name = "optional_capture_after_lookahead_arm_of_enclosing_optional_union_does_not_participate_full"
+pattern = "(?P<g3>(?:.+c|(?=b))?(?P<g2>.)?.*)..a"
+full = true
+input = ".bc.ca"
+groups = [[[0, 3], []]]
+
+[[test]]
+name = "optional_capture_whose_body_is_a_bare_lookahead_declines_when_sandwiched_between_two_optional_dot_atoms"
+pattern = ".?(?P<g0>(?=b))?.?:"
+input = "b:"
+groups = [[[]]]
+
+[[test]]
+name = "optional_capture_whose_body_is_a_bare_lookahead_declines_when_sandwiched_between_two_optional_dot_atoms_ascii"
+pattern = ".?(?P<g0>(?=b))?.?:"
+ascii = true
+input = "b:"
+groups = [[[]]]
+
+[[test]]
+name = "optional_capture_whose_body_is_a_bare_lookahead_declines_when_sandwiched_between_two_optional_dot_atoms_javascript"
+pattern = ".?(?P<g0>(?=b))?.?:"
+javascript = true
+input = "b:"
+groups = [[[]]]
+
+[[test]]
+name = "optional_capture_whose_body_is_a_bare_lookahead_declines_when_sandwiched_between_two_optional_dot_atoms_full"
+pattern = ".?(?P<g0>(?=b))?.?:"
+full = true
+input = "b:"
+groups = [[[]]]
+
+[[test]]
+name = "optional_wrapper_around_a_literal_plus_a_lookahead_capture_declines"
+pattern = ".+(?:[:](?P<g0>(?=c?)))?"
+input = "a:"
+groups = [[[]]]
+
+[[test]]
+name = "optional_wrapper_around_a_literal_plus_a_lookahead_capture_declines_ascii"
+pattern = ".+(?:[:](?P<g0>(?=c?)))?"
+ascii = true
+input = "a:"
+groups = [[[]]]
+
+[[test]]
+name = "optional_wrapper_around_a_literal_plus_a_lookahead_capture_declines_javascript"
+pattern = ".+(?:[:](?P<g0>(?=c?)))?"
+javascript = true
+input = "a:"
+groups = [[[]]]
+
+[[test]]
+name = "optional_wrapper_around_a_literal_plus_a_lookahead_capture_declines_full"
+pattern = ".+(?:[:](?P<g0>(?=c?)))?"
+full = true
+input = "a:"
+groups = [[[]]]
+
+[[test]]
+name = "optional_group_with_a_nullable_prefix_capture_and_a_sibling_literal_capture_declines_entirely"
+pattern = "(?P<g3>(?P<g1>.?.+)(?P<g2>a)\\.)?.*"
+input = "aa."
+groups = [[[0, 3], [0, 1], [1, 2]]]
+
+[[test]]
+name = "optional_group_with_a_nullable_prefix_capture_and_a_sibling_literal_capture_declines_entirely_ascii"
+pattern = "(?P<g3>(?P<g1>.?.+)(?P<g2>a)\\.)?.*"
+ascii = true
+input = "aa."
+groups = [[[0, 3], [0, 1], [1, 2]]]
+
+[[test]]
+name = "optional_group_with_a_nullable_prefix_capture_and_a_sibling_literal_capture_declines_entirely_javascript"
+pattern = "(?P<g3>(?P<g1>.?.+)(?P<g2>a)\\.)?.*"
+javascript = true
+input = "aa."
+groups = [[[0, 3], [0, 1], [1, 2]]]
+
+[[test]]
+name = "optional_group_with_a_nullable_prefix_capture_and_a_sibling_literal_capture_declines_entirely_full"
+pattern = "(?P<g3>(?P<g1>.?.+)(?P<g2>a)\\.)?.*"
+full = true
+input = "aa."
+groups = [[[0, 3], [0, 1], [1, 2]]]
+
+[[test]]
+name = "mandatory_capture_with_two_adjacent_optional_siblings_loses_extent_to_a_trailing_literal_plus_class_star"
+pattern = "(?P<g1>-b?(?P<g0>..)?)b[^c]*"
+input = "-bab"
+groups = [[[0, 3], [1, 3]]]
+
+[[test]]
+name = "mandatory_capture_with_two_adjacent_optional_siblings_loses_extent_to_a_trailing_literal_plus_class_star_ascii"
+pattern = "(?P<g1>-b?(?P<g0>..)?)b[^c]*"
+ascii = true
+input = "-bab"
+groups = [[[0, 3], [1, 3]]]
+
+[[test]]
+name = "mandatory_capture_with_two_adjacent_optional_siblings_loses_extent_to_a_trailing_literal_plus_class_star_javascript"
+pattern = "(?P<g1>-b?(?P<g0>..)?)b[^c]*"
+javascript = true
+input = "-bab"
+groups = [[[0, 3], [1, 3]]]
+
+[[test]]
+name = "mandatory_capture_with_two_adjacent_optional_siblings_loses_extent_to_a_trailing_literal_plus_class_star_full"
+pattern = "(?P<g1>-b?(?P<g0>..)?)b[^c]*"
+full = true
+input = "-bab"
+groups = [[[0, 3], [1, 3]]]
+
+[[test]]
+name = "bounded_range_quantifier_greedily_consumes_leaving_trailing_optional_capture_arm_g0_last"
+pattern = ".{1,4}(?:(?P<g0>.*)|a+.*)"
+input = "aaaa"
+groups = [[[4, 4]]]
+
+[[test]]
+name = "bounded_range_quantifier_greedily_consumes_leaving_trailing_optional_capture_arm_g0_last_ascii"
+pattern = ".{1,4}(?:(?P<g0>.*)|a+.*)"
+ascii = true
+input = "aaaa"
+groups = [[[4, 4]]]
+
+[[test]]
+name = "bounded_range_quantifier_greedily_consumes_leaving_trailing_optional_capture_arm_g0_last_javascript"
+pattern = ".{1,4}(?:(?P<g0>.*)|a+.*)"
+javascript = true
+input = "aaaa"
+groups = [[[4, 4]]]
+
+[[test]]
+name = "bounded_range_quantifier_greedily_consumes_leaving_trailing_optional_capture_arm_g0_last_full"
+pattern = ".{1,4}(?:(?P<g0>.*)|a+.*)"
+full = true
+input = "aaaa"
+groups = [[[4, 4]]]
+
+[[test]]
+name = "bounded_range_quantifier_greedily_consumes_leaving_trailing_optional_capture_arm_g0_first"
+pattern = ".{1,4}(?:a+.*|(?P<g0>.*))"
+input = "aaaa"
+groups = [[[4, 4]]]
+
+[[test]]
+name = "bounded_range_quantifier_greedily_consumes_leaving_trailing_optional_capture_arm_g0_first_ascii"
+pattern = ".{1,4}(?:a+.*|(?P<g0>.*))"
+ascii = true
+input = "aaaa"
+groups = [[[4, 4]]]
+
+[[test]]
+name = "bounded_range_quantifier_greedily_consumes_leaving_trailing_optional_capture_arm_g0_first_javascript"
+pattern = ".{1,4}(?:a+.*|(?P<g0>.*))"
+javascript = true
+input = "aaaa"
+groups = [[[4, 4]]]
+
+[[test]]
+name = "bounded_range_quantifier_greedily_consumes_leaving_trailing_optional_capture_arm_g0_first_full"
+pattern = ".{1,4}(?:a+.*|(?P<g0>.*))"
+full = true
+input = "aaaa"
+groups = [[[4, 4]]]
+
+[[test]]
+name = "a_leading_optional_capture_immediately_before_an_overlapping_class_star_participates"
+pattern = ".(?P<g1>(?P<g0>a)?[a:]*(?:[^b]{2,3}b?|(?!c).)).+"
+input = "ba.ba"
+groups = [[[1, 3], [1, 2]]]
+
+[[test]]
+name = "a_leading_optional_capture_immediately_before_an_overlapping_class_star_participates_ascii"
+pattern = ".(?P<g1>(?P<g0>a)?[a:]*(?:[^b]{2,3}b?|(?!c).)).+"
+ascii = true
+input = "ba.ba"
+groups = [[[1, 3], [1, 2]]]
+
+[[test]]
+name = "a_leading_optional_capture_immediately_before_an_overlapping_class_star_participates_javascript"
+pattern = ".(?P<g1>(?P<g0>a)?[a:]*(?:[^b]{2,3}b?|(?!c).)).+"
+javascript = true
+input = "ba.ba"
+groups = [[[1, 3], [1, 2]]]
+
+[[test]]
+name = "a_leading_optional_capture_immediately_before_an_overlapping_class_star_participates_full"
+pattern = ".(?P<g1>(?P<g0>a)?[a:]*(?:[^b]{2,3}b?|(?!c).)).+"
+full = true
+input = "ba.ba"
+groups = [[[1, 3], [1, 2]]]
+
+[[test]]
+name = "mandatory_plus_backtracks_for_unmotivated_optional_after_neg_lookahead"
+pattern = "b+(?!bc)(?P<g0>b)?"
+input = "bb"
+groups = [[[]]]
+
+[[test]]
+name = "mandatory_plus_backtracks_for_unmotivated_optional_after_neg_lookahead_ascii"
+pattern = "b+(?!bc)(?P<g0>b)?"
+ascii = true
+input = "bb"
+groups = [[[]]]
+
+[[test]]
+name = "mandatory_plus_backtracks_for_unmotivated_optional_after_neg_lookahead_javascript"
+pattern = "b+(?!bc)(?P<g0>b)?"
+javascript = true
+input = "bb"
+groups = [[[]]]
+
+[[test]]
+name = "mandatory_plus_backtracks_for_unmotivated_optional_after_neg_lookahead_full"
+pattern = "b+(?!bc)(?P<g0>b)?"
+full = true
+input = "bb"
+groups = [[[]]]
+
+[[test]]
+name = "mandatory_plus_backtracks_through_nullable_class_star_for_unmotivated_optional_group"
+pattern = ".+[a]*(?P<g1>(?P<g0>.*).+)?"
+input = "ba."
+groups = [[[], []]]
+
+[[test]]
+name = "mandatory_plus_backtracks_through_nullable_class_star_for_unmotivated_optional_group_ascii"
+pattern = ".+[a]*(?P<g1>(?P<g0>.*).+)?"
+ascii = true
+input = "ba."
+groups = [[[], []]]
+
+[[test]]
+name = "mandatory_plus_backtracks_through_nullable_class_star_for_unmotivated_optional_group_javascript"
+pattern = ".+[a]*(?P<g1>(?P<g0>.*).+)?"
+javascript = true
+input = "ba."
+groups = [[[], []]]
+
+[[test]]
+name = "mandatory_plus_backtracks_through_nullable_class_star_for_unmotivated_optional_group_full"
+pattern = ".+[a]*(?P<g1>(?P<g0>.*).+)?"
+full = true
+input = "ba."
+groups = [[[], []]]
+
+[[test]]
+name = "mandatory_plus_backtracks_for_optional_noncapturing_group_with_lookahead_capture"
+pattern = ".+(?:(?P<g3>(?=b))b)?"
+input = "ab"
+groups = [[[]]]
+
+[[test]]
+name = "mandatory_plus_backtracks_for_optional_noncapturing_group_with_lookahead_capture_ascii"
+pattern = ".+(?:(?P<g3>(?=b))b)?"
+ascii = true
+input = "ab"
+groups = [[[]]]
+
+[[test]]
+name = "mandatory_plus_backtracks_for_optional_noncapturing_group_with_lookahead_capture_javascript"
+pattern = ".+(?:(?P<g3>(?=b))b)?"
+javascript = true
+input = "ab"
+groups = [[[]]]
+
+[[test]]
+name = "mandatory_plus_backtracks_for_optional_noncapturing_group_with_lookahead_capture_full"
+pattern = ".+(?:(?P<g3>(?=b))b)?"
+full = true
+input = "ab"
+groups = [[[]]]
+
+[[test]]
+name = "nullable_body_capture_in_losing_union_arm_participates_as_zero_width"
+pattern = "(?P<g0>(?=.{2,2}))(?:a+|(?P<g1>[c]?))"
+input = "a:"
+groups = [[[0, 0], [0, 0]]]
+
+[[test]]
+name = "nullable_body_capture_in_losing_union_arm_participates_as_zero_width_ascii"
+pattern = "(?P<g0>(?=.{2,2}))(?:a+|(?P<g1>[c]?))"
+ascii = true
+input = "a:"
+groups = [[[0, 0], [0, 0]]]
+
+[[test]]
+name = "nullable_body_capture_in_losing_union_arm_participates_as_zero_width_javascript"
+pattern = "(?P<g0>(?=.{2,2}))(?:a+|(?P<g1>[c]?))"
+javascript = true
+input = "a:"
+groups = [[[0, 0], [0, 0]]]
+
+[[test]]
+name = "nullable_body_capture_in_losing_union_arm_participates_as_zero_width_full"
+pattern = "(?P<g0>(?=.{2,2}))(?:a+|(?P<g1>[c]?))"
+full = true
+input = "a:"
+groups = [[[0, 0], [0, 0]]]
+
+[[test]]
+name = "reentered_optional_parent_clears_stale_child_span"
+pattern = '(?:(?P<g2>(?P<g0>b+)?)|bb){2}c'
+input = "bbc"
+matches = [[0, 3]]
+groups = [[[2, 2], []]]
+
+[[test]]
+name = "stale_child_clears_through_intermediate_union_nesting"
+pattern = '(?:(?P<gp>(?:(?P<g1>x)|y)z)|bb){2}c'
+input = "xzyzc"
+matches = [[0, 5]]
+groups = [[[2, 4], []]]
+
+[[test]]
+name = "strictly_shorter_union_arm_does_not_participate_star_vs_one"
+pattern = '(?P<g1>a*)|(?P<g2>a)'
+input = "aaa"
+groups = [[[0, 3], []]]
+
+[[test]]
+name = "strictly_shorter_union_arm_does_not_participate_dotstar_vs_dot"
+pattern = '(?P<g1>.*)|(?P<g2>.)'
+input = "xxxx"
+groups = [[[0, 4], []]]
+
+[[test]]
+name = "tied_non_dominated_shorter_arms_both_participate_xy"
+pattern = '(?P<g1>xy)|(?P<g2>xy)|(?P<g3>xyz)'
+input = "xyz"
+groups = [[[0, 2], [0, 2], [0, 3]]]
+
+[[test]]
+name = "tied_non_dominated_shorter_arms_both_participate_ccc"
+pattern = '(?P<g1>a|c)|(?P<g2>b|c)|(?P<g3>ccc)'
+input = "ccc"
+groups = [[[0, 1], [0, 1], [0, 3]]]
+
+[[test]]
+name = "union_arm_capture_loses_participation_in_bounded_repeat"
+pattern = '(?:(?P<g0>(?![^.b]{2})).{1}|[^.]){1,4}.+'
+ascii = true
+input = "abba.a"
+matches = [[0, 6]]
+groups = [[[3, 3]]]
+
+[[test]]
+name = "optional_capture_with_backtracking_optional_prefix_internal_error"
+pattern = '(?P<g1>(?:(?:ay)?(?=.))?)'
+input = "a"
+matches = [[0, 0], [1, 1]]
+groups = [[[0, 0]], [[1, 1]]]
+
+[[test]]
+name = "optional_capture_with_backtracking_optional_prefix_internal_error_ascii"
+pattern = '(?P<g1>(?:(?:ay)?(?=.))?)'
+ascii = true
+input = "a"
+matches = [[0, 0], [1, 1]]
+groups = [[[0, 0]], [[1, 1]]]
+
+[[test]]
+name = "optional_capture_with_backtracking_optional_prefix_internal_error_javascript"
+pattern = '(?P<g1>(?:(?:ay)?(?=.))?)'
+javascript = true
+input = "a"
+matches = [[0, 0], [1, 1]]
+groups = [[[0, 0]], [[1, 1]]]
+
+[[test]]
+name = "optional_capture_with_backtracking_optional_prefix_internal_error_full"
+pattern = '(?P<g1>(?:(?:ay)?(?=.))?)'
+full = true
+input = "a"
+matches = [[0, 0], [1, 1]]
+groups = [[[0, 0]], [[1, 1]]]
+
+[[test]]
+name = "exact_count_repeat_of_optional_capture_loses_participation"
+pattern = "a(?:(?P<g1>.?)){2}"
+input = "a"
+matches = [[0, 1]]
+groups = [[[1, 1]]]

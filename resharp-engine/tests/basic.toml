@@ -477,3 +477,9 @@ pattern = "aaa"
 input = "aaaa"
 matches = [[0, 3]]
 
+
+[[test]]
+name = "word_boundaries_loop"
+pattern = '\(\?[:=!]|\)|\{\d+\b,?\d*\}|[+*]\?|[()$^+*?.]'
+input = "$"
+matches = [[0, 1]]

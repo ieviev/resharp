@@ -175,3 +175,45 @@ name = "alt_foo_bar"
 pattern = 'foo|bar'
 input = "xfooybar"
 matches = [[1, 4], [5, 8]]
+
+[[test]]
+name = "literal_alt_is_match"
+pattern = 'cat|dog|bird'
+input = "I have a dog"
+matches = [[9, 12]]
+
+[[test]]
+name = "literal_alt_no_match"
+pattern = 'cat|dog|bird'
+input = "I have a fish"
+matches = []
+
+[[test]]
+name = "literal_alt_suffix_is_match"
+pattern = '(cat|dog)\d+'
+input = "cat123"
+matches = [[0, 6]]
+
+[[test]]
+name = "literal_alt_suffix_no_match"
+pattern = '(cat|dog)\d+'
+input = "cat!"
+matches = []
+
+[[test]]
+name = "dictionary_context_small"
+pattern = '.{0,10}(abc|def|ghi|jkl)'
+input = "def;jkl;ghi"
+matches = [[0, 11]]
+
+[[test]]
+name = "dictionary_context_small_both"
+pattern = '.{0,10}(abc|def|ghi|jkl).{0,10}'
+input = "def;jkl;ghi"
+matches = [[0, 11]]
+
+[[test]]
+name = "dictionary_context_small_suffix"
+pattern = '(abc|def|ghi|jkl).{0,10}'
+input = "def;jkl;ghi"
+matches = [[0, 11]]

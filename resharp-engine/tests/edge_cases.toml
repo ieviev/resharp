@@ -567,3 +567,306 @@ name = "sanity_always_nullable_dot_star"
 pattern = '.*'
 input = "xy"
 matches = [[0, 2], [2, 2]]
+
+[[test]]
+name = "optional_atom_before_literal_newline_alternation_ascii"
+pattern = 'x?\n|x'
+input = "x\n"
+matches = [[0, 2]]
+ascii = true
+
+[[test]]
+name = "optional_atom_before_literal_newline_alternation_default"
+pattern = 'x?\n|x'
+input = "x\n"
+matches = [[0, 2]]
+
+[[test]]
+name = "optional_atom_before_literal_newline_alternation_javascript"
+pattern = 'x?\n|x'
+input = "x\n"
+matches = [[0, 2]]
+javascript = true
+
+[[test]]
+name = "optional_atom_before_literal_newline_alternation_full"
+pattern = 'x?\n|x'
+input = "x\n"
+matches = [[0, 2]]
+full = true
+
+[[test]]
+name = "negative_dollar_lookahead_then_optional_non_word_boundary_then_class"
+pattern = '(?!$)\B?[bc]'
+input = "ab"
+matches = [[1, 2]]
+ascii = true
+
+[[test]]
+name = "zero_repeat_non_word_boundary_then_negative_quantified_dollar_lookahead_ascii"
+pattern = '\B{0}(?!$+)(\z){0,3}\B?[bc]'
+input = "abc.c\na.cc-:"
+matches = [[1, 2], [2, 3], [4, 5], [8, 9], [9, 10]]
+ascii = true
+
+[[test]]
+name = "zero_repeat_non_word_boundary_then_negative_quantified_dollar_lookahead_default"
+pattern = '\B{0}(?!$+)(\z){0,3}\B?[bc]'
+input = "abc.c\na.cc-:"
+matches = [[1, 2], [2, 3], [4, 5], [8, 9], [9, 10]]
+
+[[test]]
+name = "zero_repeat_non_word_boundary_then_negative_quantified_dollar_lookahead_javascript"
+pattern = '\B{0}(?!$+)(\z){0,3}\B?[bc]'
+input = "abc.c\na.cc-:"
+matches = [[1, 2], [2, 3], [4, 5], [8, 9], [9, 10]]
+javascript = true
+
+[[test]]
+name = "zero_repeat_non_word_boundary_then_negative_quantified_dollar_lookahead_full"
+pattern = '\B{0}(?!$+)(\z){0,3}\B?[bc]'
+input = "abc.c\na.cc-:"
+matches = [[1, 2], [2, 3], [4, 5], [8, 9], [9, 10]]
+full = true
+
+[[test]]
+name = "bounded_class_repeat_intersect_lookahead_dot_star"
+pattern = '[ab]{2,4}&(?=.*c).*'
+input = "abc"
+matches = [[0, 2]]
+ascii = true
+
+[[test]]
+name = "nested_lookahead_consuming_atom_leaks_cursor_into_outer_match_end"
+pattern = '.?(?=.(?=\z))'
+input = "a"
+matches = [[0, 0]]
+
+[[test]]
+name = "nested_lookahead_consuming_atom_leaks_cursor_into_outer_match_end_ascii"
+pattern = '.?(?=.(?=\z))'
+input = "a"
+matches = [[0, 0]]
+ascii = true
+
+[[test]]
+name = "nested_lookahead_consuming_atom_leaks_cursor_into_outer_match_end_javascript"
+pattern = '.?(?=.(?=\z))'
+input = "a"
+matches = [[0, 0]]
+javascript = true
+
+[[test]]
+name = "nested_lookahead_consuming_atom_leaks_cursor_into_outer_match_end_full"
+pattern = '.?(?=.(?=\z))'
+input = "a"
+matches = [[0, 0]]
+full = true
+
+[[test]]
+name = "lookbehind_literal_then_begin_anchor_fused_with_trailing_a_stays_unsatisfiable_empty"
+pattern = '(?<=a^)\A'
+input = ""
+matches = []
+
+[[test]]
+name = "lookbehind_literal_then_begin_anchor_fused_with_trailing_a_stays_unsatisfiable_a"
+pattern = '(?<=a^)\A'
+input = "a"
+matches = []
+
+[[test]]
+name = "lookbehind_literal_then_begin_anchor_fused_with_trailing_a_stays_unsatisfiable_x"
+pattern = '(?<=a^)\A'
+input = "x"
+matches = []
+
+[[test]]
+name = "lookbehind_literal_then_begin_anchor_fused_with_trailing_a_stays_unsatisfiable_empty_ascii"
+pattern = '(?<=a^)\A'
+input = ""
+matches = []
+ascii = true
+
+[[test]]
+name = "lookbehind_literal_then_begin_anchor_fused_with_trailing_a_stays_unsatisfiable_a_ascii"
+pattern = '(?<=a^)\A'
+input = "a"
+matches = []
+ascii = true
+
+[[test]]
+name = "lookbehind_literal_then_begin_anchor_fused_with_trailing_a_stays_unsatisfiable_x_ascii"
+pattern = '(?<=a^)\A'
+input = "x"
+matches = []
+ascii = true
+
+[[test]]
+name = "lookbehind_literal_then_begin_anchor_fused_with_trailing_a_stays_unsatisfiable_empty_javascript"
+pattern = '(?<=a^)\A'
+input = ""
+matches = []
+javascript = true
+
+[[test]]
+name = "lookbehind_literal_then_begin_anchor_fused_with_trailing_a_stays_unsatisfiable_a_javascript"
+pattern = '(?<=a^)\A'
+input = "a"
+matches = []
+javascript = true
+
+[[test]]
+name = "lookbehind_literal_then_begin_anchor_fused_with_trailing_a_stays_unsatisfiable_x_javascript"
+pattern = '(?<=a^)\A'
+input = "x"
+matches = []
+javascript = true
+
+[[test]]
+name = "lookbehind_literal_then_begin_anchor_fused_with_trailing_a_stays_unsatisfiable_empty_full"
+pattern = '(?<=a^)\A'
+input = ""
+matches = []
+full = true
+
+[[test]]
+name = "lookbehind_literal_then_begin_anchor_fused_with_trailing_a_stays_unsatisfiable_a_full"
+pattern = '(?<=a^)\A'
+input = "a"
+matches = []
+full = true
+
+[[test]]
+name = "lookbehind_literal_then_begin_anchor_fused_with_trailing_a_stays_unsatisfiable_x_full"
+pattern = '(?<=a^)\A'
+input = "x"
+matches = []
+full = true
+
+[[test]]
+name = "ascii_mode_star_bounded_class_drops_match"
+pattern = 'c*b-[^a]?[^.]{1,1}.+'
+input = "b-b\n."
+matches = [[0, 5]]
+
+[[test]]
+name = "ascii_mode_star_bounded_class_drops_match_ascii"
+pattern = 'c*b-[^a]?[^.]{1,1}.+'
+ascii = true
+input = "b-b\n."
+matches = [[0, 5]]
+
+[[test]]
+name = "ascii_mode_star_bounded_class_drops_match_javascript"
+pattern = 'c*b-[^a]?[^.]{1,1}.+'
+javascript = true
+input = "b-b\n."
+matches = [[0, 5]]
+
+[[test]]
+name = "ascii_mode_star_bounded_class_drops_match_full"
+pattern = 'c*b-[^a]?[^.]{1,1}.+'
+full = true
+input = "b-b\n."
+matches = [[0, 5]]
+
+[[test]]
+name = "optional_class_plus_bounded_range_nonmax_backtrack_drops_match"
+pattern = '[^a]?b[^b]{2,5}:[^-]+'
+input = "bb\n\na.:x"
+matches = [[0, 8]]
+
+[[test]]
+name = "optional_class_plus_bounded_range_nonmax_backtrack_drops_match_ascii"
+pattern = '[^a]?b[^b]{2,5}:[^-]+'
+ascii = true
+input = "bb\n\na.:x"
+matches = [[0, 8]]
+
+[[test]]
+name = "optional_class_plus_bounded_range_nonmax_backtrack_drops_match_javascript"
+pattern = '[^a]?b[^b]{2,5}:[^-]+'
+javascript = true
+input = "bb\n\na.:x"
+matches = [[0, 8]]
+
+[[test]]
+name = "optional_class_plus_bounded_range_nonmax_backtrack_drops_match_full"
+pattern = '[^a]?b[^b]{2,5}:[^-]+'
+full = true
+input = "bb\n\na.:x"
+matches = [[0, 8]]
+
+[[test]]
+name = "grouped_lookahead_before_trailing_begin_anchor"
+pattern = '(?:(?!\z).*)\A'
+input = "a"
+matches = [[0, 0]]
+
+[[test]]
+name = "grouped_lookahead_before_trailing_begin_anchor_ascii"
+pattern = '(?:(?!\z).*)\A'
+ascii = true
+input = "a"
+matches = [[0, 0]]
+
+[[test]]
+name = "grouped_lookahead_before_trailing_begin_anchor_javascript"
+pattern = '(?:(?!\z).*)\A'
+javascript = true
+input = "a"
+matches = [[0, 0]]
+
+[[test]]
+name = "grouped_lookahead_before_trailing_begin_anchor_full"
+pattern = '(?:(?!\z).*)\A'
+full = true
+input = "a"
+matches = [[0, 0]]
+
+[[test]]
+name = "word_boundary_negation_before_end_anchor"
+pattern = '\B(?=^)$'
+input = ""
+matches = [[0, 0]]
+multiline = false
+
+[[test]]
+name = "word_boundary_negation_before_end_anchor_ascii"
+pattern = '\B(?=^)$'
+ascii = true
+input = ""
+matches = [[0, 0]]
+multiline = false
+
+[[test]]
+name = "word_boundary_negation_before_end_anchor_javascript"
+pattern = '\B(?=^)$'
+javascript = true
+input = ""
+matches = [[0, 0]]
+multiline = false
+
+[[test]]
+name = "word_boundary_negation_before_end_anchor_full"
+pattern = '\B(?=^)$'
+full = true
+input = ""
+matches = [[0, 0]]
+multiline = false
+
+[[test]]
+name = "bare_word_boundary_before_dollar_no_longer_crashes"
+pattern = '\B$'
+input = ""
+matches = [[0, 0]]
+multiline = false
+
+[[test]]
+name = "bare_word_boundary_before_dollar_no_longer_crashes_full"
+pattern = '\B$'
+full = true
+input = ""
+matches = [[0, 0]]
+multiline = false

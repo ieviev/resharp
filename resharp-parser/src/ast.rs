@@ -71,10 +71,7 @@ pub enum ErrorKind {
     ClassRangeLiteral,
     /// An opening `[` was found with no corresponding closing `]`.
     ClassUnclosed,
-    /// Note that this error variant is no longer used. Namely, a decimal
-    /// number can only appear as a repetition quantifier. When the number
-    /// in a repetition quantifier is empty, then it gets its own specialized
-    /// error, `RepetitionCountDecimalEmpty`.
+    /// An empty decimal number was found where one was expected.
     DecimalEmpty,
     /// An invalid decimal number was given where one was expected.
     DecimalInvalid,
@@ -172,6 +169,7 @@ pub enum ErrorKind {
     /// Lazy quantifiers (e.g., `*?`, `+?`, `??`, `{n,m}?`) are not supported.
     UnsupportedLazyQuantifier,
     ComplementGroupExpected,
+    CaptureGroupInLookaround,
 }
 
 impl core::fmt::Display for ErrorKind {
@@ -287,6 +285,10 @@ impl core::fmt::Display for ErrorKind {
                 write!(f, "lazy quantifiers are not supported")
             }
             ComplementGroupExpected => write!(f, "expected ( after ~ for complement group"),
+            CaptureGroupInLookaround => write!(
+                f,
+                "capturing groups are not supported inside a lookaround"
+            ),
         }
     }
 }
@@ -414,6 +416,7 @@ impl Ast {
     pub fn group(e: Group) -> Ast {
         match &e.kind {
             GroupKind::CaptureIndex(_) => Ast::Group(Box::new(e)),
+            GroupKind::CaptureAnonymous(_) => Ast::Group(Box::new(e)),
             GroupKind::CaptureName {
                 starts_with_p: _,
                 name: _,
@@ -670,7 +673,8 @@ impl Group {
     /// Returns true if and only if this group is capturing.
     pub fn is_capturing(&self) -> bool {
         match self.kind {
-            GroupKind::CaptureIndex(_) | GroupKind::CaptureName { .. } => true,
+            GroupKind::CaptureIndex(_) => false,
+            GroupKind::CaptureAnonymous(_) | GroupKind::CaptureName { .. } => true,
             GroupKind::NonCapturing(_) => false,
             GroupKind::Lookaround(_) => false,
             GroupKind::Complement => false,
@@ -682,11 +686,23 @@ impl Group {
     /// This returns a capture index precisely when `is_capturing` is `true`.
     pub fn capture_index(&self) -> Option<u32> {
         match self.kind {
-            GroupKind::CaptureIndex(i) => Some(i),
+            GroupKind::CaptureIndex(_) => None,
+            GroupKind::CaptureAnonymous(i) => Some(i),
             GroupKind::CaptureName { ref name, .. } => Some(name.index),
             GroupKind::NonCapturing(_) => None,
             GroupKind::Lookaround(_) => None,
             GroupKind::Complement => None,
+        }
+    }
+
+    /// Like `capture_index`, but also returns the index a bare `(...)`
+    /// group already reserved even though it doesn't capture by default -
+    /// for use only when the caller has independently decided this bare
+    /// group DOES capture (`implicit_captures`).
+    pub fn capture_index_or_plain(&self) -> Option<u32> {
+        match self.kind {
+            GroupKind::CaptureIndex(i) => Some(i),
+            _ => self.capture_index(),
         }
     }
 }
@@ -694,8 +710,11 @@ impl Group {
 /// The kind of a group.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum GroupKind {
-    /// `(a)`
+    /// `(a)` plain grouping
     CaptureIndex(u32),
+    /// `(??a)` anonymous capture: gets an index like a named group, but
+    /// `capture_names()` reports `None` for it.
+    CaptureAnonymous(u32),
     /// `(?<name>a)` or `(?P<name>a)`
     CaptureName {
         /// True if the `?P<` syntax is used and false if the `?<` syntax is used.

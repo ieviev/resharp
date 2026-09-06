@@ -29,7 +29,7 @@ matches = []
 supported = false
 
 [[test]]
-name = "lb_la_or_dash_b_neg_la_no_match"
+name = "lb_la_or_dash_b_neg_la_no_match_with_dash_prefix"
 pattern = '((?<!b)(?=b)|-)b(?!b)'
 input = "xxxxx-bbbbb"
 matches = []
@@ -524,8 +524,9 @@ reason = "lookbehind in center of concat"
 [[test]]
 name = "reverse_center_lookbehind_from_lookahead_alt_star"
 pattern = '(?:(?=b)|-)b*b(?!b)'
-expect_error = true
-reason = "reverse contains lookbehind in center of concat"
+input = "bb-bb"
+matches = [[0, 2], [2, 5]]
+supported = true
 
 [[test]]
 name = "lookbehind_lookahead_alt_neg_lookahead_no_fwd_end"
@@ -534,10 +535,10 @@ expect_error = true
 reason = "lookbehind in center of concat"
 
 [[test]]
-name = "lookahead_in_optional_with_surrounding_stars_unsupported"
+name = "lookahead_fused_alt_of_different_lengths_in_optional_with_surrounding_stars"
 pattern = '((?=(x|yy))x)? *\z'
-expect_error = true
-reason = "reverse contains lookbehind in center of concat"
+input = "xx"
+matches = [[1, 2], [2, 2]]
 
 [[test]]
 name = "lookbehind_dot_a"
@@ -663,7 +664,7 @@ input = "aB"
 matches = [[1, 1]]
 
 [[test]]
-name = "la_anchored"
+name = "caret_or_literal_union_start"
 pattern = '(^|b)'
 input = "a"
 matches = [[0,0]]

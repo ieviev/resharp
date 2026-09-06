@@ -16,6 +16,7 @@ fn write_schema<T: JsonSchema>(name: &str) {
 fn gen_schemas() {
     write_schema::<EngineFile>("engine");
     write_schema::<InternalFile>("internal");
+    write_schema::<CapturesFile>("captures");
     write_schema::<PrefixFile>("prefix");
     write_schema::<RevNullsFile>("rev_nulls");
     write_schema::<AutoHardenFile>("auto_harden");

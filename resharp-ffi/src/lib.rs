@@ -9,7 +9,7 @@ fn set_err(e: impl std::fmt::Display) {
 }
 
 /// # Safety
-/// caller must ensure `ptr` is valid for `len` bytes for the duration of `'a`
+/// `ptr` valid for `len` bytes over `'a`.
 unsafe fn bytes<'a>(ptr: *const u8, len: usize) -> &'a [u8] {
     if len == 0 {
         &[]
@@ -18,10 +18,10 @@ unsafe fn bytes<'a>(ptr: *const u8, len: usize) -> &'a [u8] {
     }
 }
 
-/// Compile a regex pattern. Returns null on error (call `resharp_last_error`).
+/// Compile a pattern. Null on error, see `resharp_last_error`.
 ///
 /// # Safety
-/// `pat` must be valid for reading `len` bytes.
+/// `pat` valid for `len` bytes.
 #[no_mangle]
 pub unsafe extern "C" fn resharp_compile(pat: *const u8, len: usize) -> *mut Regex {
     let Ok(s) = std::str::from_utf8(bytes(pat, len)) else {
@@ -37,10 +37,10 @@ pub unsafe extern "C" fn resharp_compile(pat: *const u8, len: usize) -> *mut Reg
     }
 }
 
-/// Free a compiled regex. No-op if `r` is null.
+/// Free a regex, no-op on null.
 ///
 /// # Safety
-/// `r` must be null or a pointer returned by `resharp_compile` that has not been freed.
+/// `r` null or unfreed from `resharp_compile`.
 #[no_mangle]
 pub unsafe extern "C" fn resharp_free(r: *mut Regex) {
     if !r.is_null() {
@@ -48,10 +48,10 @@ pub unsafe extern "C" fn resharp_free(r: *mut Regex) {
     }
 }
 
-/// Returns 1 if `input` matches, 0 if not, -1 on error.
+/// 1 on match, 0 on no match, -1 on error.
 ///
 /// # Safety
-/// `r` must be a live pointer from `resharp_compile`. `input` must be valid for `len` bytes.
+/// `r` live from `resharp_compile`, `input` valid for `len` bytes.
 #[no_mangle]
 pub unsafe extern "C" fn resharp_is_match(r: *const Regex, input: *const u8, len: usize) -> i32 {
     match (*r).is_match(bytes(input, len)) {
@@ -63,30 +63,30 @@ pub unsafe extern "C" fn resharp_is_match(r: *const Regex, input: *const u8, len
     }
 }
 
-/// Find all matches. Writes `(start, end)` pairs into `out` (max `cap/2` matches).
-/// Returns total match count (may exceed `cap/2`), or -1 on error.
+/// Writes up to `cap/2` `(start, end)` pairs into `out`. Returns the total
+/// match count, which may exceed the pairs written, or -1 on error.
 ///
 /// # Safety
-/// `r` must be a live pointer from `resharp_compile`. `input` must be valid for `len` bytes.
-/// `out` must be valid for writing `cap` `u32` values.
+/// `r` live from `resharp_compile`, `input` valid for `len` bytes,
+/// `out` valid for `cap` writes.
 #[no_mangle]
 pub unsafe extern "C" fn resharp_find_all(
     r: *const Regex,
     input: *const u8,
     len: usize,
-    out: *mut u32,
+    out: *mut usize,
     cap: usize,
-) -> i32 {
+) -> isize {
     match (*r).find_all(bytes(input, len)) {
         Ok(ms) => {
             let n = ms.len();
             let w = (cap / 2).min(n);
             let buf = slice::from_raw_parts_mut(out, w * 2);
             for (i, m) in ms.iter().take(w).enumerate() {
-                buf[i * 2] = m.start as u32;
-                buf[i * 2 + 1] = m.end as u32;
+                buf[i * 2] = m.start;
+                buf[i * 2 + 1] = m.end;
             }
-            n as i32
+            n as isize
         }
         Err(e) => {
             set_err(e);
@@ -95,23 +95,23 @@ pub unsafe extern "C" fn resharp_find_all(
     }
 }
 
-/// Find an anchored match at position 0. Writes `(start, end)` into `out`.
+/// Longest match at position 0 as `(start, end)` in `out`.
 /// Returns 1 if found, 0 if not, -1 on error.
 ///
 /// # Safety
-/// `r` must be a live pointer from `resharp_compile`. `input` must be valid for `len` bytes.
-/// `out` must be valid for writing 2 `u32` values.
+/// `r` live from `resharp_compile`, `input` valid for `len` bytes,
+/// `out` valid for 2 writes.
 #[no_mangle]
 pub unsafe extern "C" fn resharp_find_anchored(
     r: *const Regex,
     input: *const u8,
     len: usize,
-    out: *mut u32,
+    out: *mut usize,
 ) -> i32 {
     match (*r).find_anchored(bytes(input, len)) {
         Ok(Some(m)) => {
-            *out = m.start as u32;
-            *out.add(1) = m.end as u32;
+            *out = m.start;
+            *out.add(1) = m.end;
             1
         }
         Ok(None) => 0,
@@ -122,11 +122,61 @@ pub unsafe extern "C" fn resharp_find_anchored(
     }
 }
 
-/// Copy the last error message into `buf`. Returns the full error length
-/// (may exceed `cap`; not null-terminated).
+/// Capture slots per match: whole match plus one per group. Row stride, in
+/// pairs, of `resharp_captures_all`.
 ///
 /// # Safety
-/// `buf` must be valid for writing `cap` bytes.
+/// `r` live from `resharp_compile`.
+#[cfg(feature = "experimental_capture_groups")]
+#[no_mangle]
+pub unsafe extern "C" fn resharp_capture_slots(r: *const Regex) -> usize {
+    (*r).capture_names().len()
+}
+
+/// Writes up to `cap / (2 * slots)` rows into `out`, one per match, each
+/// `resharp_capture_slots(r)` `(start, end)` pairs: pair 0 is the whole match,
+/// then one per group, absent groups `(SIZE_MAX, SIZE_MAX)`. Returns the total
+/// match count, which may exceed the rows written, or -1 on error.
+///
+/// # Safety
+/// `r` live from `resharp_compile`, `input` valid for `len` bytes,
+/// `out` valid for `cap` writes.
+#[cfg(feature = "experimental_capture_groups")]
+#[no_mangle]
+pub unsafe extern "C" fn resharp_captures_all(
+    r: *const Regex,
+    input: *const u8,
+    len: usize,
+    out: *mut usize,
+    cap: usize,
+) -> isize {
+    let slots = (*r).capture_names().len();
+    match (*r).captures_all(bytes(input, len)) {
+        Ok(all) => {
+            let n = all.len();
+            let rows = (cap / (2 * slots)).min(n);
+            let buf = slice::from_raw_parts_mut(out, rows * slots * 2);
+            for (row, caps) in all.iter().take(rows).enumerate() {
+                for (i, g) in caps.spans().iter().enumerate() {
+                    let (s, e) = g.unwrap_or((usize::MAX, usize::MAX));
+                    buf[(row * slots + i) * 2] = s;
+                    buf[(row * slots + i) * 2 + 1] = e;
+                }
+            }
+            n as isize
+        }
+        Err(e) => {
+            set_err(e);
+            -1
+        }
+    }
+}
+
+/// Copies the last error into `buf`, not null-terminated. Returns its full
+/// length, which may exceed `cap`.
+///
+/// # Safety
+/// `buf` valid for `cap` bytes.
 #[no_mangle]
 pub unsafe extern "C" fn resharp_last_error(buf: *mut u8, cap: usize) -> usize {
     LAST_ERR.with(|s| {

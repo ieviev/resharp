@@ -28,7 +28,9 @@ fn collect_rev_center_simple(
     unsafe {
         let v = &*effects.add(eid as usize); // bounds: see `register_state`
         for n in v {
-            push_null_desc(nulls, pos + n.rel as usize);
+            if n.mask.has(Nullability::CENTER) {
+                push_null_desc(nulls, pos + n.rel as usize);
+            }
         }
     }
 }
@@ -126,6 +128,7 @@ enum SkipStep {
 
 #[inline(always)]
 #[allow(clippy::too_many_arguments)]
+#[cfg_attr(not(feature = "debug"), allow(unused_variables))]
 fn skip_rev(
     t: &ScanTables,
     skipper: &Skipper,
@@ -133,6 +136,7 @@ fn skip_rev(
     curr: &mut u32,
     pos: &mut usize,
     prev_entry: &mut usize,
+    pending_entry: &mut usize,
     nulls: &mut StartPositions,
     b: &mut RegexBuilder,
     conv_b: &mut Option<&mut crate::ldfa::LDFA>,
@@ -145,10 +149,24 @@ fn skip_rev(
             window,
         } => {
             let resume = *resume;
-            let pruned = *pruned;
             let window = *window as usize;
             let orig_pos = *pos;
             let mut search_from = *pos;
+            if *pending_entry != usize::MAX {
+                #[cfg(feature = "debug")]
+                eprintln!("[skip_rev Inner] bridging pos={pos} pending_entry={pending_entry} prev_entry={prev_entry}");
+                if *pos > *pending_entry {
+                    return Ok(SkipStep::Fall);
+                }
+                *pos = *pending_entry;
+                *pending_entry = usize::MAX;
+                *curr = resume;
+                return Ok(if *prev_entry == 0 {
+                    SkipStep::Continue
+                } else {
+                    SkipStep::Fall
+                });
+            }
             loop {
                 #[cfg(feature = "debug")]
                 eprintln!("[skip_rev Inner] search_from={search_from} pos={pos} prev_entry={prev_entry} orig_pos={orig_pos} window={window} resume={resume} pruned={pruned}");
@@ -172,23 +190,18 @@ fn skip_rev(
                         #[cfg(feature = "debug")]
                         eprintln!("[skip_rev Inner] branch B skip_pos={skip_pos} conv_start_matches={matches}");
                         if matches {
-                            let raw_entry = (skip_pos + 1 + window).min(orig_pos).max(skip_pos + 1);
-                            let mut entry = if raw_entry > skip_pos + 1 {
-                                orig_pos
-                            } else {
-                                raw_entry
-                            };
-                            if resume == pruned {
-                                entry = entry.min(orig_pos);
-                            }
+                            let entry = (skip_pos + 1 + window)
+                                .min(orig_pos)
+                                .max(skip_pos + 1)
+                                .min(orig_pos);
                             #[cfg(feature = "debug")]
                             eprintln!("[skip_rev Inner] branch B entry={entry} skip_pos={skip_pos} window={window} orig_pos={orig_pos}");
-                            *pos = entry;
+                            *prev_entry = skip_pos;
                             if entry > skip_pos + 1 {
-                                *curr = pruned;
+                                *pending_entry = entry;
                                 return Ok(SkipStep::Fall);
                             }
-                            *prev_entry = skip_pos;
+                            *pos = entry;
                             *curr = resume;
                             return Ok(if skip_pos == 0 {
                                 SkipStep::Continue
@@ -271,6 +284,7 @@ pub(crate) fn collect_rev<const EARLY_EXIT: bool, const SKIP: bool>(
     b: &mut RegexBuilder,
     mut conv_b: Option<&mut crate::ldfa::LDFA>,
     prev_entry: &mut usize,
+    pending_entry: &mut usize,
 ) -> Result<(u32, usize, bool), crate::Error> {
     let center_table = t.center_table;
     let center_effect_id = t.center_effect_id;
@@ -288,6 +302,7 @@ pub(crate) fn collect_rev<const EARLY_EXIT: bool, const SKIP: bool>(
                     &mut curr,
                     &mut pos,
                     prev_entry,
+                    pending_entry,
                     nulls,
                     b,
                     &mut conv_b,
@@ -680,9 +695,12 @@ pub(crate) fn register_state(
     }
     effects_id[sid as usize] = eff_id.0 as u16;
     center_effect_id[sid as usize] = eid.0 as u16;
-    while effects.len() <= eff_id.0 as usize || effects.len() <= eid.0 as usize {
-        effects.push(b.nulls_entry_vec(effects.len() as u32));
+    let target = eff_id.0.max(eid.0) as usize;
+    if effects.len() <= target {
+        effects.resize(target + 1, Vec::new());
     }
+    effects[eff_id.0 as usize] = b.nulls_entry_vec(eff_id.0);
+    effects[eid.0 as usize] = b.nulls_entry_vec(eid.0);
     // all of these must hold while matching
     debug_assert!((sid as usize) < effects_id.len());
     debug_assert!((sid as usize) < center_effect_id.len());

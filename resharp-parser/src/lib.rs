@@ -49,6 +49,9 @@ pub struct PatternFlags {
     /// max upper bound on bounded repetition `{n,m}`. default 500.
     pub max_repeat: u32,
     pub max_depth: usize,
+    /// bare `(...)` groups capture, unnamed and auto-indexed, as if written
+    /// `(??...)`. default false.
+    pub implicit_captures: bool,
 }
 
 // arbitrary safeguards, these will not prevent intentional DoS patterns
@@ -72,6 +75,7 @@ impl Default for PatternFlags {
             max_list_len: DEFAULT_MAX_LIST_LEN,
             max_repeat: DEFAULT_MAX_REPEAT,
             max_depth: DEFAULT_MAX_DEPTH,
+            implicit_captures: false,
         }
     }
 }
@@ -433,6 +437,7 @@ pub struct ResharpParser<'s> {
     pub pattern: &'s str,
     pos: Cell<Position>,
     capture_index: Cell<u32>,
+    lookaround_depth: Cell<u32>,
     octal: bool,
     empty_min_range: bool,
     ignore_whitespace: Cell<bool>,
@@ -446,6 +451,7 @@ pub struct ResharpParser<'s> {
     max_list_len: usize,
     max_repeat: u32,
     max_depth: usize,
+    implicit_captures: bool,
     comments: RefCell<Vec<ast::Comment>>,
     stack_group: RefCell<Vec<GroupState>>,
     stack_class: RefCell<Vec<ClassState>>,
@@ -585,6 +591,13 @@ fn ensure_lookbehind_at_start(ast: &Ast, at_start: bool) -> core::result::Result
     }
 }
 
+fn opt_wrapper_loses_tag_conditionality(tb: &mut TB<'_>, body: NodeId) -> bool {
+    if !body.contains_tags(tb) {
+        return false;
+    }
+    tb.mk_opt(body) == body
+}
+
 fn ast_may_consume(ast: &Ast) -> bool {
     match ast {
         Ast::Empty(_) | Ast::Flags(_) | Ast::Assertion(_) | Ast::Lookaround(_) => false,
@@ -640,6 +653,7 @@ impl<'s> ResharpParser<'s> {
             unicode_classes: resharp_algebra::UnicodeClassCache::default(),
             pos: Cell::new(Position::new(0, 0, 0)),
             capture_index: Cell::new(0),
+            lookaround_depth: Cell::new(0),
             octal: false,
             empty_min_range: false,
             ignore_whitespace: Cell::new(flags.ignore_whitespace),
@@ -653,6 +667,7 @@ impl<'s> ResharpParser<'s> {
             max_list_len: flags.max_list_len,
             max_repeat: flags.max_repeat,
             max_depth: flags.max_depth,
+            implicit_captures: flags.implicit_captures,
             comments: RefCell::new(vec![]),
             stack_group: RefCell::new(vec![]),
             stack_class: RefCell::new(vec![]),
@@ -723,6 +738,16 @@ impl<'s> ResharpParser<'s> {
 
     fn ignore_whitespace(&self) -> bool {
         self.parser().ignore_whitespace.get()
+    }
+
+    fn capture_group_names(&self) -> Vec<Option<String>> {
+        let parser = self.parser();
+        let count = parser.capture_index.get() as usize;
+        let mut out: Vec<Option<String>> = vec![None; count];
+        for cap in parser.capture_names.borrow().iter() {
+            out[cap.index as usize - 1] = Some(cap.name.clone());
+        }
+        out
     }
 
     fn char(&self) -> char {
@@ -1599,6 +1624,10 @@ impl<'s> ResharpParser<'s> {
                         let n = tb.try_elim_lookarounds(n).ok_or_else(|| {
                             self.error(self.span(), ast::ErrorKind::UnsupportedResharpRegex)
                         })?;
+                        if tb.get_min_max_length(n) == (0, 0) {
+                            // n is a bare zero-width assertion (e.g. `\z`); folding it in as Concat(n, TS) is wrong since there may be no next byte at all. Bail to Unknown.
+                            return Ok(Unknown);
+                        }
                         bodies.push(tb.mk_concat(n, NodeId::TS));
                         break;
                     }
@@ -1693,6 +1722,12 @@ impl<'s> ResharpParser<'s> {
                 &r.op.kind,
                 ast::RepetitionKind::Range(ast::RepetitionRange::Exactly(0))
             ),
+            // transparent (skip to find the real neighbor) only when scanning away from the edge it anchors; opaque in the direction it guarantees
+            Ast::Assertion(a) => matches!(
+                a.kind,
+                ast::AssertionKind::StartLine | ast::AssertionKind::EndLine
+            ) || matches!(a.kind, ast::AssertionKind::StartText if dir > 0)
+                || matches!(a.kind, ast::AssertionKind::EndText if dir < 0),
             _ => false,
         }
     }
@@ -2123,18 +2158,38 @@ impl<'s> ResharpParser<'s> {
                 let body = self.ast_to_node_id(&r.ast, translator, tb);
                 match body {
                     Ok(body) => match &r.op.kind {
-                        ast::RepetitionKind::ZeroOrOne => Ok(tb.mk_opt(body)),
+                        ast::RepetitionKind::ZeroOrOne => {
+                            if opt_wrapper_loses_tag_conditionality(tb, body) {
+                                return Err(self.error(rep_span, ast::ErrorKind::UnsupportedResharpRegex));
+                            }
+                            Ok(tb.mk_opt(body))
+                        }
                         ast::RepetitionKind::ZeroOrMore => Ok(tb.mk_star(body)),
                         ast::RepetitionKind::OneOrMore => Ok(tb.mk_plus(body)),
                         ast::RepetitionKind::Range(r) => match r {
-                            ast::RepetitionRange::Exactly(n) => Ok(tb.mk_repeat(body, *n, *n)),
+                            ast::RepetitionRange::Exactly(n) => {
+                                if *n == 0 && body.contains_tags(tb) {
+                                    return Err(self.error(rep_span, ast::ErrorKind::UnsupportedResharpRegex));
+                                }
+                                Ok(tb.mk_repeat(body, *n, *n))
+                            }
                             ast::RepetitionRange::AtLeast(n) => {
-                                let rep = tb.mk_repeat(body, *n, *n);
-                                let st = tb.mk_star(body);
-                                Ok(tb.mk_concat(rep, st))
+                                if body.is_lookahead(tb) && body.right(tb) == NodeId::MISSING {
+                                    Ok(if *n == 0 { tb.mk_opt(body) } else { body })
+                                } else {
+                                    let rep = tb.mk_repeat(body, *n, *n);
+                                    let st = tb.mk_star(body);
+                                    Ok(tb.mk_concat(rep, st))
+                                }
                             }
 
                             ast::RepetitionRange::Bounded(n, m) => {
+                                if *m == 0 && body.contains_tags(tb) {
+                                    return Err(self.error(rep_span, ast::ErrorKind::UnsupportedResharpRegex));
+                                }
+                                if *n == 0 && *m > 0 && opt_wrapper_loses_tag_conditionality(tb, body) {
+                                    return Err(self.error(rep_span, ast::ErrorKind::UnsupportedResharpRegex));
+                                }
                                 let variance = m.saturating_sub(*n);
                                 let has_fused_tail = (body.is_lookahead(tb)
                                     && body.right(tb) != NodeId::MISSING)
@@ -2153,11 +2208,20 @@ impl<'s> ResharpParser<'s> {
                 }
             }
             Ast::Lookaround(g) => {
-                let body = self.ast_to_node_id(&g.ast, translator, tb)?;
+                let depth = self.parser().lookaround_depth.get();
+                self.parser().lookaround_depth.set(depth + 1);
+                let body = self.ast_to_node_id(&g.ast, translator, tb);
+                self.parser().lookaround_depth.set(depth);
+                let body = body?;
                 match g.kind {
                     ast::LookaroundKind::PositiveLookahead if body.contains_lookbehind(tb) => {
                         let mut prefix = NodeId::EPS;
                         let mut rest = body;
+                        // a lookahead whose entire body is one bare lookbehind (e.g. `(?=^)`) has no Concat wrapper for the loop below; handle it directly
+                        if tb.get_kind(rest) == Kind::Lookbehind && rest.right(tb) == NodeId::MISSING {
+                            prefix = rest;
+                            rest = NodeId::EPS;
+                        }
                         while tb.get_kind(rest) == Kind::Concat
                             && tb.get_kind(rest.left(tb)) == Kind::Lookbehind
                             && rest.left(tb).right(tb) == NodeId::MISSING
@@ -2214,6 +2278,22 @@ impl<'s> ResharpParser<'s> {
                         self.multiline.set(saved_multiline);
                         return result;
                     }
+                }
+                let captures = match g.kind {
+                    ast::GroupKind::CaptureName { .. } | ast::GroupKind::CaptureAnonymous(_) => true,
+                    ast::GroupKind::CaptureIndex(_) => self.parser().implicit_captures,
+                    _ => false,
+                };
+                if captures {
+                    if self.parser().lookaround_depth.get() > 0 {
+                        return Err(self.error(g.span, ast::ErrorKind::CaptureGroupInLookaround));
+                    }
+                    let index = g.capture_index_or_plain().unwrap();
+                    let body = self.ast_to_node_id(&g.ast, translator, tb)?;
+                    let open = tb.mk_tag(2 * index);
+                    let close = tb.mk_tag(2 * index + 1);
+                    let wrapped = tb.mk_concat(open, body);
+                    return Ok(tb.mk_concat(wrapped, close));
                 }
                 self.ast_to_node_id(&g.ast, translator, tb)
             }
@@ -2377,6 +2457,273 @@ impl<'s> ResharpParser<'s> {
             return Err(self.error(span, ast::ErrorKind::UnsupportedResharpRegex));
         }
         self.ast_to_node_id(&ast, &mut None, tb)
+    }
+
+    fn parse_with_skeleton(&mut self, tb: &mut TB<'s>) -> Result<(NodeId, Option<Skeleton>)> {
+        let ast = self.parse_inner()?;
+        if let Err(span) = ensure_lookbehind_at_start(&ast, true) {
+            return Err(self.error(span, ast::ErrorKind::UnsupportedResharpRegex));
+        }
+        let saved_dot_all = self.dot_all.get();
+        let saved_multiline = self.multiline.get();
+        let node = self.ast_to_node_id(&ast, &mut None, tb)?;
+        let sk = if self.ast_has_capture(&ast) {
+            self.dot_all.set(saved_dot_all);
+            self.multiline.set(saved_multiline);
+            let mut nodes = Vec::new();
+            let root = self.ast_to_sk(&ast, &mut None, tb, &mut nodes)?;
+            Some(Skeleton { nodes, root })
+        } else {
+            None
+        };
+        Ok((node, sk))
+    }
+
+    fn rep_lo(kind: &ast::RepetitionKind) -> u32 {
+        match kind {
+            ast::RepetitionKind::ZeroOrOne | ast::RepetitionKind::ZeroOrMore => 0,
+            ast::RepetitionKind::OneOrMore => 1,
+            ast::RepetitionKind::Range(ast::RepetitionRange::Exactly(n)) => *n,
+            ast::RepetitionKind::Range(ast::RepetitionRange::AtLeast(n)) => *n,
+            ast::RepetitionKind::Range(ast::RepetitionRange::Bounded(n, _)) => *n,
+        }
+    }
+
+    fn rep_hi(kind: &ast::RepetitionKind) -> u32 {
+        match kind {
+            ast::RepetitionKind::ZeroOrOne => 1,
+            ast::RepetitionKind::ZeroOrMore | ast::RepetitionKind::OneOrMore => u32::MAX,
+            ast::RepetitionKind::Range(ast::RepetitionRange::Exactly(n)) => *n,
+            ast::RepetitionKind::Range(ast::RepetitionRange::AtLeast(_)) => u32::MAX,
+            ast::RepetitionKind::Range(ast::RepetitionRange::Bounded(_, m)) => *m,
+        }
+    }
+
+    fn ast_ambiguous_body(ast: &Ast) -> bool {
+        match ast {
+            Ast::Alternation(_) | Ast::Concat(_) | Ast::Repetition(_) => true,
+            Ast::Group(g) => Self::ast_ambiguous_body(&g.ast),
+            _ => false,
+        }
+    }
+
+    fn ast_needs_repeat_model(ast: &Ast) -> bool {
+        match ast {
+            Ast::Repetition(r) => {
+                (Self::rep_hi(&r.op.kind) >= 2 && Self::ast_ambiguous_body(&r.ast))
+                    || Self::ast_needs_repeat_model(&r.ast)
+            }
+            Ast::Group(g) => Self::ast_needs_repeat_model(&g.ast),
+            Ast::Alternation(a) => a.asts.iter().any(Self::ast_needs_repeat_model),
+            Ast::Concat(c) => c.asts.iter().any(Self::ast_needs_repeat_model),
+            Ast::Intersection(x) => x.asts.iter().any(Self::ast_needs_repeat_model),
+            _ => false,
+        }
+    }
+
+    fn ast_has_capture(&self, ast: &Ast) -> bool {
+        match ast {
+            Ast::Group(g) => {
+                let cap = match g.kind {
+                    ast::GroupKind::CaptureName { .. } | ast::GroupKind::CaptureAnonymous(_) => true,
+                    ast::GroupKind::CaptureIndex(_) => self.parser().implicit_captures,
+                    _ => false,
+                };
+                cap || self.ast_has_capture(&g.ast)
+            }
+            Ast::Alternation(a) => a.asts.iter().any(|x| self.ast_has_capture(x)),
+            Ast::Concat(c) => c.asts.iter().any(|x| self.ast_has_capture(x)),
+            Ast::Intersection(x) => x.asts.iter().any(|a| self.ast_has_capture(a)),
+            Ast::Complement(x) => self.ast_has_capture(&x.ast),
+            Ast::Repetition(r) => self.ast_has_capture(&r.ast),
+            Ast::Lookaround(l) => self.ast_has_capture(&l.ast),
+            _ => false,
+        }
+    }
+
+    fn sk_leaf(
+        &mut self,
+        ast: &Ast,
+        translator: &mut Option<Translator>,
+        tb: &mut TB<'s>,
+        out: &mut Vec<(SkNode, NodeId)>,
+    ) -> Result<u32> {
+        let node = self.ast_to_node_id(ast, translator, tb)?;
+        out.push((SkNode::Leaf, node));
+        Ok(out.len() as u32 - 1)
+    }
+
+    fn ast_to_sk(
+        &mut self,
+        ast: &Ast,
+        translator: &mut Option<Translator>,
+        tb: &mut TB<'s>,
+        out: &mut Vec<(SkNode, NodeId)>,
+    ) -> Result<u32> {
+        if !self.ast_has_capture(ast) && !Self::ast_needs_repeat_model(ast) {
+            return self.sk_leaf(ast, translator, tb, out);
+        }
+        match ast {
+            Ast::Group(g) => {
+                if let ast::GroupKind::NonCapturing(ref flags) = g.kind {
+                    if !flags.items.is_empty() {
+                        let mut translator_builder = self.default_translator_builder();
+                        if let Some(state) = flags.flag_state(ast::Flag::CaseInsensitive) {
+                            translator_builder.case_insensitive(state);
+                        }
+                        if let Some(state) = flags.flag_state(ast::Flag::Unicode) {
+                            translator_builder.unicode(state);
+                        }
+                        let saved_dot_all = self.dot_all.get();
+                        if let Some(state) = flags.flag_state(ast::Flag::DotMatchesNewLine) {
+                            self.dot_all.set(state);
+                        }
+                        let saved_multiline = self.multiline.get();
+                        if let Some(state) = flags.flag_state(ast::Flag::MultiLine) {
+                            self.multiline.set(state);
+                        }
+                        let mut scoped = Some(translator_builder.build());
+                        let result = self.ast_to_sk(&g.ast, &mut scoped, tb, out);
+                        self.dot_all.set(saved_dot_all);
+                        self.multiline.set(saved_multiline);
+                        return result;
+                    }
+                }
+                let captures = match g.kind {
+                    ast::GroupKind::CaptureName { .. } | ast::GroupKind::CaptureAnonymous(_) => true,
+                    ast::GroupKind::CaptureIndex(_) => self.parser().implicit_captures,
+                    _ => false,
+                };
+                if captures {
+                    if self.parser().lookaround_depth.get() > 0 {
+                        return Err(self.error(g.span, ast::ErrorKind::CaptureGroupInLookaround));
+                    }
+                    let index = g.capture_index_or_plain().unwrap();
+                    let child = self.ast_to_sk(&g.ast, translator, tb, out)?;
+                    let body = out[child as usize].1;
+                    let open = tb.mk_tag(2 * index);
+                    let close = tb.mk_tag(2 * index + 1);
+                    let wrapped = tb.mk_concat(open, body);
+                    let node = tb.mk_concat(wrapped, close);
+                    out.push((SkNode::Group(index, child), node));
+                    return Ok(out.len() as u32 - 1);
+                }
+                self.ast_to_sk(&g.ast, translator, tb, out)
+            }
+            Ast::Alternation(a) => {
+                let mut children = Vec::with_capacity(a.asts.len());
+                for x in &a.asts {
+                    let c = self.ast_to_sk(x, translator, tb, out)?;
+                    let spliced = match &out[c as usize].0 {
+                        SkNode::Union(inner) => Some(inner.clone()),
+                        _ => None,
+                    };
+                    match spliced {
+                        Some(inner) => children.extend(inner),
+                        None => children.push(c),
+                    }
+                }
+                let node = tb.mk_unions(children.iter().map(|&c| out[c as usize].1));
+                out.push((SkNode::Union(children), node));
+                Ok(out.len() as u32 - 1)
+            }
+            Ast::Intersection(x) => {
+                let mut children = Vec::with_capacity(x.asts.len());
+                for a in &x.asts {
+                    children.push(self.ast_to_sk(a, translator, tb, out)?);
+                }
+                let node = tb.mk_inters(children.iter().map(|&c| out[c as usize].1));
+                out.push((SkNode::Inter(children), node));
+                Ok(out.len() as u32 - 1)
+            }
+            Ast::Concat(c) => {
+                let mut concat_translator: Option<Translator> = None;
+                let mut children: Vec<u32> = Vec::new();
+                let mut i = 0;
+                while i < c.asts.len() {
+                    let element = &c.asts[i];
+                    match element {
+                        Ast::Flags(f) => {
+                            if f.flags.flag_state(ast::Flag::SwapGreed).is_some() {
+                                return Err(
+                                    self.error(f.span, ast::ErrorKind::UnsupportedResharpRegex)
+                                );
+                            }
+                            let mut translator_builder = self.default_translator_builder();
+                            if let Some(state) = f.flags.flag_state(ast::Flag::CaseInsensitive) {
+                                translator_builder.case_insensitive(state);
+                            }
+                            if let Some(state) = f.flags.flag_state(ast::Flag::Unicode) {
+                                translator_builder.unicode(state);
+                            }
+                            if let Some(state) = f.flags.flag_state(ast::Flag::DotMatchesNewLine) {
+                                self.dot_all.set(state);
+                            }
+                            if let Some(state) = f.flags.flag_state(ast::Flag::MultiLine) {
+                                self.multiline.set(state);
+                            }
+                            concat_translator = Some(translator_builder.build());
+                            *translator = concat_translator.clone();
+                            i += 1;
+                            continue;
+                        }
+                        Ast::Assertion(a)
+                            if a.kind == ast::AssertionKind::WordBoundary
+                                || a.kind == ast::AssertionKind::NotWordBoundary =>
+                        {
+                            let negated = a.kind == ast::AssertionKind::NotWordBoundary;
+                            let (node, next) = self.rewrite_word_boundary_in_concat(
+                                &c.asts, i, translator, tb, negated,
+                            )?;
+                            out.push((SkNode::Leaf, node));
+                            children.push(out.len() as u32 - 1);
+                            i = next;
+                            continue;
+                        }
+                        _ => {}
+                    }
+                    let child = match concat_translator {
+                        Some(_) => self.ast_to_sk(element, &mut concat_translator, tb, out)?,
+                        None => self.ast_to_sk(element, translator, tb, out)?,
+                    };
+                    children.push(child);
+                    i += 1;
+                }
+                let node = tb.mk_concats(children.iter().map(|&c| out[c as usize].1));
+                out.push((SkNode::Concat(children), node));
+                Ok(out.len() as u32 - 1)
+            }
+            Ast::Repetition(r) => {
+                let one = matches!(
+                    r.op.kind,
+                    RepetitionKind::Range(ast::RepetitionRange::Exactly(1))
+                        | RepetitionKind::Range(ast::RepetitionRange::Bounded(1, 1))
+                );
+                if one {
+                    return self.ast_to_sk(&r.ast, translator, tb, out);
+                }
+                let opt = matches!(
+                    r.op.kind,
+                    RepetitionKind::ZeroOrOne
+                        | RepetitionKind::Range(ast::RepetitionRange::Bounded(0, 1))
+                );
+                if opt {
+                    let child = self.ast_to_sk(&r.ast, translator, tb, out)?;
+                    let node = tb.mk_union(NodeId::EPS, out[child as usize].1);
+                    out.push((SkNode::Optional(child), node));
+                    return Ok(out.len() as u32 - 1);
+                }
+                let hi = Self::rep_hi(&r.op.kind);
+                if hi >= 2 && (Self::ast_ambiguous_body(&r.ast) || self.ast_has_capture(&r.ast)) {
+                    let node = self.ast_to_node_id(ast, translator, tb)?;
+                    let child = self.ast_to_sk(&r.ast, translator, tb, out)?;
+                    out.push((SkNode::Repeat(child, Self::rep_lo(&r.op.kind), hi), node));
+                    return Ok(out.len() as u32 - 1);
+                }
+                self.sk_leaf(ast, translator, tb, out)
+            }
+            _ => self.sk_leaf(ast, translator, tb, out),
+        }
     }
 
     #[inline(never)]
@@ -2552,6 +2899,13 @@ impl<'s> ResharpParser<'s> {
                 },
                 ast: Box::new(Ast::empty(self.span())),
             }))
+        } else if self.bump_if("??") {
+            let capture_index = self.next_capture_index(open_span)?;
+            Ok(Either::Right(ast::Group {
+                span: open_span,
+                kind: ast::GroupKind::CaptureAnonymous(capture_index),
+                ast: Box::new(Ast::empty(self.span())),
+            }))
         } else if self.bump_if("?") {
             if self.is_eof() {
                 return Err(self.error(open_span, ast::ErrorKind::GroupUnclosed));
@@ -2581,7 +2935,11 @@ impl<'s> ResharpParser<'s> {
                 }))
             }
         } else {
-            let capture_index = self.next_capture_index(open_span)?;
+            let capture_index = if self.parser().implicit_captures {
+                self.next_capture_index(open_span)?
+            } else {
+                0
+            };
             Ok(Either::Right(ast::Group {
                 span: open_span,
                 kind: ast::GroupKind::CaptureIndex(capture_index),
@@ -3409,6 +3767,49 @@ pub fn parse_ast_with<'s>(
 ) -> std::result::Result<NodeId, ParseError> {
     let mut p: ResharpParser<'s> = ResharpParser::with_flags(pattern, flags);
     p.parse(tb)
+}
+
+/// Same as [`parse_ast_with`], but also returns the name of every capture
+/// group (`(?P<name>...)`/`(?<name>...)`), indexed by capture group number
+/// (i.e. `names[0]` is the name of capture group 1). RE# only supports named
+/// captures, so every entry is `Some`.
+#[derive(Clone, Debug)]
+pub enum SkNode {
+    Leaf,
+    Concat(Vec<u32>),
+    Union(Vec<u32>),
+    Inter(Vec<u32>),
+    Group(u32, u32),
+    Optional(u32),
+    Repeat(u32, u32, u32),
+}
+
+#[derive(Clone, Debug)]
+pub struct Skeleton {
+    pub nodes: Vec<(SkNode, NodeId)>,
+    pub root: u32,
+}
+
+pub fn parse_ast_with_names_and_skeleton<'s>(
+    tb: &mut TB<'s>,
+    pattern: &'s str,
+    flags: &PatternFlags,
+) -> std::result::Result<(NodeId, Vec<Option<String>>, Option<Skeleton>), ParseError> {
+    let mut p: ResharpParser<'s> = ResharpParser::with_flags(pattern, flags);
+    let (node, sk) = p.parse_with_skeleton(tb)?;
+    let names = p.capture_group_names();
+    Ok((node, names, sk))
+}
+
+pub fn parse_ast_with_names<'s>(
+    tb: &mut TB<'s>,
+    pattern: &'s str,
+    flags: &PatternFlags,
+) -> std::result::Result<(NodeId, Vec<Option<String>>), ParseError> {
+    let mut p: ResharpParser<'s> = ResharpParser::with_flags(pattern, flags);
+    let node = p.parse(tb)?;
+    let names = p.capture_group_names();
+    Ok((node, names))
 }
 
 /// Parse a pattern into the raw AST without converting to algebra nodes.

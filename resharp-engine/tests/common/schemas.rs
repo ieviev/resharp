@@ -32,6 +32,8 @@ pub struct EngineCase {
     #[serde(default)]
     pub full: bool,
     #[serde(default)]
+    pub multiline: Option<bool>,
+    #[serde(default)]
     pub prefix_kind: Option<String>,
     #[serde(default)]
     pub not_prefix_kind: Option<String>,
@@ -43,6 +45,40 @@ pub struct EngineCase {
     pub supported: Option<bool>,
     #[serde(default)]
     pub reason: Option<String>,
+}
+
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CapturesFile {
+    #[serde(default)]
+    pub description: Option<String>,
+    pub test: Vec<CapturesCase>,
+}
+
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CapturesCase {
+    pub name: String,
+    pub pattern: String,
+    #[serde(default)]
+    pub input: String,
+    pub matches: Option<Vec<[usize; 2]>>,
+    pub groups: Option<Vec<Vec<Vec<usize>>>>,
+    #[serde(default)]
+    pub ignore: bool,
+    #[serde(default)]
+    pub expect_error: bool,
+    #[serde(default)]
+    pub compile_only: bool,
+    #[serde(default)]
+    pub ascii: bool,
+    #[serde(default)]
+    pub javascript: bool,
+    #[serde(default)]
+    pub full: bool,
+    #[serde(default)]
+    pub implicit_captures: bool,
+    pub kind: Option<String>,
 }
 
 #[derive(Deserialize, JsonSchema)]

@@ -7,7 +7,7 @@ RE# supports standard regex syntax plus three extensions: intersection (`&`), co
 - `&` = AND, `~` = NOT, `|` = OR.
 - `_` matches any byte; for a literal underscore use `\_`.
 - Matches are leftmost-longest: `y|yes` on `"yes"` matches `"yes"`, not `"y"`. Order doesn't matter.
-- `(...)` never captures; RE# does not support capture groups as of now.
+- Captures must be explicit: plain `(...)` is non-capturing. See Experimental features at the end of this file.
 - `^` and `$` are start/end of **line** by default (disable with `(?-m)`); `\A` and `\z` are unconditional start/end of string.
 
 ## Intuition
@@ -21,6 +21,11 @@ _*a_*             any string that contains 'a'
 (_*a_*)&~(_*b_*)  contains 'a' AND does not contain 'b'
 (?<=b)_*&_*(?=a)  preceded by 'b' AND followed by 'a'
 ```
+
+## Unsupported features
+
+- Lazy quantifiers: `*?`, `+?`, `??`, `{n,m}?` produce a parse error.
+- Backreferences: `\1`, `\2`, etc.
 
 ## Extensions
 
@@ -162,7 +167,7 @@ You can also use explicit ranges: `[\u{0900}-\u{097F}]`.
 | `\z` | end of string |
 | `\b` | word boundary (unicode, see below) |
 
-Multiline is on by default; disable with `(?-m)` or `RegexOptions::multi_line(false)`.
+Multiline is on by default; disable with `(?-m)` or `RegexOptions::multiline(false)`.
 
 ### Lookarounds
 
@@ -184,9 +189,9 @@ Lookarounds combine with intersection as expected:
 
 **Restrictions:**
 
-- No nested lookarounds. RE# normalizes every pattern into `(?<=R1)R2(?=R3)`, where R1, R2, R3 are plain regular expressions with no lookbehinds of their own. This is what lets RE# encode lookaround state directly into DFA states and stay linear-time.
+- No nested lookarounds: `(?=ab(?<=b))` is rejected.
 - No lookarounds inside complement (`~(...)`) or stars `*`.
-- No lookbehinds in union when both branches end nullable: `(?<=A)abc|(?<=C)abcd` is rejected (the engine can't tell which lookbehind to enforce). Trivial cases like `(?<=A)B|(?<=C)D` are fine since `B`/`D` disambiguate.
+- No ambiguous lookbehinds. `(?<=A)abc|(?<=C)abcd` is rejected: on `abcd` both branches can match, so the engine cannot tell whether to require `A` or `C` before it. `(?<=A)B|(?<=C)D` is fine, only one branch can ever match.
 
 ### Flags
 
@@ -201,12 +206,18 @@ Flags apply from the point they appear until the end of the enclosing group.
 
 ## Match semantics
 
-Matches are **leftmost-longest**. This differs from most regex engines which use leftmost-greedy (PCRE). Lazy quantifiers (`*?`, `+?`, `??`, `{n,m}?`) are not supported and will produce a parse error.
+Matches are **leftmost-longest**. This differs from most regex engines which use leftmost-greedy (PCRE).
 
-Alternation order does not affect what gets matched; only length does. For `y|yes|n|no` against `yes please`, RE# matches `yes`, while PCRE / Rust `regex` match `y`.
+Alternation order does not affect what gets matched, only length does. For `y|yes|n|no` against `yes please`, RE# matches `yes`, while PCRE / Rust `regex` match `y`.
 
-## Unsupported features
+## Experimental features
 
-- Group captures: `(...)` is always non-capturing. For extracting sub-matches, use lookarounds or a separate engine post-match.
-- Lazy quantifiers: `*?`, `+?`, `??`, `{n,m}?` produce a parse error.
-- Backreferences: `\1`, `\2`, etc.
+**Not recommended for production.** These "exist" but are still evolving, behavior may change.
+
+### Capture groups
+
+- `(\w+)@([\w.]+)` captures nothing, plain `(...)` is non-capturing.
+- `(?<user>\w+)@(?<host>[\w.]+)` captures by name.
+- `(??\w+)@(??[\w.]+)` captures by position.
+
+See `docs/api.md` for the capture API.

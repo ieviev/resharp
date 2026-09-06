@@ -9,12 +9,6 @@ input = "xxxxxANDyyyyy"
 vs_regex = true
 
 [[test]]
-name = "basic_boundary"
-pattern = '(and|AND)\b(.*)'
-input = "xxxxxANDyyyyy"
-vs_regex = true
-
-[[test]]
 name = "wb_bare_11"
 pattern = '\b11\b'
 input = "11"
@@ -193,8 +187,6 @@ name = "wb_alnum_class"
 pattern = '\b[a-zA-Z0-9]+\b'
 input = "foo123 !bar! 42"
 vs_regex = true
-
-
 
 [[test]]
 name = "wb_the_basic"
@@ -461,3 +453,56 @@ pattern = '((?=x?))\B'
 input = "ba c"
 matches = [[1, 1]]
 ascii = true
+
+[[test]]
+name = "word_boundary_at_buffer_start_single_byte"
+pattern = '\ba\b'
+input = "a"
+matches = [[0, 1]]
+ascii = true
+
+[[test]]
+name = "word_boundary_at_buffer_start_before_newline"
+pattern = '\ba\b'
+input = "a\nb"
+matches = [[0, 1]]
+ascii = true
+
+[[test]]
+name = "word_boundary_at_buffer_start_leading_only"
+pattern = '\bx'
+input = "x.y"
+matches = [[0, 1]]
+ascii = true
+
+[[test]]
+name = "word_boundary_then_literal_foo"
+pattern = '\bfoo'
+input = "foo"
+matches = [[0, 3]]
+ascii = true
+
+[[test]]
+name = "word_boundary_around_literal_foo"
+pattern = '\bfoo\b'
+input = "foo"
+matches = [[0, 3]]
+ascii = true
+
+[[test]]
+name = "js_numeric_literal_binary"
+pattern = '0b[01]+(?:\_[01]+)*\b'
+input = "0b1010 0b10_01 0b2 x0b10"
+matches = [[0, 6], [7, 14], [20, 24]]
+
+[[test]]
+name = "js_numeric_literal_octal"
+pattern = '0o[0-7]+(?:\_[0-7]+)*\b'
+input = "0o777 0o7_7 0o8 x0o77"
+matches = [[0, 5], [6, 11], [17, 21]]
+
+[[test]]
+name = "js_numeric_literal_hex"
+pattern = '(?i)0x[0-9a-f]+(?:\_[0-9a-f]+)*\b'
+input = "0xff 0xA_B 0xg x0x1"
+matches = [[0, 4], [5, 10], [16, 19]]

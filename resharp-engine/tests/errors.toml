@@ -273,25 +273,113 @@ expect_error = true
 reason = "grouped lookahead before word boundary rejected"
 
 [[test]]
-name = "non_word_boundary_before_grouped_lookbehind"
-pattern = '\B(?<=b)'
+name = "fused_word_boundary_then_caret_before_begin_anchor"
+pattern = '\b^.*\A'
+ascii = true
 expect_error = true
-reason = "grouped lookbehind after word boundary rejected"
+reason = "UnsupportedPattern"
 
 [[test]]
-name = "non_word_boundary_before_wrapped_lookbehind"
-pattern = '\B((?<=b))'
+name = "fused_word_boundary_then_grouped_caret_before_begin_anchor"
+pattern = '\b(^).*\A[a]{0}((([^.a]))){0,2}'
+ascii = true
 expect_error = true
-reason = "grouped lookbehind after word boundary rejected"
+reason = "UnsupportedPattern"
 
 [[test]]
-name = "non_word_boundary_before_wrapped_lookbehind_plus"
-pattern = '\B((?<=b+))'
+name = "dollar_then_end_anchor_lookahead_then_non_word_boundary"
+pattern = '$(?=\z)\B'
+ascii = true
 expect_error = true
-reason = "grouped lookbehind after word boundary rejected"
+reason = "UnsupportedPattern"
 
 [[test]]
-name = "non_word_boundary_before_wrapped_lookbehind_class_plus"
-pattern = '\B((?<=[b]+))'
+name = "dollar_then_word_boundary"
+pattern = '$\b'
+ascii = true
 expect_error = true
-reason = "grouped lookbehind after word boundary rejected"
+reason = "UnsupportedPattern"
+
+[[test]]
+name = "quantified_end_anchor_lookahead_then_word_boundary"
+pattern = '(?=\z+)\b'
+ascii = true
+expect_error = true
+reason = "UnsupportedPattern"
+
+[[test]]
+name = "quantified_end_anchor_lookahead_then_dollar_then_word_boundary"
+pattern = '(?=\z+)$\b'
+ascii = true
+expect_error = true
+reason = "UnsupportedPattern"
+
+[[test]]
+name = "grouped_quantified_end_anchor_lookahead_then_dollar_then_repeated_word_boundary"
+pattern = '((?=\z+))$.?\b{2}'
+ascii = true
+expect_error = true
+reason = "UnsupportedPattern"
+
+[[test]]
+name = "doubly_negated_nullable_lookbehind_before_word_boundary"
+pattern = '(?<!(?!a*))\b'
+ascii = true
+expect_error = true
+reason = "UnsupportedPattern"
+
+[[test]]
+name = "exact_repeat_of_literal_or_lookbehind_alternation"
+pattern = '(?:b|(?<=(?:-|:))){2}c'
+ascii = true
+expect_error = true
+reason = "UnsupportedPattern: repeat unrolling duplicates a lookbehind-bearing alternation"
+
+[[test]]
+name = "two_two_repeat_of_literal_or_lookbehind_alternation"
+pattern = '(?:b|(?<=(?:-|:))){2,2}c'
+ascii = true
+expect_error = true
+reason = "UnsupportedPattern: repeat unrolling duplicates a lookbehind-bearing alternation"
+
+[[test]]
+name = "two_three_repeat_of_literal_or_lookbehind_alternation"
+pattern = '(?:b|(?<=(?:-|:))){2,3}c'
+ascii = true
+expect_error = true
+reason = "UnsupportedPattern: repeat unrolling duplicates a lookbehind-bearing alternation"
+
+[[test]]
+name = "exact_repeat_of_literal_or_single_byte_lookbehind_alternation"
+pattern = '(?:b|(?<=-)){2}c'
+ascii = true
+expect_error = true
+reason = "UnsupportedPattern: repeat unrolling duplicates a lookbehind-bearing alternation"
+
+[[test]]
+name = "range_bounded_lookbehind_repeat_fails_loud_1"
+pattern = '(?<!(?<!.*)){2,3}${0,0}'
+ascii = true
+expect_error = true
+reason = "UnsupportedPattern: range-bounded repeat of a lookbehind cannot be verified"
+
+[[test]]
+name = "range_bounded_lookbehind_repeat_fails_loud_2"
+pattern = '(?<!a){2,3}${0,0}'
+ascii = true
+expect_error = true
+reason = "UnsupportedPattern: range-bounded repeat of a lookbehind cannot be verified"
+
+[[test]]
+name = "range_bounded_lookbehind_repeat_fails_loud_3"
+pattern = '(?<!(?<!.*)){2,3}'
+ascii = true
+expect_error = true
+reason = "UnsupportedPattern: range-bounded repeat of a lookbehind cannot be verified"
+
+[[test]]
+name = "range_bounded_lookbehind_repeat_fails_loud_4"
+pattern = '(?<!a){2,3}'
+ascii = true
+expect_error = true
+reason = "UnsupportedPattern: range-bounded repeat of a lookbehind cannot be verified"

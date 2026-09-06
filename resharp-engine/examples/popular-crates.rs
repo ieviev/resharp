@@ -1,7 +1,4 @@
 // Most-used regex patterns across crates.io users of the `regex` crate.
-// Source: regex-corpus, reports/crates-regex-usage.md (deduped, self-test
-// and empty-pattern entries excluded).
-//
 // Ranking (crates, occurrences, pattern):
 //   1.  209   272  \s+
 //   2.   81   111  \d+
@@ -28,11 +25,6 @@
 //  23.   20    22  \s{2,}
 //  24.   20    21  [A-Z]
 //  25.   19    24  (?is)<script[^>]*>.*?</script>
-//
-// Plus 5 lookaround patterns (rare in the corpus, <=2 crates each) to
-// exercise resharp's backtracking-free lookaround engine: password-strength,
-// deleted-at-token, decimal-point, attribute-whitespace, username-no-
-// symbols-only (see below).
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion, Throughput};
 use resharp::{Regex, RegexOptions, UnicodeMode};
@@ -66,11 +58,6 @@ fn pcre2_regex(pat: &str) -> pcre2::bytes::Regex {
 const TARGET_LEN: usize = 1 << 20;
 
 // (name, pattern for regex/fancy-regex, pattern for resharp)
-//
-// RE# groups never capture, so most patterns are unchanged. Exception:
-// `script-tag`'s lazy `.*?` has no RE# equivalent (no backtracking); use
-// `~(_*X_*)` ("does not contain X") to get the same "stop at first X"
-// behavior without backtracking, still allowing `<` inside the tag body.
 const SCAN_PATTERNS: &[(&str, &str, &str)] = &[
     ("whitespace", r"\s+", r"\s+"),
     ("digits", r"\d+", r"\d+"),

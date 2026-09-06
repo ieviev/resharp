@@ -90,11 +90,21 @@ fn try_emit_zero_width(
     Ok(false)
 }
 
+fn begin_path_matches(begin_classes: &[crate::accel::TSet], input: &[u8]) -> bool {
+    begin_classes.len() <= input.len()
+        && begin_classes
+            .iter()
+            .enumerate()
+            .all(|(i, class)| class.contains_byte(input[i]))
+}
+
 fn fwd_lb_prefix_impl(
     fwd: &mut ldfa::LDFA,
     b: &mut RegexBuilder,
     lb_len: usize,
     fwd_lb_begin_nullable: bool,
+    fwd_lb_begin_len: usize,
+    fwd_lb_begin_classes: &[crate::accel::TSet],
     body_nullable: bool,
     fwd_prefix: &FwdPrefixSearch,
     input: &[u8],
@@ -102,14 +112,15 @@ fn fwd_lb_prefix_impl(
 ) -> Result<(), Error> {
     let mut search_start = 0;
 
-    if fwd_lb_begin_nullable {
-        if let Some(max_end) = fwd.scan_fwd_optional(b, 0, input)? {
+    if fwd_lb_begin_nullable && begin_path_matches(fwd_lb_begin_classes, input) {
+        let body_start = fwd_lb_begin_len;
+        if let Some(max_end) = fwd.scan_fwd_optional(b, body_start, input)? {
             matches.push(Match {
-                start: 0,
+                start: body_start,
                 end: max_end,
             });
             let mut emitted_zw = false;
-            if max_end > 0 && body_nullable {
+            if max_end > body_start && body_nullable {
                 if try_emit_zero_width(fwd, b, lb_len, fwd_prefix, input, max_end, matches)? {
                     emitted_zw = true;
                 }
@@ -125,6 +136,10 @@ fn fwd_lb_prefix_impl(
 
     while let Some(candidate) = fwd_prefix.find_fwd(input, search_start) {
         let body_start = candidate + lb_len;
+        if body_start > input.len() {
+            search_start = candidate + 1;
+            continue;
+        }
         if let Some(max_end) = fwd.scan_fwd_from(
             b,
             ldfa::DFA_INITIAL as u32,
@@ -195,6 +210,8 @@ impl Regex {
             &mut inner.b,
             self.lb_check_bytes as usize,
             self.fwd_lb_begin_nullable,
+            self.fwd_lb_begin_len as usize,
+            &self.fwd_lb_begin_classes,
             self.fwd_lb_body_nullable,
             fwd_prefix,
             input,

@@ -25,6 +25,8 @@ diag = []
 precompile-tests = []
 # disabled till certain it wont cause blowup
 convergence_prefix = []
+# unstable public API: Regex::captures_all / Captures / capture_names
+experimental_capture_groups = []
 serialize = ["dep:serde", "dep:bincode", "resharp-algebra/serialize"]
 pcre2-bench = ["dep:pcre2"]
 
@@ -38,7 +40,7 @@ pcre2 = { version = "0.2", optional = true }
 
 [dev-dependencies]
 serde = { version = "1", features = ["derive"] }
-resharp = { path = ".", features = ["diag"] }
+resharp = { path = ".", features = ["diag", "experimental_capture_groups"] }
 resharp-algebra.workspace = true
 resharp-parser.workspace = true
 regex-syntax = "0.8.5"
@@ -58,6 +60,11 @@ criterion = "0.5"
 [[bench]]
 name = "comparison"
 harness = false
+
+[[bench]]
+name = "captures"
+harness = false
+required-features = ["experimental_capture_groups"]
 
 [[bench]]
 name = "ismatch"

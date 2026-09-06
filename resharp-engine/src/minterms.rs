@@ -106,7 +106,7 @@ pub fn collect_sets(b: &RegexBuilder, start_id: NodeId) -> HashSet<TSetId> {
         }
         visited.insert(node_id);
         match b.get_kind(node_id) {
-            Kind::Begin | Kind::End => {}
+            Kind::Begin | Kind::End | Kind::Tag => {}
             Kind::Pred => {
                 sets.insert(node_id.pred_tset(b));
             }

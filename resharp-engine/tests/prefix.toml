@@ -329,3 +329,9 @@ name = "interior_single_byte_literal_beats_potential_start"
 pattern = '[^\s@]+@[^\s@]+\.[^\s@]+'
 kind = "Convergence"
 conv_literal = "."
+
+
+[[test]]
+name = "no_convergence_on_unbounded_interior_before_trailing_star"
+pattern = 'x[ax]*c(.|\n)*'
+kind = "None"

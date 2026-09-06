@@ -3,7 +3,7 @@
 [![crates.io](https://img.shields.io/crates/v/resharp.svg)](https://crates.io/crates/resharp)
 [![docs.rs](https://docs.rs/resharp/badge.svg)](https://docs.rs/resharp)
 
-A high-performance, automata-based regex engine with first-class support for **intersection** (`&`), **complement** (`~`). Non-backtracking with linear-time matching. Built for complex patterns (large alternations, lookarounds, boolean combinations) that make traditional engines degrade or fall back to slower paths.
+A high-performance, derivative-based regex engine with first-class support for **intersection** (`&`) and **complement** (`~`). Non-backtracking. Built for complex patterns (large alternations, lookarounds, boolean combinations) that make other engines degrade or fall back to slower paths.
 
 [paper](https://dl.acm.org/doi/10.1145/3704837) | [blog post](https://iev.ee/blog/symbolic-derivatives-and-the-rust-rewrite-of-resharp/) | [syntax docs](https://github.com/ieviev/resharp/blob/main/docs/syntax.md) | [dotnet version](https://github.com/ieviev/resharp-dotnet) and [web playground](https://ieviev.github.io/resharp-webapp/)
 
@@ -14,22 +14,24 @@ cargo add resharp
 ```
 
 ```rust
-// 8+ alphanumeric & contains digit & contains uppercase
+//                             8+ alphanumeric & digit & uppercase
 let re = resharp::Regex::new(r"[A-Za-z0-9]{8,}&_*[0-9]_*&_*[A-Z]_*").unwrap();
 
 let found = re.is_match(b"Hunter2024").unwrap();
 let matches = re.find_all(b"try Hunter2024 or password1").unwrap();
 ```
 
-## When to use RE# over [`regex`](https://crates.io/crates/regex)
+## When to use RE#
 
-RE# operates on `&[u8]` / UTF-8 and aims to match `regex` crate throughput on standard patterns. Use RE# when you need:
+On standard patterns RE# matches [`regex`](https://crates.io/crates/regex) throughput. Key features:
 
-- intersection (`&`), complement (`~`), or lookarounds
+- intersection (`&`), complement (`~`) and lookarounds
 - large alternations with high throughput (at the cost of memory)
+- linear time for **all matches**, see [hardened mode](docs/features.md#hardened-mode)
 - fail-loud behavior: capacity / lookahead overflow returns `Err` instead of silently degrading
 
-RE# is designed around `is_match` and `find_all`. It doesn't provide `find` or `captures`, but for simple cases you can often substitute `find_anchored`, or emulate a capture group with lookarounds. For example, `a(b)c` becomes `(?<=a)b(?=c)`. For anything more involved, use the `regex` crate instead.
+RE# supports `is_match` and `find_all`. No single-match `find`/`captures`, apart from a few special cases like `find_anchored`. See [docs/api.md](docs/api.md) and [docs/features.md](docs/features.md).
+(Capture groups exist behind an experimental feature flag, not recommended for production; see [docs/api.md](docs/api.md).)
 
 ## Syntax extensions
 
@@ -45,26 +47,40 @@ _*a_*             any string that contains 'a'
 (?<=b)_*&_*(?=a)  preceded by 'b' AND followed by 'a'
 ```
 
-You combine all of these with `&` to get more complex patterns. RE# also supports lookarounds (`(?=...)`, `(?<=...)`, `(?!...)`, `(?<!...)`), compiled directly into the automaton with no backtracking.
+You combine all of these with `&` to get more complex patterns. RE# also supports lookarounds (`(?=...)`, `(?<=...)`, `(?!...)`, `(?<!...)`), compiled into the automaton with no backtracking.
 
-## Differences from PCRE / `regex`
+## Differences from PCRE-style engines
 
-- **Leftmost-longest, not leftmost-greedy.** `y|yes` on `"yes"` matches `yes`. Branch order is irrelevant.
-- **Multiline on by default.** `^`/`$` match start/end of line; disable with `(?-m)`. `\A`/`\z` always anchor to input.
-- **`\w` defaults to 2-byte UTF-8.** See [UnicodeMode](docs/syntax.md#unicode).
+- **Leftmost-longest, not leftmost-first.** `y|yes` on `"yes"` matches `yes`. Branch order is irrelevant.
+- **Multiline on by default.** `^`/`$` match start/end of line, disable with `multiline(false)`. `\A`/`\z` match start/end of input.
 
-Lazy quantifiers (`*?`, `+?`, ...) are parse errors; rewrite with complement when possible: `<div>.*?</div>` -> `<div>~(_*</div>_*)</div>`. See [syntax.md](docs/syntax.md) for the rest.
+Lazy quantifiers (`*?`, `+?`, ...) are parse errors: rewrite with complement when possible: `<div>.*?</div>` -> `<div>(.*&~(_*</div>_*))</div>`. [other unsupported features](docs/syntax.md#unsupported-features). Full syntax: [syntax.md](docs/syntax.md).
 
 ## Configuration
 
+All options and their defaults:
+
 ```rust
-let opts = resharp::RegexOptions {
-    max_dfa_capacity: 65535,    // max automata states (default: u16::MAX)
-    lookahead_context_max: 800, // max lookahead context distance (default: 800)
-    hardened: false,            // linear find_all worst-case (slower but safer)
-    unicode: resharp::UnicodeMode::Default, // Ascii | Default | Full | Javascript
+use resharp::{RegexOptions, UnicodeMode};
+
+let defaults = RegexOptions {
+    max_dfa_capacity: u16::MAX as usize, // max cached DFA states
+    lookahead_context_max: 800,          // max lookahead context distance
+    unicode: UnicodeMode::Default,       // Ascii | Default | Full | Javascript
+    case_insensitive: false,
+    dot_matches_new_line: false,         // `.` matches `\n`
+    multiline: true,                     // `^`/`$` match start/end of line
+    ignore_whitespace: false,            // verbose mode
+    hardened: false,                     // true: linear find_all, slower
+    unbounded_size: false,               // lift size caps
     ..Default::default()
 };
+```
+
+Override with the builder methods:
+
+```rust
+let opts = RegexOptions::default().unicode(UnicodeMode::Ascii).hardened(true);
 let re = resharp::Regex::with_options(r"pattern", opts).unwrap();
 ```
 
@@ -77,7 +93,7 @@ node scripts/bench-popular-table.mts
 ```
 
 <!-- POPULAR-BENCH:BEGIN -->
-Full benchmark source: [resharp-engine/examples/popular-crates.rs](resharp-engine/examples/popular-crates.rs). Ratios are vs the fastest per row.
+Full benchmark source: [resharp-engine/examples/popular-crates.rs](resharp-engine/examples/popular-crates.rs).
 
 CPU: AMD Ryzen 7 5800X 8-Core Processor
 
@@ -85,48 +101,50 @@ CPU: AMD Ryzen 7 5800X 8-Core Processor
 
 | Pattern | resharp | regex | fancy-regex | pcre2 |
 |---|---|---|---|---|
-| `\s+` | **376.54 MiB/s (1.00x)** | 154.2 MiB/s (2.44x) | 150.46 MiB/s (2.50x) | 158.71 MiB/s (2.37x) |
-| `\d+` | **1.86 GiB/s (1.00x)** | 417.7 MiB/s (4.55x) | 399.93 MiB/s (4.75x) | 358.99 MiB/s (5.29x) |
-| `.*` | **2.37 GiB/s (1.00x)** | 179.62 MiB/s (13.52x) | 178.81 MiB/s (13.58x) | 772.91 MiB/s (3.14x) |
-| `<[^>]+>` | 2.11 GiB/s (1.52x) | 548.65 MiB/s (5.98x) | 540.81 MiB/s (6.06x) | **3.2 GiB/s (1.00x)** |
-| `\n{3,}` | **20.96 GiB/s (1.00x)** | 14 GiB/s (1.50x) | 13.7 GiB/s (1.53x) | 6.66 GiB/s (3.15x) |
-| `\x1b\[[0-9;]*m` | **11.88 GiB/s (1.00x)** | 8.09 GiB/s (1.47x) | 7.62 GiB/s (1.56x) | 11.03 GiB/s (1.08x) |
-| `\$\{([^}]+)\}` | 5.58 GiB/s (1.86x) | 892.82 MiB/s (11.90x) | 885.68 MiB/s (12.00x) | **10.38 GiB/s (1.00x)** |
-| `<[^>]*>` | 2.85 GiB/s (1.05x) | 538.69 MiB/s (5.68x) | 528.73 MiB/s (5.79x) | **2.99 GiB/s (1.00x)** |
-| `\w+` | **278.02 MiB/s (1.00x)** | 121.11 MiB/s (2.30x) | 111.78 MiB/s (2.49x) | 197.13 MiB/s (1.41x) |
-| `-+` | **6.94 GiB/s (1.00x)** | 2.4 GiB/s (2.89x) | 2.26 GiB/s (3.07x) | 4.49 GiB/s (1.55x) |
-| `test` | 12.34 GiB/s (1.48x) | **18.3 GiB/s (1.00x)** | 15.33 GiB/s (1.19x) | 6.09 GiB/s (3.00x) |
-| `\d+\.\d+\.\d+` | **4.91 GiB/s (1.00x)** | 2.87 GiB/s (1.71x) | 2.81 GiB/s (1.75x) | 393.74 MiB/s (12.77x) |
-| `[0-9]+` | **1.98 GiB/s (1.00x)** | 549.92 MiB/s (3.69x) | 511.46 MiB/s (3.97x) | 1.01 GiB/s (1.96x) |
-| ``([^`]+)`` | 12.84 GiB/s (1.11x) | 8.67 GiB/s (1.64x) | 8.5 GiB/s (1.67x) | **14.22 GiB/s (1.00x)** |
-| `"([^"]+)"` | **5.55 GiB/s (1.00x)** | 3 GiB/s (1.85x) | 2.84 GiB/s (1.95x) | 5.39 GiB/s (1.03x) |
-| `\[([^\]]+)\]\(([^)]+)\)` | 4.94 GiB/s (1.17x) | 573.78 MiB/s (10.30x) | 573.63 MiB/s (10.30x) | **5.77 GiB/s (1.00x)** |
-| `\s{2,}` | 613.54 MiB/s (1.03x) | 631.14 MiB/s (1.00x) | **631.18 MiB/s (1.00x)** | 327.38 MiB/s (1.93x) |
-| `[A-Z]` | **2.23 GiB/s (1.00x)** | 410.38 MiB/s (5.57x) | 405.08 MiB/s (5.64x) | 1.12 GiB/s (1.99x) |
-| `(?is)<script[^>]*>.*?</script>` | 785.35 MiB/s (9.25x) | 631.93 MiB/s (11.50x) | 647.29 MiB/s (11.22x) | **7.1 GiB/s (1.00x)** |
+| `\s+` | **295.24 MiB/s (1.00x)** | 146.08 MiB/s (2.02x) | 135.37 MiB/s (2.18x) | 153.13 MiB/s (1.93x) |
+| `\d+` | **1.76 GiB/s (1.00x)** | 434.06 MiB/s (4.15x) | 423.04 MiB/s (4.26x) | 358.25 MiB/s (5.03x) |
+| `.*` | **2.27 GiB/s (1.00x)** | 186.8 MiB/s (12.47x) | 186.98 MiB/s (12.45x) | 768.24 MiB/s (3.03x) |
+| `<[^>]+>` | 2.09 GiB/s (1.25x) | 530.64 MiB/s (5.03x) | 513.61 MiB/s (5.20x) | **2.61 GiB/s (1.00x)** |
+| `\n{3,}` | **19.68 GiB/s (1.00x)** | 14.36 GiB/s (1.37x) | 13.57 GiB/s (1.45x) | 6.61 GiB/s (2.98x) |
+| `\x1b\[[0-9;]*m` | **11.78 GiB/s (1.00x)** | 7.98 GiB/s (1.48x) | 7.58 GiB/s (1.55x) | 11.07 GiB/s (1.06x) |
+| `\$\{([^}]+)\}` | 5.63 GiB/s (1.89x) | 885.98 MiB/s (12.32x) | 884.81 MiB/s (12.33x) | **10.66 GiB/s (1.00x)** |
+| `<[^>]*>` | 2.82 GiB/s (1.07x) | 531.41 MiB/s (5.80x) | 527.65 MiB/s (5.85x) | **3.01 GiB/s (1.00x)** |
+| `\w+` | **270.3 MiB/s (1.00x)** | 129.23 MiB/s (2.09x) | 114.57 MiB/s (2.36x) | 203.64 MiB/s (1.33x) |
+| `-+` | **6.8 GiB/s (1.00x)** | 2.34 GiB/s (2.91x) | 2.24 GiB/s (3.03x) | 4.49 GiB/s (1.52x) |
+| `test` | 12.06 GiB/s (1.48x) | **17.89 GiB/s (1.00x)** | 15.1 GiB/s (1.19x) | 6.07 GiB/s (2.95x) |
+| `\d+\.\d+\.\d+` | **4.86 GiB/s (1.00x)** | 2.88 GiB/s (1.69x) | 2.82 GiB/s (1.73x) | 395.43 MiB/s (12.59x) |
+| `[0-9]+` | **1.92 GiB/s (1.00x)** | 548.14 MiB/s (3.58x) | 503.93 MiB/s (3.90x) | 997.63 MiB/s (1.97x) |
+| ``([^`]+)`` | 12.99 GiB/s (1.09x) | 8.28 GiB/s (1.71x) | 8.25 GiB/s (1.72x) | **14.17 GiB/s (1.00x)** |
+| `"([^"]+)"` | **5.44 GiB/s (1.00x)** | 2.93 GiB/s (1.85x) | 2.78 GiB/s (1.96x) | 5.43 GiB/s (1.00x) |
+| `\[([^\]]+)\]\(([^)]+)\)` | 4.99 GiB/s (1.13x) | 578.99 MiB/s (9.98x) | 576.55 MiB/s (10.03x) | **5.65 GiB/s (1.00x)** |
+| `\s{2,}` | 609.32 MiB/s (1.04x) | **631.77 MiB/s (1.00x)** | 627.11 MiB/s (1.01x) | 324.2 MiB/s (1.95x) |
+| `[A-Z]` | **2.18 GiB/s (1.00x)** | 405.69 MiB/s (5.51x) | 391.59 MiB/s (5.71x) | 1.12 GiB/s (1.96x) |
+| `(?is)<script[^>]*>.*?</script>` \* | 807.97 MiB/s (8.97x) | 651.21 MiB/s (11.13x) | 637.2 MiB/s (11.38x) | **7.08 GiB/s (1.00x)** |
 
 ### Validate (is_match on a single value), latency
 
 | Pattern | resharp | regex | fancy-regex | pcre2 |
 |---|---|---|---|---|
-| `^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9....` | 42.58 ns (1.17x) | 42.55 ns (1.17x) | 38.89 ns (1.07x) | **36.29 ns (1.00x)** |
-| `^\d{4}-\d{2}-\d{2}$` | 22.83 ns (1.04x) | 23.52 ns (1.08x) | **21.86 ns (1.00x)** | 27.54 ns (1.26x) |
-| `^$` | **2.77 ns (1.00x)** | 17.27 ns (6.23x) | 14.29 ns (5.15x) | 18.23 ns (6.58x) |
-| `^\d+$` | 23.52 ns (1.09x) | 23.5 ns (1.09x) | **21.52 ns (1.00x)** | 28.96 ns (1.35x) |
-| `^[a-zA-Z_][a-zA-Z0-9_]*$` | 34.59 ns (1.24x) | 33.76 ns (1.21x) | 30.49 ns (1.09x) | **27.97 ns (1.00x)** |
-| `^[a-zA-Z0-9_-]+$` | 34.42 ns (1.17x) | 33.74 ns (1.15x) | 30.31 ns (1.03x) | **29.36 ns (1.00x)** |
+| `^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9....` | 43.45 ns (1.20x) | 43.08 ns (1.19x) | 39.3 ns (1.09x) | **36.22 ns (1.00x)** |
+| `^\d{4}-\d{2}-\d{2}$` | 22.88 ns (1.05x) | 22.57 ns (1.04x) | **21.75 ns (1.00x)** | 27.97 ns (1.29x) |
+| `^$` | **2.76 ns (1.00x)** | 18.05 ns (6.55x) | 14.29 ns (5.18x) | 18.56 ns (6.73x) |
+| `^\d+$` | 24.04 ns (1.07x) | 23.77 ns (1.06x) | **22.46 ns (1.00x)** | 30.05 ns (1.34x) |
+| `^[a-zA-Z_][a-zA-Z0-9_]*$` | 35.05 ns (1.10x) | 34.92 ns (1.10x) | **31.81 ns (1.00x)** | 32.37 ns (1.02x) |
+| `^[a-zA-Z0-9_-]+$` | 35.67 ns (1.20x) | 34.64 ns (1.17x) | 31.28 ns (1.05x) | **29.66 ns (1.00x)** |
 
-### Lookaround (rare in the corpus)
-
-| Pattern | resharp | fancy-regex | pcre2 |
-|---|---|---|---|
-| `(?<!_)deleted_at(?!_)` | **8.37 GiB/s (1.00x)** | 37.55 MiB/s (228.26x) | 6.33 GiB/s (1.32x) |
-| `(?<=\d)\.(?=\S)` | 2.62 GiB/s (1.23x) | 31.27 MiB/s (105.56x) | **3.22 GiB/s (1.00x)** |
-| `(?<="\|')\s+(?=[^<>\s]+=)` | **2.53 GiB/s (1.00x)** | 39.51 MiB/s (65.48x) | 417.48 MiB/s (6.20x) |
+### Lookaround scan
 
 | Pattern | resharp | fancy-regex | pcre2 |
 |---|---|---|---|
-| `^(?=.*[a-z])(?=.*[A-Z])(?=.*\d...` | **21.28 ns (1.00x)** | 425.63 ns (20.00x) | 63.45 ns (2.98x) |
-| `^(?![-_]*$)[A-Za-z0-9][A-Za-z0...` | **19.95 ns (1.00x)** | 351.86 ns (17.64x) | 28.75 ns (1.44x) |
+| `(?<!_)deleted_at(?!_)` \* | **8.32 GiB/s (1.00x)** | 37.6 MiB/s (226.64x) | 6.24 GiB/s (1.33x) |
+| `(?<=\d)\.(?=\S)` | 2.61 GiB/s (1.19x) | 32.87 MiB/s (97.06x) | **3.12 GiB/s (1.00x)** |
+| `(?<="\|')\s+(?=[^<>\s]+=)` | **2.55 GiB/s (1.00x)** | 39.62 MiB/s (65.84x) | 406.05 MiB/s (6.42x) |
+
+### Lookaround validate
+
+| Pattern | resharp | fancy-regex | pcre2 |
+|---|---|---|---|
+| `^(?=.*[a-z])(?=.*[A-Z])(?=.*\d...` | **21.28 ns (1.00x)** | 414.81 ns (19.50x) | 65.23 ns (3.07x) |
+| `^(?![-_]*$)[A-Za-z0-9][A-Za-z0...` \* | **19.94 ns (1.00x)** | 352.32 ns (17.67x) | 31.32 ns (1.57x) |
 
 <!-- POPULAR-BENCH:END -->

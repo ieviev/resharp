@@ -3,7 +3,8 @@ use std::collections::{HashMap, HashSet};
 use rustc_hash::FxHashMap;
 
 use resharp_algebra::nulls::{
-    EID_NONE, NullState, Nullability, StartPositions, NullsId, collect_nulls,
+    EID_ALWAYS0, EID_BEGIN0, EID_CENTER0, EID_END0, EID_NONE, NullState, Nullability,
+    StartPositions, NullsId, collect_nulls,
 };
 pub(crate) use resharp_algebra::nulls::has_any_null;
 use resharp_algebra::solver::{Solver, TSetId};
@@ -265,11 +266,15 @@ impl LDFA {
         let mut begin_table = vec![DFA_DEAD; minterms.len()];
         for (idx, mt) in minterms.iter().enumerate() {
             let mut t = transition_term(b, der0, *mt);
+            #[cfg(feature = "debug")]
+            eprintln!("[begin_table] mt_idx={idx} pre_prune={}", b.pp(t));
             if is_forward {
                 t = b.prune_fwd(t, &mut prune_memo);
             } else {
                 t = b.prune_rev(t, &mut prune_memo);
             }
+            #[cfg(feature = "debug")]
+            eprintln!("[begin_table] mt_idx={idx} post_prune={}", b.pp(t));
             let sid = register_state(
                 &mut state_nodes,
                 &mut node_to_state,
@@ -294,9 +299,6 @@ impl LDFA {
             center_table[dfa_delta(DFA_DEAD as u32, mt_idx as u32, mt_log)] = DFA_DEAD;
         }
 
-        while effects.len() < b.nulls_count() {
-            effects.push(b.nulls_entry_vec(effects.len() as u32));
-        }
         let skip_ids = vec![0u8; state_nodes.len()];
         let mut dfa = LDFA {
             pruned: pruned_sid,
@@ -877,6 +879,7 @@ impl LDFA {
         b: &mut RegexBuilder,
         conv_b: Option<&mut LDFA>,
         prev_entry: &mut usize,
+        pending_entry: &mut usize,
     ) -> Result<(u32, usize, bool), Error> {
         if self.can_skip() {
             collect_rev::<EARLY_EXIT, true>(
@@ -890,6 +893,7 @@ impl LDFA {
                 b,
                 conv_b,
                 prev_entry,
+                pending_entry,
             )
         } else {
             collect_rev::<EARLY_EXIT, false>(
@@ -903,6 +907,7 @@ impl LDFA {
                 b,
                 None,
                 prev_entry,
+                pending_entry,
             )
         }
     }
@@ -914,6 +919,12 @@ impl LDFA {
         pos_begin: usize,
         data: &[u8],
     ) -> Result<Option<usize>, Error> {
+        if pos_begin >= data.len() {
+            let query = if pos_begin == 0 { Nullability::EMPTYSTRING } else { Nullability::END };
+            let max_end = if self.initial_nullability.has(query) { pos_begin } else { NO_MATCH };
+            return Ok(found(max_end));
+        }
+
         let mut max_end: usize = if self.initial_nullability.has(if pos_begin == 0 {
             Nullability::BEGIN
         } else {
@@ -999,17 +1010,181 @@ impl LDFA {
         Ok(found(max_end))
     }
 
-    #[allow(dead_code)]
-    pub fn scan_fwd_all_nulls_from(
+    fn collect_fwd_ends(&self, state: u32, pos: usize, len: usize, out: &mut Vec<usize>) {
+        let eid = self.effects_id[state as usize] as u32;
+        match eid {
+            EID_NONE => {}
+            EID_CENTER0 => {
+                if pos < len {
+                    out.push(pos);
+                }
+            }
+            EID_ALWAYS0 => out.push(pos),
+            EID_BEGIN0 => {
+                if pos == 0 {
+                    out.push(pos);
+                }
+            }
+            EID_END0 => {
+                if pos == len {
+                    out.push(pos);
+                }
+            }
+            _ => {
+                for n in &self.effects[eid as usize] {
+                    let Some(e) = pos.checked_sub(n.rel as usize) else { continue };
+                    let ctx = if len == 0 {
+                        Nullability::EMPTYSTRING
+                    } else if e == 0 {
+                        Nullability::BEGIN
+                    } else if e == len {
+                        Nullability::END
+                    } else {
+                        Nullability::CENTER
+                    };
+                    if n.mask.has(ctx) {
+                        out.push(e);
+                    }
+                }
+            }
+        }
+    }
+
+    fn rev_ctx_at(pos: usize, len: usize) -> Nullability {
+        if len == 0 {
+            Nullability::EMPTYSTRING
+        } else if pos == len {
+            Nullability::BEGIN
+        } else if pos == 0 {
+            Nullability::END
+        } else {
+            Nullability::CENTER
+        }
+    }
+
+    fn collect_initial_nulls(&self, pos: usize, ctx: Nullability, out: &mut Vec<usize>) {
+        let eid = self.effects_id[DFA_INITIAL as usize] as u32;
+        match eid {
+            EID_NONE => {}
+            EID_ALWAYS0 => out.push(pos),
+            EID_CENTER0 => {
+                if ctx.has(Nullability::CENTER) {
+                    out.push(pos);
+                }
+            }
+            EID_BEGIN0 => {
+                if ctx.has(Nullability::BEGIN) {
+                    out.push(pos);
+                }
+            }
+            EID_END0 => {
+                if ctx.has(Nullability::END) {
+                    out.push(pos);
+                }
+            }
+            _ => {
+                for n in &self.effects[eid as usize] {
+                    if n.rel == 0 && n.mask.has(ctx) {
+                        out.push(pos);
+                    }
+                }
+            }
+        }
+    }
+
+    fn collect_rev_starts(&self, state: u32, pos: usize, len: usize, out: &mut Vec<usize>) {
+        let eid = self.effects_id[state as usize] as u32;
+        match eid {
+            EID_NONE => {}
+            EID_CENTER0 => {
+                if pos > 0 && pos < len {
+                    out.push(pos);
+                }
+            }
+            EID_ALWAYS0 => out.push(pos),
+            EID_BEGIN0 => {
+                if pos == len {
+                    out.push(pos);
+                }
+            }
+            EID_END0 => {
+                if pos == 0 {
+                    out.push(pos);
+                }
+            }
+            _ => {
+                for n in &self.effects[eid as usize] {
+                    let resolved = pos + n.rel as usize;
+                    if resolved > len {
+                        continue;
+                    }
+                    if n.mask.has(Self::rev_ctx_at(resolved, len)) {
+                        out.push(resolved);
+                    }
+                }
+            }
+        }
+    }
+
+    pub fn scan_rev_all_nulls_from(
+        &mut self,
+        b: &mut RegexBuilder,
+        from: usize,
+        data: &[u8],
+        out: &mut Vec<usize>,
+    ) -> Result<(), Error> {
+        debug_assert!(from <= data.len());
+        let len = data.len();
+        self.collect_initial_nulls(from, Self::rev_ctx_at(from, len), out);
+        if from == 0 {
+            return Ok(());
+        }
+        let mt = self.mt_lookup[data[from - 1] as usize];
+        let mut curr = if from == len {
+            self.begin_table[mt as usize] as u32
+        } else {
+            self.lazy_transition(b, self.pruned, mt as u32)? as u32
+        };
+        if curr <= DFA_DEAD as u32 {
+            return Ok(());
+        }
+        let mut pos = from - 1;
+        self.collect_rev_starts(curr, pos, len, out);
+        while pos > 0 && curr > DFA_DEAD as u32 {
+            let mt = self.mt_lookup[data[pos - 1] as usize] as u32;
+            curr = self.lazy_transition(b, as_sid(curr)?, mt)? as u32;
+            pos -= 1;
+            if curr <= DFA_DEAD as u32 {
+                break;
+            }
+            self.collect_rev_starts(curr, pos, len, out);
+        }
+        Ok(())
+    }
+
+    pub fn scan_fwd_all_nulls_to(
         &mut self,
         b: &mut RegexBuilder,
         pos_begin: usize,
+        hi: usize,
         data: &[u8],
-        nulls: &mut StartPositions,
+        out: &mut Vec<usize>,
     ) -> Result<(), Error> {
-        let query0 = if pos_begin == 0 { Nullability::BEGIN } else { Nullability::CENTER };
-        if self.initial_nullability.has(query0) {
-            nulls.add(pos_begin);
+        debug_assert!(hi <= data.len());
+        debug_assert!(pos_begin <= hi);
+        let len = data.len();
+        let ctx = if len == 0 {
+            Nullability::EMPTYSTRING
+        } else if pos_begin == 0 {
+            Nullability::BEGIN
+        } else if pos_begin == len {
+            Nullability::END
+        } else {
+            Nullability::CENTER
+        };
+        self.collect_initial_nulls(pos_begin, ctx, out);
+        if pos_begin >= hi || pos_begin >= len {
+            return Ok(());
         }
 
         let mt = self.mt_lookup[data[pos_begin] as usize];
@@ -1024,15 +1199,15 @@ impl LDFA {
         let end = data.len();
         let mut pos = pos_begin + 1;
 
-        collect_nulls(&self.effects_id, &self.effects, curr, pos, center_or_end(pos == end), nulls);
-        while pos < end && curr > DFA_DEAD as u32 {
+        self.collect_fwd_ends(curr, pos, end, out);
+        while pos < hi && curr > DFA_DEAD as u32 {
             let mt = self.mt_lookup[data[pos] as usize] as u32;
             curr = self.lazy_transition(b, as_sid(curr)?, mt)? as u32;
             pos += 1;
             if curr <= DFA_DEAD as u32 {
                 break;
             }
-            collect_nulls(&self.effects_id, &self.effects, curr, pos, center_or_end(pos == end), nulls);
+            self.collect_fwd_ends(curr, pos, end, out);
         }
 
         Ok(())
@@ -1553,6 +1728,7 @@ impl LDFA {
 
         let mut pos = start_pos;
         let mut prev_entry = usize::MAX;
+        let mut pending_entry = usize::MAX;
 
         loop {
             let tables = self.scan_tables(data);
@@ -1565,6 +1741,7 @@ impl LDFA {
                 b,
                 None,
                 &mut prev_entry,
+                &mut pending_entry,
             )?;
 
             if EARLY_EXIT && !nulls.is_empty() {
@@ -1627,6 +1804,7 @@ impl LDFA {
         }
 
         let mut prev_entry = usize::MAX;
+        let mut pending_entry = usize::MAX;
 
         loop {
             let tables = self.scan_tables(data);
@@ -1639,6 +1817,7 @@ impl LDFA {
                 b,
                 conv_b.as_deref_mut(),
                 &mut prev_entry,
+                &mut pending_entry,
             )?;
 
             if EARLY_EXIT && !nulls.is_empty() {
@@ -1652,14 +1831,7 @@ impl LDFA {
                 pos = new_pos + 1;
                 continue;
             } else {
-                let new_state = self.handle_rev_end(b, as_sid(state)?, data, nulls)?;
-                let needs_retry = new_state == self.pruned
-                    || nulls.min_pos().map_or(true, |min| min >= prev_entry);
-                if prev_entry != usize::MAX && prev_entry > 0 && needs_retry {
-                    curr = self.pruned as u32;
-                    pos = prev_entry;
-                    continue;
-                }
+                let _ = self.handle_rev_end(b, as_sid(state)?, data, nulls)?;
                 break;
             }
         }

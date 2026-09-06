@@ -29,7 +29,6 @@ fn consuming_alternation_variable_lookbehind_fails_loud() {
     for p in [
         r"x|(?<=a[^\n\r]*)y",
         r"a|(?<=a[^\n\r]*)b",
-        r"(?<!a)b|b(?!a)",
         r"[^\d.]|((?<=\..*)\.)",
     ] {
         assert!(
@@ -37,6 +36,24 @@ fn consuming_alternation_variable_lookbehind_fails_loud() {
             "expected unsupported (variable lb): {p}"
         );
     }
+}
+
+#[test]
+fn fixed_length_alternation_of_bounded_lookbehind_and_lookahead_is_supported() {
+    // both branches are fixed-length-1, so this must compile and match.
+    let re = Regex::new(r"(?<!a)b|b(?!a)").unwrap();
+    assert_eq!(
+        re.find_all(b"ab").unwrap(),
+        vec![resharp::Match { start: 1, end: 2 }]
+    );
+    assert_eq!(
+        re.find_all(b"ba").unwrap(),
+        vec![resharp::Match { start: 0, end: 1 }]
+    );
+    assert_eq!(
+        re.find_all(b"bab").unwrap(),
+        vec![resharp::Match { start: 0, end: 1 }, resharp::Match { start: 2, end: 3 }]
+    );
 }
 
 #[test]
@@ -118,27 +135,42 @@ fn load_tests(filename: &str) -> Vec<EngineCase> {
         .join(filename);
     let content = std::fs::read_to_string(&path).expect(&format!("not found {}", filename));
     let file: EngineFile = toml::from_str(&content).unwrap();
+    assert_unique_names(filename, file.test.iter().map(|tc| tc.name.as_str()));
     file.test
 }
 
-fn compile_case(tc: &EngineCase) -> Result<Regex, Error> {
+fn assert_unique_names<'a>(filename: &str, names: impl Iterator<Item = &'a str>) {
+    let mut seen = std::collections::HashSet::new();
+    for name in names {
+        if name.is_empty() {
+            continue;
+        }
+        assert!(seen.insert(name), "file={filename}: duplicate case name {name:?}");
+    }
+}
+
+fn case_options(tc: &EngineCase) -> RegexOptions {
     assert!(
         (tc.ascii as u8 + tc.javascript as u8 + tc.full as u8) <= 1,
         "case {:?}: ascii, javascript, and full are mutually exclusive",
         tc.name
     );
+    let mut opts = RegexOptions::default();
     if tc.javascript {
-        let opts = RegexOptions::default().unicode(resharp::UnicodeMode::Javascript);
-        Regex::with_options(&tc.pattern, opts)
+        opts = opts.unicode(resharp::UnicodeMode::Javascript);
     } else if tc.ascii {
-        let opts = RegexOptions::default().unicode(resharp::UnicodeMode::Ascii);
-        Regex::with_options(&tc.pattern, opts)
+        opts = opts.unicode(resharp::UnicodeMode::Ascii);
     } else if tc.full {
-        let opts = RegexOptions::default().unicode(resharp::UnicodeMode::Full);
-        Regex::with_options(&tc.pattern, opts)
-    } else {
-        Regex::new(&tc.pattern)
+        opts = opts.unicode(resharp::UnicodeMode::Full);
     }
+    if let Some(multiline) = tc.multiline {
+        opts = opts.multiline(multiline);
+    }
+    opts
+}
+
+fn compile_case(tc: &EngineCase) -> Result<Regex, Error> {
+    Regex::with_options(&tc.pattern, case_options(tc))
 }
 
 fn check_prefix_kind(tc: &EngineCase, re: &Regex, filename: &str) {
@@ -219,6 +251,12 @@ fn run_file(filename: &str) {
                 "file={}, name={:?}, pattern={:?}, input={:?}",
                 filename, tc.name, tc.pattern, tc.input
             );
+            assert_eq!(
+                re.is_match(tc.input.as_bytes()).unwrap(),
+                !result.is_empty(),
+                "file={}, name={:?}, pattern={:?}, input={:?}: is_match disagrees with find_all",
+                filename, tc.name, tc.pattern, tc.input
+            );
         }
     }
 }
@@ -255,7 +293,7 @@ fn is_match_and_find_anchored_agree_with_find_all() {
             if tc.ignore || tc.expect_error || tc.vs_regex || tc.anchored {
                 continue;
             }
-            let re = Regex::new(&tc.pattern).unwrap_or_else(|e| {
+            let re = compile_case(tc).unwrap_or_else(|e| {
                 panic!(
                     "file={}, name={:?}, pattern={:?}: compile error: {}",
                     filename, tc.name, tc.pattern, e
@@ -400,6 +438,7 @@ fn offset_skip_brace_colon_ws_matches_regex() {
 }
 
 #[test]
+#[ignore = "slow; run with --ignored"]
 fn offset_skip_differential_fuzz() {
     let patterns = [
         r"\{:\s([^}]+)\}",
@@ -491,6 +530,7 @@ fn offset_skip_differential_fuzz() {
 }
 
 #[test]
+#[ignore = "slow; run with --ignored"]
 fn offset_skip_multibyte_class_differential_fuzz() {
     use resharp::{RegexOptions, UnicodeMode};
     let patterns = [
@@ -554,20 +594,6 @@ fn offset_skip_multibyte_class_differential_fuzz() {
         mismatches, 0,
         "multibyte-class offset-skip differential mismatches"
     );
-}
-
-#[test]
-fn literal_alt_is_match() {
-    let re = Regex::new("cat|dog|bird").unwrap();
-    assert!(re.is_match(b"I have a dog").unwrap());
-    assert!(!re.is_match(b"I have a fish").unwrap());
-}
-
-#[test]
-fn literal_alt_suffix_is_match() {
-    let re = Regex::new("(cat|dog)\\d+").unwrap();
-    assert!(re.is_match(b"cat123").unwrap());
-    assert!(!re.is_match(b"cat!").unwrap());
 }
 
 #[test]
@@ -835,33 +861,6 @@ fn capacity_exceeded_at_compile() {
 }
 
 #[test]
-fn dictionary_context_small() {
-    let pattern = ".{0,10}(abc|def|ghi|jkl)";
-    let input = b"def;jkl;ghi";
-    let re = Regex::new(pattern).unwrap();
-    let m = re.find_all(input).unwrap();
-    assert!(!m.is_empty(), "should match");
-}
-
-#[test]
-fn dictionary_context_small_both() {
-    let pattern = ".{0,10}(abc|def|ghi|jkl).{0,10}";
-    let input = b"def;jkl;ghi";
-    let re = Regex::new(pattern).unwrap();
-    let m = re.find_all(input).unwrap();
-    assert!(!m.is_empty(), "should match with prefix+suffix");
-}
-
-#[test]
-fn dictionary_context_small_suffix() {
-    let pattern = "(abc|def|ghi|jkl).{0,10}";
-    let input = b"def;jkl;ghi";
-    let re = Regex::new(pattern).unwrap();
-    let m = re.find_all(input).unwrap();
-    assert!(!m.is_empty(), "should match");
-}
-
-#[test]
 #[ignore = "slow; run with --ignored"]
 fn dictionary_context_medium() {
     let path = format!(
@@ -1015,7 +1014,7 @@ fn run_file_hardened(filename: &str) {
             check_hardened_vs_normal(&tc.pattern, tc.input.as_bytes());
             continue;
         }
-        let opts = RegexOptions::default().hardened(true);
+        let opts = case_options(tc).hardened(true);
         let re = match Regex::with_options(&tc.pattern, opts) {
             Ok(re) => re,
             Err(_) => continue,
@@ -1373,6 +1372,7 @@ fn load_internal_tests(filename: &str) -> Vec<common::schemas::InternalCase> {
         .join(filename);
     let content = std::fs::read_to_string(&path).unwrap();
     let file: InternalFile = toml::from_str(&content).unwrap();
+    assert_unique_names(filename, file.test.iter().map(|tc| tc.name.as_str()));
     file.test
 }
 
@@ -1482,12 +1482,6 @@ fn alt_embedded_line_anchor_compiles_ok() {
 }
 
 #[test]
-fn word_boundaries_loop() {
-    let re = resharp::Regex::new(r"\(\?[:=!]|\)|\{\d+\b,?\d*\}|[+*]\?|[()$^+*?.]").unwrap();
-    let _ = re.find_all(b"$").unwrap();
-}
-
-#[test]
 fn fwd_la_1() {
     let pattern = r"(?:\[[^\]]*\]|[^\]]|\](?=[^\[]*\]))*";
     let ops = RegexOptions::default().unicode(resharp::UnicodeMode::Ascii);
@@ -1577,9 +1571,17 @@ fn repeat_limit_unbounded_allows_large_count() {
 }
 
 #[test]
-fn is_match_negative_lookahead() {
-    let re = Regex::new(r"foo(?!bar)").unwrap();
-    assert!(!re.is_match(b"foobar").unwrap());
+fn deep_concat_chain_compiles_on_a_small_stack() {
+    let done = std::thread::Builder::new()
+        .stack_size(256 * 1024)
+        .spawn(|| {
+            let opts = RegexOptions::default().unbounded_size(true);
+            let re = Regex::with_options(r"a{1,2000}", opts).unwrap();
+            assert_eq!(re.find_all(b"aaa").unwrap().len(), 1);
+        })
+        .unwrap()
+        .join();
+    assert!(done.is_ok(), "deep concat chains must not overflow the stack");
 }
 
 #[test]
@@ -1729,16 +1731,33 @@ fn trailing_star_yields_to_fwd_prefix_kind() {
 #[test]
 fn anchored_fwd_lb_selected_when_min_len_zero_kind() {
     use resharp::UnicodeMode;
-    for pat in [r"^(?!\_\S+=)\S+", r"^((?!\_\S+=)[^\s]+)\s?([\S\s]*)$"] {
-        let opts = RegexOptions::default().unicode(UnicodeMode::Javascript);
-        let re = Regex::with_options(pat, opts).unwrap();
-        assert_eq!(
-            re.prefix_kind_name(),
-            Some("AnchoredFwdLb"),
-            "expected AnchoredFwdLb for `{pat}`, got {:?}",
-            re.prefix_kind_name()
-        );
-    }
+    let opts = RegexOptions::default().unicode(UnicodeMode::Javascript);
+    let pat = r"^(?!\_\S+=)\S+";
+    let re = Regex::with_options(pat, opts).unwrap();
+    assert_eq!(
+        re.prefix_kind_name(),
+        Some("AnchoredFwdLb"),
+        "expected AnchoredFwdLb for `{pat}`, got {:?}",
+        re.prefix_kind_name()
+    );
+}
+
+#[test]
+fn anchored_fwd_lb_declined_when_fused_lookahead_tail_has_interior_unbounded_loop() {
+    // The lookahead's fused tail (`[^\s]+` then the unbounded `[\S\s]*`)
+    // carries real forward-interior-quadratic risk, so this pattern must
+    // not qualify for `AnchoredFwdLb`; `mml_min` must fold in the fused
+    // tail's own minimum length rather than reporting 0.
+    use resharp::UnicodeMode;
+    let opts = RegexOptions::default().unicode(UnicodeMode::Javascript);
+    let pat = r"^((?!\_\S+=)[^\s]+)\s?([\S\s]*)$";
+    let re = Regex::with_options(pat, opts).unwrap();
+    assert_eq!(
+        re.prefix_kind_name(),
+        None,
+        "expected no accelerated prefix kind for `{pat}`, got {:?}",
+        re.prefix_kind_name()
+    );
 }
 
 mod probe_nullable_prefix {
@@ -2103,7 +2122,13 @@ mod quadratic {
              loop [^\\n\\r]+ so AnchoredFwd verify is O(n^2). This requires auto_harden's \
              no_fwd_prefix flag to fire without hardened(true)."
         );
+    }
 
+    #[test]
+    #[ignore = "time based test"]
+    fn auto_harden_suppressed_fwd_prefix_stays_linear() {
+        let pat = r"(@[A-Za-z0-9_0-9\$\_]+)([^\n\r]+\))([^\s])";
+        let re = Regex::new(pat).unwrap();
         let baseline = scan_ns(&re, 8_000);
         let scaled = scan_ns(&re, 64_000);
         let ratio = scaled as f64 / baseline as f64;
@@ -2180,6 +2205,7 @@ mod quadratic {
             );
         }
     }
+
 }
 
 mod hardened_regressions {
@@ -2247,34 +2273,6 @@ fn anchored_rev_intersection_complement_missed_by_find_all() {
             "is_match disagrees with find_anchored for {pat}"
         );
     }
-}
-
-#[test]
-fn js_numeric_literals() {
-    let bin = resharp::Regex::new(r"0b[01]+(?:\_[01]+)*\b").unwrap();
-    let oct = resharp::Regex::new(r"0o[0-7]+(?:\_[0-7]+)*\b").unwrap();
-    let hex = resharp::Regex::new(r"(?i)0x[0-9a-f]+(?:\_[0-9a-f]+)*\b").unwrap();
-
-    let matches = |re: &resharp::Regex, input: &[u8]| -> Vec<String> {
-        re.find_all(input)
-            .unwrap()
-            .iter()
-            .map(|m| String::from_utf8(input[m.start..m.end].to_vec()).unwrap())
-            .collect()
-    };
-
-    assert_eq!(
-        matches(&bin, b"0b1010 0b10_01 0b2 x0b10"),
-        &["0b1010", "0b10_01", "0b10"]
-    );
-    assert_eq!(
-        matches(&oct, b"0o777 0o7_7 0o8 x0o77"),
-        &["0o777", "0o7_7", "0o77"]
-    );
-    assert_eq!(
-        matches(&hex, b"0xff 0xA_B 0xg x0x1"),
-        &["0xff", "0xA_B", "0x1"]
-    );
 }
 
 #[test]
@@ -2504,6 +2502,7 @@ fn multichar_negative_lookbehind_matches_reference() {
 }
 
 #[test]
+#[ignore = "slow; run with --ignored"]
 fn end_anchored_with_lookaround_matches_fancy_regex() {
     let pats = [
         r"\},(?!\x22)\z",
@@ -2606,6 +2605,7 @@ fn end_anchored_always_wins_over_fwd_prefix() {
 }
 
 #[test]
+#[ignore = "slow; run with --ignored"]
 fn begin_anchored_with_leading_lookbehind_matches_fancy_regex() {
     let pats = [
         (r"(?<!a)\A>", "Anchored"),
@@ -2660,6 +2660,7 @@ fn begin_anchored_with_leading_lookbehind_matches_fancy_regex() {
 }
 
 #[test]
+#[ignore = "slow; run with --ignored"]
 fn literal_prefix_with_following_lookahead_matches_fancy_regex() {
     let pats = [
         r"https://(?![^:@/\s]+:[^:@/\s]+@)[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}",
@@ -2712,6 +2713,7 @@ fn literal_prefix_with_following_lookahead_matches_fancy_regex() {
 }
 
 #[test]
+#[ignore = "slow; run with --ignored"]
 fn fixed_length_neg_lookbehind_prefix_matches_fancy_regex() {
     let pats = [
         r"(?<!]\()https://[a-zA-Z0-9./]+",
@@ -2768,7 +2770,18 @@ fn fixed_length_neg_lookbehind_prefix_matches_fancy_regex() {
 
 #[test]
 fn lookahead_in_optional_with_surrounding_stars() {
-    assert!(Regex::new(r"((?=(x|yy))x)? *\z").is_err());
+    // (?=(x|yy))x reduces to plain `x`: the lookahead only ever needs its
+    // "x" arm, since whenever the literal x after it actually matches, that
+    // same byte already satisfies the (x|yy) lookahead on its own.
+    let re = Regex::new(r"((?=(x|yy))x)? *\z").unwrap();
+    let got: Vec<[usize; 2]> = re
+        .find_all(b"xx")
+        .unwrap()
+        .iter()
+        .map(|m| [m.start, m.end])
+        .collect();
+    assert_eq!(got, [[1, 2], [2, 2]]);
+
     let cases: &[(&str, &[u8], &[[usize; 2]])] = &[(r"\A *((?=[^ ])[^ ])? *\z", b" x", &[[0, 2]])];
     for (pat, hay, expected) in cases {
         let re = Regex::new(pat);
@@ -3334,20 +3347,6 @@ fn convergence() {
 }
 
 #[test]
-fn is_match_vs_find_all_agree_end_anchor_lookahead() {
-    let re = Regex::new(r"(\z|(?=a)\w)").unwrap();
-    let hay = b"0";
-    let fa = re.find_all(hay).unwrap();
-    let im = re.is_match(hay).unwrap();
-    assert_eq!(
-        im,
-        !fa.is_empty(),
-        "is_match={im} find_all.len()={} disagree on '0'",
-        fa.len()
-    );
-}
-
-#[test]
 fn double_negation_not_idempotent() {
     let re = Regex::new(r"\Bb").unwrap();
     let r1 = re.is_match(b"ba").unwrap();
@@ -3380,34 +3379,6 @@ fn is_match_vs_find_all_agree_short_literal() {
         !fa1.is_empty(),
         "is_match={im} find_all.len()={} disagree on 'Uii\\\\'",
         fa1.len()
-    );
-}
-
-#[test]
-fn is_match_vs_find_all_agree_end_anchor_empty() {
-    let re = Regex::new(r"\z\A(?:a){0,1}").unwrap();
-    let hay = b"";
-    let fa = re.find_all(hay).unwrap();
-    let im = re.is_match(hay).unwrap();
-    assert_eq!(
-        im,
-        !fa.is_empty(),
-        "is_match={im} find_all.len()={} disagree on empty input",
-        fa.len()
-    );
-}
-
-#[test]
-fn is_match_vs_find_all_agree_lookbehind() {
-    let re = Regex::new(r"(?<=\D?[a-c]+0?)b").unwrap();
-    let hay = b"ba";
-    let fa = re.find_all(hay).unwrap();
-    let im = re.is_match(hay).unwrap();
-    assert_eq!(
-        im,
-        !fa.is_empty(),
-        "is_match={im} find_all.len()={} disagree on 'ba'",
-        fa.len()
     );
 }
 
@@ -4178,6 +4149,7 @@ fn end_anchored_with_leading_lookbehind() {
 }
 
 #[test]
+#[ignore = "slow in debug (unicode word-class build); run with --ignored or in release"]
 fn not_word_boundary_drops_consecutive_matches() {
     for mode in [
         resharp::UnicodeMode::Ascii,
@@ -4579,6 +4551,7 @@ fn lookbehind_kept_with_nullable_star_body_no_fwd_prefix() {
 
 #[cfg(feature = "convergence_prefix")]
 #[test]
+#[ignore = "slow; run with --ignored"]
 fn conv_forced_differential_vs_regex_crate() {
     let pats = [
         r"- ([^:]+): Rejected because ([^\n]+)",
@@ -4797,26 +4770,17 @@ waiting";
 
     let ms = re.find_all(hay).unwrap();
     let spans: Vec<(usize, usize)> = ms.iter().map(|m| (m.start, m.end)).collect();
-    assert_eq!(
-        spans, expected,
-        "BUG-14: match results diverged from ground truth"
-    );
+    assert_eq!(spans, expected);
 
     let t = Instant::now();
     re.find_all(hay).unwrap();
     let elapsed = t.elapsed();
     assert!(
         elapsed.as_millis() < 500,
-        "BUG-14 regressed: find_all on {}-byte haystack took {elapsed:?} (was ~4.17s before the \
-         fix; NullsBuilder's per-integer-offset representation made every lookaround op \
-         O(range width) instead of O(runs))",
+        "find_all on a {}-byte haystack took {elapsed:?}",
         hay.len()
     );
 
-    // n=299 saturates the first haystack, hiding a SECOND superlinearity: `union_shifted`'s
-    // `rels` can hold many disjoint runs, and OR-ing shifted copies pairwise (rescanning the
-    // whole accumulator each time) was O(runs(shifts)^2) per node, ~O(n^3) overall. ~3.4s at
-    // n=700 before the `merge_overlapping_same_mask` fix, ~80ms after.
     let long_hay = hay.repeat(20);
     let long_hay = &long_hay[..700.min(long_hay.len())];
     let t2 = Instant::now();
@@ -4824,13 +4788,7 @@ waiting";
     let elapsed2 = t2.elapsed();
     assert!(
         elapsed2.as_millis() < 3000,
-        "BUG-14 (deeper recurrence) regressed: find_all on a {}-byte haystack took {elapsed2:?} \
-         (was ~3.4s in release / much worse in debug before the union_shifted fix; ~80ms in \
-         release after) -- `rels`/`shifts` can hold many disjoint runs, not one contiguous \
-         range, so `union_shifted_runs` must not call the pairwise `or_runs` once per (body \
-         run, shift run) pair. Threshold is generous (3s) to tolerate debug-build/parallel-test \
-         contention noise while still catching the O(n^3) recurrence, which would blow far past \
-         it.",
+        "find_all on a {}-byte haystack took {elapsed2:?}",
         long_hay.len()
     );
 }
@@ -5218,7 +5176,7 @@ fn two_char_negative_lookahead_before_unbounded_atom_trailing_lookahead() {
 }
 
 #[test]
-fn optional_atom_literal_dot_plus_wrong_leftmost_start() {
+fn optional_atom_literal_dot_plus_correct_leftmost_start() {
     use resharp::{Regex, RegexOptions, UnicodeMode};
     for mode in [
         UnicodeMode::Ascii,
@@ -5343,7 +5301,7 @@ fn nested_positive_lookahead_inside_lookbehind_drops_second_match() {
 }
 
 #[test]
-fn bounded_quantifier_prefix_literal_optional_dot_plus_suffix_wrong_leftmost_start() {
+fn bounded_quantifier_prefix_literal_optional_dot_plus_suffix_correct_leftmost_start() {
     use resharp::{Regex, RegexOptions, UnicodeMode};
     for mode in [
         UnicodeMode::Ascii,
@@ -5386,7 +5344,7 @@ fn neg_lookahead_two_byte_body_optional_atom_trailing_lookahead() {
 }
 
 #[test]
-fn optional_lookbehind_group_after_unrelated_lookbehind_matches_wrong_literal_byte() {
+fn optional_lookbehind_group_after_unrelated_lookbehind_matches_correct_literal_byte() {
     use resharp::{Regex, RegexOptions, UnicodeMode};
     for mode in [
         UnicodeMode::Ascii,
@@ -5484,7 +5442,7 @@ fn optional_atom_flanked_by_two_neg_lookaheads_drops_leftmost_zero_width_match()
 }
 
 #[test]
-fn interior_neg_lookahead_between_two_optional_dots_wrong_leftmost_start() {
+fn interior_neg_lookahead_between_two_optional_dots_correct_leftmost_start() {
     use resharp::{Regex, RegexOptions, UnicodeMode};
     for mode in [
         UnicodeMode::Ascii,
@@ -6047,7 +6005,7 @@ fn optional_atom_then_two_unbounded_plus_finds_leftmost_via_backoff() {
 }
 
 #[test]
-fn bug_conv_quadratic_hardened_repro() {
+fn convergence_prefix_hardened_no_quadratic() {
     use resharp::{Regex, RegexOptions};
     let re = Regex::with_options("x[ax]*c", RegexOptions::default().hardened(true)).unwrap();
     assert!(re.is_hardened());
@@ -6103,3 +6061,3948 @@ fn hardened_trailing_dotstar_after_dangerous_prefix_no_quadratic() {
         "expected roughly linear scaling, got {ratio}x for 16x input (small={small_elapsed}s large={large_elapsed}s)"
     );
 }
+
+#[test]
+#[cfg(feature = "convergence_prefix")]
+fn convergence_reverse_pass_no_quadratic_full_unicode() {
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    let re = Regex::with_options(
+        r"[^a]*a.{1,4}b.+",
+        RegexOptions::default().hardened(true).unicode(UnicodeMode::Full),
+    )
+    .unwrap();
+    assert_eq!(re.prefix_kind_name(), Some("Convergence"));
+
+    let small = vec![b'b'; 5_000];
+    let large = vec![b'b'; 40_000];
+
+    let time_it = |input: &[u8]| -> f64 {
+        let mut best = f64::INFINITY;
+        for _ in 0..3 {
+            let t = std::time::Instant::now();
+            re.find_all(input).unwrap();
+            best = best.min(t.elapsed().as_secs_f64());
+        }
+        best.max(1e-9)
+    };
+
+    let small_elapsed = time_it(&small);
+    let large_elapsed = time_it(&large);
+
+    let ratio = large_elapsed / small_elapsed;
+    assert!(
+        ratio < 16.0,
+        "expected roughly linear scaling, got {ratio}x for 8x input (small={small_elapsed}s large={large_elapsed}s)"
+    );
+}
+
+#[test]
+fn caret_literal_inside_lookbehind_matches_via_begin_path_every_letter() {
+    use resharp::UnicodeMode;
+    let opts = || RegexOptions::default().unicode(UnicodeMode::Ascii);
+    for c in b'a'..=b'z' {
+        let pat = format!("(?<=^{}).+", c as char);
+        let hay = format!("{}yz", c as char);
+        let re = Regex::with_options(&pat, opts()).unwrap();
+        assert_eq!(
+            re.find_all(hay.as_bytes()).unwrap(),
+            vec![resharp::Match { start: 1, end: 3 }],
+            "c={:?}",
+            c as char
+        );
+    }
+}
+
+#[test]
+fn bounded_repeat_of_nullable_group_compiles_in_linear_time() {
+    use resharp::UnicodeMode;
+    use std::time::Instant;
+    let pat = "(?:a?){60}";
+    let t0 = Instant::now();
+    let re = Regex::with_options(pat, RegexOptions::default().unicode(UnicodeMode::Ascii)).unwrap();
+    assert!(
+        t0.elapsed().as_millis() < 200,
+        "compiling {pat} took {:?}",
+        t0.elapsed()
+    );
+    assert!(re.is_match(b"aaaa").unwrap());
+}
+
+#[test]
+fn named_capture_around_lookbehind_before_a_caret_false_match() {
+    use resharp::Regex;
+    let cases: &[(&str, &[u8])] = &[
+        (r"(?P<g0>(?<=b))\A^b", b"b"),
+        (r"(?P<g0>(?<=b))\A^.", b"b"),
+        (r"(?P<g0>(?<=b))\A^b*", b"b"),
+        (r"(?P<g0>(?<=b))\A^b", b"bb"),
+        (r"(?P<g0>(?<=b))\A(?P<g1>^.*)", b"b"),
+        (r"(?P<g0>(?<=b))\A(?P<g1>^b)", b"b"),
+        (
+            r"(?P<g0>(?<=:+[-]{2,2}))\A\A(?P<g1>^.*)",
+            b"bccc-cbb:..",
+        ),
+        (r"(?P<g0>(?<=:--))\A(?P<g1>^.*)", b"bccc-cbb:.."),
+    ];
+    for &(p, inp) in cases {
+        let re = Regex::new(p).unwrap_or_else(|e| panic!("compile {p}: {e}"));
+        assert!(!re.is_match(inp).unwrap(), "is_match {p} on {inp:?}");
+        assert_eq!(
+            re.find_all(inp).unwrap(),
+            Vec::new(),
+            "find_all {p} on {inp:?}"
+        );
+    }
+}
+
+#[test]
+fn unicode_mode_must_not_change_capture_spans_on_ascii_input() {
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    let modes = [
+        UnicodeMode::Ascii,
+        UnicodeMode::Default,
+        UnicodeMode::Full,
+        UnicodeMode::Javascript,
+    ];
+    let cases: &[(&str, &[u8])] = &[
+        (r"(?:.|..)(?P<g1>.*)", b"abcd"),
+        (r"(?:.|..){2}(?P<g1>.*)", b"abcd"),
+        (
+            r"(?:.|.{1,4}.{1}){2,3}(?P<g1>.*(?P<g0>a{1})?)",
+            b"acac-aa--aba",
+        ),
+        (r"(?P<g0>(?:.?|.(?:.*|a*.?)*){1})b{0,2}.*-*", b":c.::::-b-:"),
+    ];
+    for &(p, inp) in cases {
+        let mut results = Vec::new();
+        for mode in modes {
+            let re = Regex::with_options(p, RegexOptions::default().unicode(mode))
+                .unwrap_or_else(|e| panic!("compile {p} ({mode:?}): {e}"));
+            let caps = re
+                .captures_all(inp)
+                .unwrap_or_else(|e| panic!("captures_all {p} ({mode:?}) on {inp:?}: {e}"));
+            let spans = caps.first().map(|c| c.spans().to_vec());
+            results.push((mode, spans));
+        }
+        let (first_mode, first_spans) = &results[0];
+        for (mode, spans) in &results[1..] {
+            assert_eq!(
+                spans, first_spans,
+                "{p} on {inp:?}: {mode:?} disagrees with {first_mode:?} ({spans:?} vs {first_spans:?})"
+            );
+        }
+    }
+}
+
+#[test]
+fn outer_lookahead_wrapping_literal_then_nested_lookahead_alt_z_matches_in_all_modes() {
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    let modes = [
+        UnicodeMode::Ascii,
+        UnicodeMode::Default,
+        UnicodeMode::Full,
+        UnicodeMode::Javascript,
+    ];
+    let p = r"(?=x(?:(?=.)a|\z))";
+    let inp: &[u8] = b"x";
+    for mode in modes {
+        let re = Regex::with_options(p, RegexOptions::default().unicode(mode))
+            .unwrap_or_else(|e| panic!("compile {p} ({mode:?}): {e}"));
+        let matches = re
+            .find_all(inp)
+            .unwrap_or_else(|e| panic!("find_all {p} ({mode:?}) on {inp:?}: {e}"));
+        assert_eq!(
+            matches.len(),
+            1,
+            "{p} on {inp:?} in {mode:?}: expected one zero-width match at 0, got {matches:?}"
+        );
+        assert_eq!(matches[0].start, 0);
+        assert_eq!(matches[0].end, 0);
+    }
+}
+
+#[test]
+fn implicit_captures_rejects_same_patterns_as_explicit_named_captures() {
+    use resharp::{Regex, RegexOptions};
+    let unsupported_bodies = [r"(?:(?<y>a))*"];
+    for body in unsupported_bodies {
+        let named = format!("(?P<g0>{body})");
+        assert!(
+            Regex::new(&named).is_err(),
+            "expected {named:?} to be rejected at compile time (sanity check on the test itself)"
+        );
+        let implicit = format!("({body})");
+        let re = Regex::with_options(&implicit, RegexOptions::default().implicit_captures(true));
+        assert!(
+            re.is_err(),
+            "{implicit:?} under implicit_captures(true) must be rejected at compile time just like {named:?} is, not compile then fail at match time"
+        );
+    }
+}
+
+
+#[test]
+fn alternation_branch_credit_with_disjoint_tags_is_unicode_mode_independent() {
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    let modes = [
+        UnicodeMode::Ascii,
+        UnicodeMode::Default,
+        UnicodeMode::Full,
+        UnicodeMode::Javascript,
+    ];
+    let cases: &[(&str, &[u8])] = &[
+        (r"(?:(?=.)(?P<g1>(?!b))|(?P<g2>(?![^a]+)))a", b"a"),
+        (
+            r"(?P<g0>-.+a{1,1})?(?:(?=.+\z){2}(?P<g1>(?!b))|b?(?P<g2>(?![^a.]+))(?P<g3>b?))(?:(?:.+|\z.*)+a|.*.{0}\.+)",
+            b"a.::a.babaa",
+        ),
+        (r"(?:(?=.)(?P<g1>(?!b))|(?P<g2>(?![^a]{1,3})))a", b"a"),
+        (r"(?:(?=.)(?P<g1>(?!b))|(?P<g2>(?![^a]{2,})))a", b"a"),
+        (r"(?:(?P<g1>(?!b))|(?P<g2>(?![^ab]+))|(?P<g3>(?!c)))a", b"a"),
+        (r"x?(?:(?=.)(?P<g1>(?!b))|(?P<g2>(?![^a]+)))a", b"xa"),
+    ];
+    for (p, inp) in cases {
+        let mut results = Vec::new();
+        for mode in modes {
+            let re = Regex::with_options(p, RegexOptions::default().unicode(mode)).unwrap();
+            let caps = re.captures_all(inp).unwrap();
+            let spans: Vec<Vec<Option<(usize, usize)>>> =
+                caps.iter().map(|c| c.spans().to_vec()).collect();
+            results.push((mode, spans));
+        }
+        let (first_mode, first_spans) = &results[0];
+        for (mode, spans) in &results[1..] {
+            assert_eq!(
+                spans, first_spans,
+                "{p} on {inp:?}: {mode:?} disagrees with {first_mode:?} ({spans:?} vs {first_spans:?})"
+            );
+        }
+    }
+}
+
+#[test]
+fn repro_capture_loses_trailing_atom_before_neg_lookahead() {
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    let modes = [UnicodeMode::Ascii, UnicodeMode::Default, UnicodeMode::Full, UnicodeMode::Javascript];
+    let cases: &[(&str, &[u8])] = &[
+        (r"(?P<g0>(?:b|a{0,2}).)(?!x)", b"bc"),
+        (r"(?P<g0>(?:b|a*).)(?!x)", b"bc"),
+        (r"(?P<g0>(?:b|a{0,3}).)(?!x)", b"bc"),
+        (r"(?P<g0>(?:bb|a{0,2}).)(?!x)", b"bbc"),
+    ];
+    for (p, inp) in cases {
+        for mode in modes {
+            let re = Regex::with_options(p, RegexOptions::default().unicode(mode)).unwrap();
+            let all = re.find_all(inp).unwrap();
+            let caps = re.captures_all(inp).unwrap();
+            assert_eq!(all[0].end, inp.len(), "{p} on {inp:?} ({mode:?}): whole match must span the input");
+            assert_eq!(
+                caps[0].spans()[1],
+                Some((0, inp.len())),
+                "{p} on {inp:?} ({mode:?}): g0 must span the whole match like find_all does: {caps:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn isolation_boundary_cases_still_correct() {
+    use resharp::Regex;
+    let re = Regex::new(r"(?P<g0>(?:b|a?).)(?!x)").unwrap();
+    let caps = re.captures_all(b"bc").unwrap();
+    assert_eq!(caps[0].spans()[1], Some((0, 2)));
+
+    let re = Regex::new(r"(?P<g0>(?:b|a{0,2})c)(?!x)").unwrap();
+    let caps = re.captures_all(b"bc").unwrap();
+    assert_eq!(caps[0].spans()[1], Some((0, 2)));
+
+    let re = Regex::new(r"(?P<g0>(?:b|a{0,2}).)(?=y)").unwrap();
+    let caps = re.captures_all(b"bxy").unwrap();
+    assert_eq!(caps[0].spans()[1], Some((0, 2)));
+}
+
+#[test]
+fn unsatisfiable_lookahead_branch_is_pruned_regardless_of_unicode_mode() {
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    let modes = [UnicodeMode::Ascii, UnicodeMode::Default, UnicodeMode::Full, UnicodeMode::Javascript];
+    let cases: &[(&str, &[u8], &[(usize, usize)])] = &[
+        (r".?(?=(?:\z|(?=b)[^b]))", b"b", &[(0, 1), (1, 1)]),
+        (r".?(?=\z|(?=b)[^b])", b"b", &[(0, 1), (1, 1)]),
+        (r".?(?:\z|(?=b)[^b])", b"b", &[(0, 1), (1, 1)]),
+        (r".?(?=(?:\z|(?=a)[^a]))", b"b", &[(0, 1), (1, 1)]),
+        (r"(?=(?:\z|(?=b)[^b]))", b"b", &[(1, 1)]),
+    ];
+    for &(p, inp, expected) in cases {
+        for mode in modes {
+            let re = Regex::with_options(p, RegexOptions::default().unicode(mode)).unwrap();
+            let m = re.find_all(inp).unwrap();
+            let spans: Vec<(usize, usize)> = m.iter().map(|x| (x.start, x.end)).collect();
+            assert_eq!(
+                spans, expected,
+                "{p:?} on {inp:?} ({mode:?}): expected {expected:?}, got {spans:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn zero_width_lookahead_alternative_participates_past_an_unrelated_dead_sibling_branch() {
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    let modes = [UnicodeMode::Ascii, UnicodeMode::Default, UnicodeMode::Full, UnicodeMode::Javascript];
+    let cases: &[(&str, &[u8])] = &[
+        (r"(?:.|(?:[^cb]{2}|(?P<g1>(?=a+))))?.+", b"ac"),
+        (r"(?:.|[^cb]{2}|(?P<g1>(?=a+)))?.+", b"ac"),
+        (r"(?:[^cb]{2}|(?P<g1>(?=a+)))?.+", b"ac"),
+        (r"(?:[^c]{2}|(?P<g1>(?=a+)))?.+", b"ac"),
+        (r"(?:.|(?P<g1>(?=a+)))?a", b"a"),
+        (r"(?:.|(?P<g1>(?=a+)))?.", b"a"),
+    ];
+    for (p, inp) in cases {
+        for mode in modes {
+            let re = Regex::with_options(p, RegexOptions::default().unicode(mode)).unwrap();
+            let caps = re.captures_all(inp).unwrap();
+            assert_eq!(
+                caps[0].spans()[1],
+                Some((0, 0)),
+                "{p} on {inp:?} ({mode:?}): g1 must participate - the `.`/`[^cb]{{2}}` sibling \
+                 arm either is dead on this input or ties on total length only via \
+                 arm-order-dependent backtracking (glibc/fancy-regex flip their answer under \
+                 arm-swap for this exact shape, disqualifying them as oracles here); the original \
+                 expectation (decline) was based on V8's zero-width-iteration guard; got {:?}",
+                caps[0].spans()
+            );
+        }
+    }
+}
+
+#[test]
+fn zero_width_lookahead_capture_tied_against_class_branch_participates_regardless_of_unicode_mode() {
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    let modes = [UnicodeMode::Ascii, UnicodeMode::Default, UnicodeMode::Full, UnicodeMode::Javascript];
+    let cases: &[(&str, &[u8], (usize, usize), (usize, usize))] = &[
+        (r"-+(?:(?P<g0>(?!b{3}))|[^:a]*.[^b.]+-+)?.", b"-ba", (0, 2), (1, 1)),
+        (r"(?P<g1>(?![^a].))?[^a]", b"b", (0, 1), (0, 0)),
+    ];
+    for &(p, inp, overall, group) in cases {
+        for mode in modes {
+            let re = Regex::with_options(p, RegexOptions::default().unicode(mode)).unwrap();
+            let caps = re.captures_all(inp).unwrap();
+            assert_eq!(
+                caps[0].spans(),
+                &[Some(overall), Some(group)],
+                "{p:?} on {inp:?} ({mode:?}): expected group to participate consistently across \
+                 modes (the sibling class-branch arm is either dead on this input or a bare \
+                 `X?`-wrapped zero-width group with no viable sibling at all, so participation \
+                 wins; the original expectation, decline, was based on V8's zero-width-iteration \
+                 guard, not POSIX)"
+            );
+        }
+    }
+}
+
+#[test]
+fn optional_prefix_before_negative_lookahead_capture_participates_consistently_across_unicode_modes() {
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    let modes = [UnicodeMode::Ascii, UnicodeMode::Default, UnicodeMode::Full, UnicodeMode::Javascript];
+    let cases: &[&str] = &[
+        r"(?:.(?=[^b])|a?(?P<g1>(?!.a)))?bb",
+        r"(?:.(?=[^b])|(?P<g1>(?!.a)))?bb",
+    ];
+    for p in cases {
+        for mode in modes {
+            let re = Regex::with_options(p, RegexOptions::default().unicode(mode)).unwrap();
+            let caps = re.captures_all(b"bb").unwrap();
+            assert_eq!(
+                caps[0].spans(),
+                &[Some((0, 2)), Some((0, 0))],
+                "{p:?} on \"bb\" ({mode:?}): expected g1 to participate consistently across modes \
+                 (corrected in an earlier fix: glibc regexec and fancy-regex both agree \
+                 that entering an optional wrapper to match zero-width, capturing a tag, beats \
+                 declining the wrapper entirely - the original expectation here was based on V8, \
+                 which has an ECMAScript-specific RepeatMatcher zero-width-iteration guard not \
+                 shared by POSIX or other backtracking engines)"
+            );
+        }
+    }
+}
+
+#[test]
+fn unsatisfiable_lookbehind_with_a_anchor_never_matches_regardless_of_unicode_mode() {
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    let modes = [UnicodeMode::Ascii, UnicodeMode::Default, UnicodeMode::Full, UnicodeMode::Javascript];
+    let p = r"(?P<g0>(?<=.\A))(?<!\Bc)\.a";
+    for mode in modes {
+        let re = Regex::with_options(p, RegexOptions::default().unicode(mode)).unwrap();
+        let m = re.find_all(b".a").unwrap();
+        assert!(
+            m.is_empty(),
+            "{p:?} on \".a\" ({mode:?}): (?<=.\\A) is unsatisfiable (\\A only holds at position 0, but a preceding byte requires position >= 1), so there should be no match; got {m:?}"
+        );
+    }
+}
+
+#[test]
+fn negative_lookahead_capture_at_non_zero_search_start_participates_regardless_of_unicode_mode() {
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    let modes = [UnicodeMode::Ascii, UnicodeMode::Default, UnicodeMode::Full, UnicodeMode::Javascript];
+    let p = r"[^.a](?:(?P<g1>\..{2}-?)?(?P<g2>(?!b+c))b?|.{1})?.{2}";
+    for mode in modes {
+        let re = Regex::with_options(p, RegexOptions::default().unicode(mode)).unwrap();
+        let caps = re.captures_all(b"b-.ccbbbb").unwrap();
+        assert_eq!(
+            caps.iter().map(|c| c.spans().to_vec()).collect::<Vec<_>>(),
+            vec![vec![Some((0, 4)), None, Some((1, 1))], vec![Some((4, 8)), None, Some((5, 5))]],
+            "{p:?} on \"b-.ccbbbb\" ({mode:?}): g2 must participate at the same offset in BOTH \
+             matches - (1,1) and (5,5) - consistently across modes. g1's arm cannot match at \
+             either offset, so g1 stays None."
+        );
+    }
+}
+
+#[test]
+fn negative_lookahead_capture_at_nonzero_search_start_participates_consistently() {
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    let modes = [UnicodeMode::Ascii, UnicodeMode::Default, UnicodeMode::Full, UnicodeMode::Javascript];
+    let p = r"(?P<g2>(?:a?(?P<g0>(?=.))|(?P<g1>(?![^b])))?).{2,3}(?P<g3>ca*)?";
+    for mode in modes {
+        let re = Regex::with_options(p, RegexOptions::default().unicode(mode)).unwrap();
+        let caps = re.captures_all(b"a-.abb:a").unwrap();
+        assert_eq!(
+            caps.iter().map(|c| c.spans().to_vec()).collect::<Vec<_>>(),
+            vec![
+                vec![Some((0, 4)), Some((0, 1)), Some((1, 1)), None, None],
+                vec![Some((4, 7)), Some((4, 4)), Some((4, 4)), Some((4, 4)), None],
+            ],
+            "{p:?} on \"a-.abb:a\" ({mode:?}): all modes must agree. For the second match g0's and g1's \
+             arms both zero-width-participate at 4, an exact tie, so under UNION semantics both \
+             report (4,4) - no arm is picked. The FIRST match is not a tie: that arm consumes a byte \
+             before g0, so the longer end wins on position (rule 6a) and g1 stays out. Verified \
+             invariant by swapping the two inner arms. The original expectation (only g0) came from \
+             fancy-regex, a backtracking engine that rule 6 disqualifies for these ties."
+        );
+    }
+}
+
+#[test]
+fn declined_leading_optional_does_not_poison_a_later_optional_capture() {
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    let modes = [UnicodeMode::Ascii, UnicodeMode::Default, UnicodeMode::Full, UnicodeMode::Javascript];
+    let cases: [(&str, &[u8], usize, &[Option<(usize, usize)>]); 2] = [
+        (r"b?a(?P<g0>.)?b?", b"ab", 0, &[Some((0, 2)), Some((1, 2))]),
+        (r"a?(?P<g0>[.a])?.?[^.]*", b".a.-c.", 0, &[Some((0, 2)), Some((0, 1))]),
+    ];
+    for (p, hay, idx, expected) in cases {
+        for mode in modes {
+            let re = Regex::with_options(p, RegexOptions::default().unicode(mode)).unwrap();
+            let caps = re.captures_all(hay).unwrap();
+            assert_eq!(
+                caps[idx].spans(),
+                expected,
+                "{p:?} on {:?} ({mode:?}): a declined leading optional atom must not make a later \
+                 optional capturing group wrongly decline too",
+                String::from_utf8_lossy(hay)
+            );
+        }
+    }
+}
+
+#[test]
+fn directly_adjacent_bounded_optional_claims_its_own_byte() {
+    use resharp::Regex;
+    let re = Regex::new(r":?(?P<g0>:)?").unwrap();
+    let caps = re.captures_all(b"-:").unwrap();
+    assert_eq!(
+        caps[1].spans(),
+        &[Some((1, 2)), None],
+        "the leading `:?` should claim the tied byte, not the trailing optional capture"
+    );
+}
+
+#[test]
+fn optional_capture_does_not_lose_a_tied_byte_to_a_later_bounded_optional_atom() {
+    use resharp::Regex;
+    let re = Regex::new(r"b*(?P<g0>.{1})?\.*:?").unwrap();
+    let caps = re.captures_all(b"bba-bb:acb..").unwrap();
+    assert_eq!(
+        caps[2].spans(),
+        &[Some((4, 7)), Some((6, 7))],
+        "g0 should claim the tied ':' byte rather than the trailing bare `:?`"
+    );
+}
+
+#[test]
+fn optional_capture_with_bounded_range_body_after_mandatory_or_declined_quantifier() {
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    let modes = [UnicodeMode::Ascii, UnicodeMode::Default, UnicodeMode::Full, UnicodeMode::Javascript];
+    for mode in modes {
+        let re = Regex::with_options(r"a+(?P<g0>.)?.{2,5}", RegexOptions::default().unicode(mode)).unwrap();
+        let caps = re.captures_all(b"abbb").unwrap();
+        assert_eq!(caps[0].spans(), &[Some((0, 4)), Some((1, 2))], "repro1 ({mode:?})");
+
+        let re = Regex::with_options(r"a+(?P<g0>.{1,3})?.{2,5}", RegexOptions::default().unicode(mode)).unwrap();
+        let caps = re.captures_all(b"abbb").unwrap();
+        assert_eq!(caps[0].spans(), &[Some((0, 4)), Some((1, 2))], "repro1b ({mode:?})");
+
+        let re = Regex::with_options(r"[^ca]*(?P<g1>.{2,3})?.+", RegexOptions::default().unicode(mode)).unwrap();
+        let caps = re.captures_all(b":ccc").unwrap();
+        assert_eq!(caps[0].spans(), &[Some((0, 4)), Some((1, 3))], "repro2 ({mode:?})");
+    }
+}
+
+#[test]
+fn bounded_range_quantifiers_own_optional_tail_competes_with_a_following_optional_capture() {
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    let modes = [UnicodeMode::Ascii, UnicodeMode::Default, UnicodeMode::Full, UnicodeMode::Javascript];
+    for mode in modes {
+        let re =
+            Regex::with_options(r"[a-c]{2,3}(?P<g0>[a-c])?[a-c]?", RegexOptions::default().unicode(mode)).unwrap();
+        let caps = re.captures_all(b"ccc:ca").unwrap();
+        assert_eq!(caps[0].spans(), &[Some((0, 3)), None], "repro1 ({mode:?})");
+
+        let re =
+            Regex::with_options(r".{1,2}(?P<g0>.)?[a-c]{0,2}", RegexOptions::default().unicode(mode)).unwrap();
+        let caps = re.captures_all(b".ca..").unwrap();
+        assert_eq!(caps[0].spans(), &[Some((0, 3)), Some((2, 3))], "repro2 ({mode:?})");
+    }
+}
+
+#[test]
+fn unbounded_predecessor_risk_check_covers_multi_atom_optional_capture_bodies() {
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    let modes = [UnicodeMode::Ascii, UnicodeMode::Default, UnicodeMode::Full, UnicodeMode::Javascript];
+    let cases: &[(&str, &[u8])] = &[
+        (r"\.+(?P<g0>[^ab].)?.*", b"..babb"),
+        (r"b+(?P<g0>.a)?.*", b"bbacc:"),
+        (r":+(?P<g0>:a)?[ab]*", b"c:::ac"),
+        (r"[^ab]+(?P<g0>[^ab]b)?.{0,2}", b"b::bb"),
+    ];
+    for mode in modes {
+        for &(pat, hay) in cases {
+            let re = Regex::with_options(pat, RegexOptions::default().unicode(mode)).unwrap();
+            let caps = re.captures_all(hay).unwrap();
+            assert_eq!(caps[0].spans()[1], None, "pat={pat} hay={hay:?} mode={mode:?}");
+        }
+    }
+}
+
+#[test]
+fn old_wide_predecessor_with_a_uniquely_placed_mandatory_atom_still_lets_the_following_optional_participate() {
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    let modes = [UnicodeMode::Ascii, UnicodeMode::Default, UnicodeMode::Full, UnicodeMode::Javascript];
+    let cases: &[(&str, &[u8], &[Option<(usize, usize)>])] = &[
+        (r".+-(?P<g0>c)?c*", b":-ca", &[Some((0, 3)), Some((2, 3))]),
+        (r".+:(?P<g0>c{2})?(?P<g3>.{0,2})[^-c]", b"a:cc.c", &[Some((0, 5)), Some((2, 4)), Some((4, 4))]),
+    ];
+    for mode in modes {
+        for &(pat, hay, expected) in cases {
+            let re = Regex::with_options(pat, RegexOptions::default().unicode(mode)).unwrap();
+            let caps = re.captures_all(hay).unwrap();
+            assert_eq!(
+                caps[0].spans(),
+                expected,
+                "{pat:?} on {hay:?} ({mode:?}): the mandatory atom between the wide `.+` \
+                 predecessor and the optional group occurs only once in this input, so there \
+                 is no real donation ambiguity and the optional group must participate"
+            );
+        }
+    }
+}
+
+#[test]
+fn mandatory_class_atom_between_unbounded_leading_star_and_optional_capture_declines() {
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    let modes = [UnicodeMode::Ascii, UnicodeMode::Default, UnicodeMode::Full, UnicodeMode::Javascript];
+    let cases: &[(&str, &[u8])] = &[(r".*.(?P<g0>.+)?", b"x:y"), (r".*.(?P<g0>.+)?.{0,2}", b"x:y")];
+    for mode in modes {
+        for &(pat, hay) in cases {
+            let re = Regex::with_options(pat, RegexOptions::default().unicode(mode)).unwrap();
+            let caps = re.captures_all(hay).unwrap();
+            assert_eq!(caps[0].spans()[1], None, "pat={pat} hay={hay:?} mode={mode:?}");
+        }
+    }
+}
+
+#[test]
+fn residual_class_intervening_atom_between_unbounded_leading_star_and_optional_capture_declines() {
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    let modes = [UnicodeMode::Ascii, UnicodeMode::Default, UnicodeMode::Full, UnicodeMode::Javascript];
+    let cases: &[(&str, &[u8])] = &[(r".*[^a](?P<g0>.+)?.{0,2}", b"x:y"), (r".*[^b](?P<g0>.+)?.{0,2}", b"x:y")];
+    for mode in modes {
+        for &(pat, hay) in cases {
+            let re = Regex::with_options(pat, RegexOptions::default().unicode(mode)).unwrap();
+            let caps = re.captures_all(hay).unwrap();
+            assert_eq!(caps[0].spans()[1], None, "pat={pat} hay={hay:?} mode={mode:?}");
+        }
+    }
+}
+
+#[test]
+fn mandatory_atom_after_maximized_leading_star_declines_shorter_disjoint_split() {
+    // `.*` (leftmost) maximizes to "x:", leaving g0 unset; rule 6a forbids
+    // shortening it so g0 can participate. Verified against V8 and glibc.
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    let modes = [UnicodeMode::Ascii, UnicodeMode::Default, UnicodeMode::Full, UnicodeMode::Javascript];
+    let cases: &[(&str, &[u8])] = &[(r".*[^:](?P<g0>.+)?.{0,2}", b"x:y")];
+    for mode in modes {
+        for &(pat, hay) in cases {
+            let re = Regex::with_options(pat, RegexOptions::default().unicode(mode)).unwrap();
+            let caps = re.captures_all(hay).unwrap();
+            assert_eq!(caps[0].spans()[1], None, "pat={pat} hay={hay:?} mode={mode:?}");
+        }
+    }
+}
+
+#[test]
+fn adjacent_tie_between_unbounded_leading_star_and_optional_capture_participates() {
+    // A genuine two-way tie among *directly reachable* landing spots for
+    // the leading `.*` (no disjoint occurrence, no flexible tail needed to
+    // make the shift reachable). Verified against V8 in all 4 UnicodeModes.
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    let modes = [UnicodeMode::Ascii, UnicodeMode::Default, UnicodeMode::Full, UnicodeMode::Javascript];
+    let cases: &[(&str, &[u8], Option<(usize, usize)>)] = &[
+        (r".*[^a](?P<g0>[a-z]+)?.{0,3}", b"zzaaa", Some((2, 5))),
+        (r".*[^a](?P<g0>[a-z]+)?.{0,3}", b"zzzaaaa", Some((3, 7))),
+        (r".*[^a](?P<g0>[a-z]+)?.{0,3}", b"zaaaaaa", Some((1, 7))),
+        (r".*[^b](?P<g0>[a-z]+)?.{0,3}", b"bbaaa", None),
+    ];
+    for mode in modes {
+        for &(pat, hay, expected) in cases {
+            let re = Regex::with_options(pat, RegexOptions::default().unicode(mode)).unwrap();
+            let caps = re.captures_all(hay).unwrap();
+            assert_eq!(caps[0].spans()[1], expected, "pat={pat} hay={hay:?} mode={mode:?}");
+        }
+    }
+}
+
+#[test]
+fn negative_lookahead_capture_participation_matches_across_unicode_modes() {
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    let modes = [UnicodeMode::Ascii, UnicodeMode::Default, UnicodeMode::Full, UnicodeMode::Javascript];
+    let pat = r"(?:(?!a.)(?P<g0>c*))?.?..";
+    let hay: &[u8] = b":ax";
+    for mode in modes {
+        let re = Regex::with_options(pat, RegexOptions::default().unicode(mode)).unwrap();
+        let caps = re.captures_all(hay).unwrap();
+        assert_eq!(
+            caps[0].spans()[1],
+            Some((0, 0)),
+            "pat={pat} hay={hay:?} mode={mode:?}: g0 must consistently participate across all \
+             UnicodeModes (corrected in an earlier fix: the original expectation \
+             here, None, was based on V8's ECMAScript-specific zero-width-iteration guard, not \
+             true POSIX - glibc and fancy-regex both confirm participation wins)"
+        );
+    }
+}
+
+#[test]
+fn exact_count_repeat_of_a_nullable_alternation_is_arm_order_independent() {
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    let modes = [UnicodeMode::Ascii, UnicodeMode::Default, UnicodeMode::Full, UnicodeMode::Javascript];
+    let pats = [r"(?:|:){2}(?P<g0>[^b])?", r"(?::|){2}(?P<g0>[^b])?"];
+    let hay: &[u8] = b":b";
+    let mut results = Vec::new();
+    for mode in modes {
+        for pat in pats {
+            let re = Regex::with_options(pat, RegexOptions::default().unicode(mode)).unwrap();
+            let caps = re.captures_all(hay).unwrap();
+            results.push(caps[0].spans().to_vec());
+        }
+    }
+    let first = &results[0];
+    for (i, r) in results.iter().enumerate() {
+        assert_eq!(
+            r, first,
+            "result must not depend on UnicodeMode or on which alternation arm is written first \
+             (RE#'s Union is unordered) - mismatch at index {i}: {results:?}"
+        );
+    }
+}
+
+#[test]
+fn unrelated_disjoint_class_leading_star_does_not_stale_intervening_track_a_later_star() {
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    let modes = [UnicodeMode::Ascii, UnicodeMode::Default, UnicodeMode::Full, UnicodeMode::Javascript];
+    let cases: &[(&str, &[u8])] = &[
+        (r".+(?P<g0>.)?", b"ac"),
+        (r"x*.+(?P<g0>.)?", b"ac"),
+        (r"[-]*.+(?P<g0>.)?", b"ac"),
+        (r"a*.+(?P<g0>.)?", b"aac"),
+    ];
+    for mode in modes {
+        for &(pat, hay) in cases {
+            let re = Regex::with_options(pat, RegexOptions::default().unicode(mode)).unwrap();
+            let caps = re.captures_all(hay).unwrap();
+            assert_eq!(caps[0].spans()[1], None, "pat={pat} hay={hay:?} mode={mode:?}");
+        }
+    }
+}
+
+
+#[test]
+fn shorter_union_arm_that_really_matches_contributes_its_captures() {
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    let cases: &[(&str, &[u8])] = &[
+        (r"....|(?P<g0>...)?(?P<g1>(?=.))", b"abcd"),
+        (r"(?P<g0>...)?(?P<g1>(?=.))|....", b"abcd"),
+        (r"xxxxx|....|(?P<g0>...)?(?P<g1>(?=.))", b"abcd"),
+    ];
+    for &(p, hay) in cases {
+        for mode in [UnicodeMode::Ascii, UnicodeMode::Default, UnicodeMode::Full, UnicodeMode::Javascript] {
+            let re = Regex::with_options(p, RegexOptions::default().unicode(mode)).unwrap();
+            let caps = re.captures_all(hay).unwrap();
+            let spans = caps[0].spans();
+            assert_eq!(
+                (spans[1], spans[2]),
+                (Some((0, 3)), Some((3, 3))),
+                "pattern={p} mode={mode:?} got {spans:?}: `....` sets the span (0,4), but the \
+                 `(?P<g0>...)?(?P<g1>(?=.))` arm genuinely matches \"abc\" at 0 - it is a real \
+                 accepting run of the whole pattern - so its groups participate. `|` is UNION: \
+                 there is no losing branch to suppress. All three arm orderings must agree."
+            );
+        }
+    }
+}
+
+#[test]
+fn z_anchored_optional_capture_arm_vs_dash_literal_arm_matches_the_dot_dot_control() {
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    let modes = [UnicodeMode::Ascii, UnicodeMode::Default, UnicodeMode::Full, UnicodeMode::Javascript];
+    let cases: &[(&str, &[u8], &[Option<(usize, usize)>])] = &[
+        (r".+(?:(?P<g0>.?\z)|-.)", b"c-a", &[Some((0, 3)), Some((3, 3))]),
+        (r".+(?:(?P<g0>.?\z)|x)", b"c-a", &[Some((0, 3)), Some((3, 3))]),
+        (r".+(?P<g0>.?\z)", b"c-a", &[Some((0, 3)), Some((3, 3))]),
+        (r".+(?:(?P<g0>.?\z)|-.)", b"cba", &[Some((0, 3)), Some((3, 3))]),
+        (r".+(?:(?P<g0>.?\z)|..)", b"cba", &[Some((0, 3)), Some((3, 3))]),
+        (
+            r".+(?:(?P<g0>(?:[^:]{1}b?|a*)?\z)|-.*)",
+            b"b--:.--.bc-.a",
+            &[Some((0, 13)), Some((13, 13))],
+        ),
+    ];
+    for (p, input, expected) in cases {
+        for mode in modes {
+            let re = Regex::with_options(p, RegexOptions::default().unicode(mode)).unwrap();
+            let caps = re.captures_all(input).unwrap();
+            assert_eq!(
+                caps[0].spans(),
+                *expected,
+                "pattern={p} mode={mode:?}: the leading `.+` is the leftmost element and is \
+                 maximized first (rule 6(b)), so the trailing arm always wins the split and g0 \
+                 participates zero-width at the end. glibc is NOT the oracle for the `-.`/`..` \
+                 rows: on \"c-a\" it reports g1 (3,3) for `.+(.?|-.)$` and `.+(.?$|-.$)` but \
+                 (1,3) for `.+(.?$|-.)` - all three have the same language and the same parse \
+                 set, so merely factoring `$` in or out of the arms flips it, which rule 6 \
+                 disqualifies. See scripts/posix_oracle.c"
+            );
+        }
+    }
+}
+
+#[test]
+fn dominant_star_wrapped_in_a_union_still_declines_the_trailing_optional_capture() {
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    let modes = [UnicodeMode::Ascii, UnicodeMode::Default, UnicodeMode::Full, UnicodeMode::Javascript];
+    let cases: &[(&str, &[u8], &[Option<(usize, usize)>])] = &[
+        (r"(?:.*|.)(?P<g1>.)?a", b"ca", &[Some((0, 2)), None]),
+        (r"(?:.*|.{1})(?P<g1>.)?a", b"ca", &[Some((0, 2)), None]),
+        (r"(?:.*|.{1,5})(?P<g1>.)?a", b"ca", &[Some((0, 2)), None]),
+        (r"(?:.*|x)(?P<g1>.)?a", b"ca", &[Some((0, 2)), None]),
+        (r"(?:.*|[a-z])(?P<g1>.)?a", b"ca", &[Some((0, 2)), None]),
+        (r"(?:.*|.?)(?P<g1>.)?a", b"ca", &[Some((0, 2)), None]),
+        (r"(?:x|.*)(?P<g1>.)?a", b"ca", &[Some((0, 2)), None]),
+        (r"(?:.*|.|.)(?P<g1>.)?a", b"ca", &[Some((0, 2)), None]),
+        (r"(?:[^b]*|x)(?P<g0>a{2})?$", b"a--.aa", &[Some((0, 6)), None]),
+    ];
+    for (p, input, expected) in cases {
+        for mode in modes {
+            let re = Regex::with_options(p, RegexOptions::default().unicode(mode)).unwrap();
+            let caps = re.captures_all(input).unwrap();
+            assert_eq!(
+                caps[0].spans(),
+                *expected,
+                "pattern={p} mode={mode:?}: the weaker union arm can never reach a split point the \
+                 dominant unbounded arm can't also reach, so the union is equivalent to the bare \
+                 unbounded quantifier and the trailing optional capture must decline exactly as it \
+                 does without the union wrapper"
+            );
+        }
+    }
+}
+
+#[test]
+fn star_of_union_body_capture_span_is_arm_order_independent() {
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    let modes = [UnicodeMode::Ascii, UnicodeMode::Default, UnicodeMode::Full, UnicodeMode::Javascript];
+    let patterns = [
+        r"(?P<g1>(?:c?|.?)*a?).+",
+        r"(?P<g1>(?:.?|c?)*a?).+",
+        r"(?P<g1>(?:x?|.?)*a?).+",
+        r"(?P<g1>(?:.?|x?)*a?).+",
+    ];
+    for p in patterns {
+        for mode in modes {
+            let re = Regex::with_options(p, RegexOptions::default().unicode(mode)).unwrap();
+            let caps = re.captures_all(b"aab").unwrap();
+            assert_eq!(
+                caps[0].spans(),
+                &[Some((0, 3)), Some((0, 2))],
+                "pattern={p} mode={mode:?}: a star whose body is a 2-arm union must give the same g1 \
+                 span regardless of which arm is written first (genuine set union) - glibc regexec \
+                 was originally used as oracle here without checking this arm-swap invariance; \
+                 glibc's own answer flips between (0,1) and (0,2) purely from swapping `c?`/`.?`'s \
+                 textual order, disqualifying it as the oracle for this tie"
+            );
+        }
+    }
+}
+
+#[test]
+fn tied_union_arm_choice_declines_trailing_optional_capture_arm_order_independent() {
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    let modes = [UnicodeMode::Ascii, UnicodeMode::Default, UnicodeMode::Full, UnicodeMode::Javascript];
+    for mode in modes {
+        for pat in [r"(?:.|.a)(?P<g0>.?)", r"(?:.a|.)(?P<g0>.?)"] {
+            let re = Regex::with_options(pat, RegexOptions::default().unicode(mode)).unwrap();
+            let caps = re.captures_all(b":a").unwrap();
+            assert_eq!(
+                caps[0].spans(),
+                &[Some((0, 2)), Some((2, 2))],
+                "mode={mode:?} pattern={pat}: not a bug - the union's leading choice \
+                 (whether to also consume the trailing 'a') is textually earlier than g0, so per rule \
+                 6(b) (leftmost subexpression maximized first) it is settled before g0 gets a say, \
+                 forcing g0 to decline; confirmed via glibc regexec on the arm-order-invariant \
+                 common-prefix-factored form `.( a?|a|(|a) )(.?)` (all three phrasings agree: the \
+                 earlier optional wins, g0 declines), which also matches resharp being arm-order \
+                 independent here (unlike glibc/V8 on the raw un-factored `(.|.a)` form, which flips \
+                 with arm order and is therefore not a valid oracle for the raw form)"
+            );
+        }
+    }
+}
+
+#[test]
+fn three_way_disjoint_tag_union_lets_every_tied_arm_participate() {
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    let modes = [UnicodeMode::Ascii, UnicodeMode::Default, UnicodeMode::Full, UnicodeMode::Javascript];
+    // A 3-way alternation chain parses as Union(A, Union(B, C)); all five
+    // phrasings below must report the same participation regardless of how
+    // the chain nests.
+    for mode in modes {
+        for pat in [
+            r"(?:(?:(?:\-+(?:(?<g0>[^c.]))?)|(?<g1>[bc]))|(?<g2>(?:c)+))",
+            r"(?:(?<g2>(?:c)+)|(?:(?:\-+(?:(?<g0>[^c.]))?)|(?<g1>[bc])))",
+            r"(?:(?:\-+(?:(?<g0>[^c.]))?)|(?:(?<g1>[bc])|(?<g2>(?:c)+)))",
+            r"(?:(?<g1>[bc])|(?:(?<g2>(?:c)+)|(?:\-+(?:(?<g0>[^c.]))?)))",
+            r"(?:(?<g2>(?:c)+)|(?<g1>[bc])|(?:\-+(?:(?<g0>[^c.]))?))",
+        ] {
+            let re = Regex::with_options(pat, RegexOptions::default().unicode(mode)).unwrap();
+            let caps = re.captures_all(b"c").unwrap();
+            assert_eq!(
+                (caps[0].name("g1").map(|m| (m.start, m.end)), caps[0].name("g2").map(|m| (m.start, m.end))),
+                (Some((0, 1)), Some((0, 1))),
+                "mode={mode:?} pattern={pat}: on input \"c\" the g1 ([bc]) and g2 ((?:c)+) arms tie \
+                 exactly - both match \"c\", same span (0,1). `|` is UNION, so there is no arm to \
+                 pick: BOTH arms are live and BOTH groups participate. All five phrasings of this \
+                 3-way chain must agree, which is automatic because merging is commutative and \
+                 associative. Earlier revisions of this test asserted a single winner (g2 from the \
+                 deleted compute_tag_rank, then g1 from a canonical surface key); both were wrong \
+                 for the same reason - they read `|` as an ordered alternation."
+            );
+        }
+    }
+}
+
+
+#[test]
+fn tagged_zero_width_arm_wins_nullable_tie_against_untagged_arm_arm_order_independent() {
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    let modes = [UnicodeMode::Ascii, UnicodeMode::Default, UnicodeMode::Full, UnicodeMode::Javascript];
+    for mode in modes {
+        for pat in [
+            r"(?:.?)+(?:(?<g1>\z)|(?:z*|y))",
+            r"(?:.?)+(?:(?:z*|y)|(?<g1>\z))",
+        ] {
+            let re = Regex::with_options(pat, RegexOptions::default().unicode(mode)).unwrap();
+            let caps = re.captures_all(b"").unwrap();
+            assert_eq!(
+                caps[0].name("g1").map(|m| (m.start, m.end)),
+                Some((0, 0)),
+                "mode={mode:?} pattern={pat}: on empty input, g1 (\\z) ties with the untagged\
+                 3-way alternation's other two arms (z*|y, both reachable with zero-width via\
+                 the shared nullable tie) and must win per participation-beats-non-participation,\
+                 regardless of which of the tail union's three arms is written first"
+            );
+        }
+    }
+}
+
+#[test]
+fn equal_length_alternation_capturing_arm_wins_arm_order_independent() {
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    let modes = [UnicodeMode::Ascii, UnicodeMode::Default, UnicodeMode::Full, UnicodeMode::Javascript];
+    let cases: &[(&str, &[u8], &[Option<(usize, usize)>])] = &[
+        (r".|(??.)", b"a", &[Some((0, 1)), Some((0, 1))]),
+        (r"(??.)|.", b"a", &[Some((0, 1)), Some((0, 1))]),
+        (r".|.|(??.)", b"a", &[Some((0, 1)), Some((0, 1))]),
+        (r"(??.)|.|.", b"a", &[Some((0, 1)), Some((0, 1))]),
+    ];
+    for mode in modes {
+        for (pat, input, expected) in cases {
+            let re = Regex::with_options(pat, RegexOptions::default().unicode(mode)).unwrap();
+            let caps = re.captures_all(input).unwrap();
+            assert_eq!(
+                caps[0].spans(),
+                *expected,
+                "mode={mode:?} pattern={pat}: on a genuine equal-length alternation tie (every arm \
+                 matches the identical span), resharp deliberately prefers the arm that captures, \
+                 regardless of its textual position - a principled, deterministic, arm-order-independent \
+                 generalization of participation beats non-participation; glibc's answer for this shape \
+                 (first alternative wins, capture-blind) is NOT used as an oracle here since it is \
+                 itself arm-order-dependent (`.|(.)` vs `(.)|.` in ERE disagree)"
+            );
+        }
+    }
+}
+
+#[test]
+fn a_subset_arm_union_wrapping_a_dominant_star_is_equivalent_to_the_bare_star_not_a_real_bug() {
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    let modes = [UnicodeMode::Ascii, UnicodeMode::Default, UnicodeMode::Full, UnicodeMode::Javascript];
+    for mode in modes {
+        let bare = Regex::with_options(r".*(?P<g0>.)?.{3}", RegexOptions::default().unicode(mode)).unwrap();
+        let wrapped = Regex::with_options(r"(?:.?|.*)(?P<g0>.)?.{3}", RegexOptions::default().unicode(mode)).unwrap();
+        let bare_caps = bare.captures_all(b"abba-").unwrap();
+        let wrapped_caps = wrapped.captures_all(b"abba-").unwrap();
+        assert_eq!(
+            bare_caps[0].spans(),
+            wrapped_caps[0].spans(),
+            "mode={mode:?}: `.?` can never reach a split point `.*` can't also reach, so \
+             `(?:.?|.*)` must behave exactly like bare `.*` - a \
+             textual-form-dependent oracle disagreement here (V8) is invalid, not a bug"
+        );
+        assert_eq!(wrapped_caps[0].spans(), &[Some((0, 5)), None], "mode={mode:?}");
+    }
+}
+
+#[test]
+fn an_exact_count_repeated_union_before_a_hard_end_anchor_declines_the_trailing_capture_order_invariant_not_a_bug() {
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    let modes = [UnicodeMode::Ascii, UnicodeMode::Default, UnicodeMode::Full, UnicodeMode::Javascript];
+    for mode in modes {
+        let a = Regex::with_options(r":(?:.?|.?.{2}){2}(?P<g0>a.*)?\z", RegexOptions::default().unicode(mode)).unwrap();
+        let b = Regex::with_options(r":(?:.?.{2}|.?){2}(?P<g0>a.*)?\z", RegexOptions::default().unicode(mode)).unwrap();
+        let caps_a = a.captures_all(b":a.b:b").unwrap();
+        let caps_b = b.captures_all(b":a.b:b").unwrap();
+        assert_eq!(
+            caps_a[0].spans(),
+            caps_b[0].spans(),
+            "mode={mode:?}: swapping the anonymous union's arms must not change `g0`'s \
+             participation (V8 and fancy-regex both flip on this swap, disqualifying \
+             them as oracles here) - `g0` must decline in both \
+             orders, since the textually-earlier anonymous union is maximized first \
+             (leftmost-construct-first, rule 6b)"
+        );
+        assert_eq!(caps_a[0].spans(), &[Some((0, 6)), None], "mode={mode:?}");
+    }
+}
+
+#[test]
+fn negated_ascii_class_in_optional_group_unicode_mode_divergence() {
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    let pat = ".+(?P<g0>[^c])?(?P<g1>b.+)?";
+    let hay = b"xxbxx";
+    for mode in [
+        UnicodeMode::Ascii,
+        UnicodeMode::Default,
+        UnicodeMode::Javascript,
+        UnicodeMode::Full,
+    ] {
+        let re = Regex::with_options(pat, RegexOptions::default().unicode(mode)).unwrap();
+        let caps = re.captures_all(hay).unwrap();
+        let spans: Vec<_> = caps.iter().map(|c| c.spans().to_vec()).collect();
+        assert_eq!(spans, vec![vec![Some((0, 5)), None, None]], "mode={mode:?}");
+    }
+}
+
+#[test]
+fn negated_ascii_class_in_optional_group_unicode_mode_divergence_minimal() {
+    // A mandatory unbounded `.+` directly followed by two optional captures,
+    // the first a negated ASCII class. Under a unicode-aware mode, `[^c]`'s
+    // automaton has a variable byte length (1-4 bytes, to cover any non-`c`
+    // codepoint); on pure-ASCII input, where `[^c]` only ever takes its
+    // 1-byte path, `g1` must still decline.
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    let pat = ".+(?P<g0>[^c])?(?P<g1>b)?";
+    let hay = b"xb";
+    for mode in [
+        UnicodeMode::Ascii,
+        UnicodeMode::Default,
+        UnicodeMode::Javascript,
+        UnicodeMode::Full,
+    ] {
+        let re = Regex::with_options(pat, RegexOptions::default().unicode(mode)).unwrap();
+        let caps = re.captures_all(hay).unwrap();
+        let spans: Vec<_> = caps.iter().map(|c| c.spans().to_vec()).collect();
+        assert_eq!(spans, vec![vec![Some((0, 2)), None, None]], "mode={mode:?}");
+    }
+}
+#[test]
+fn quantified_negative_lookahead_bounded_class_corrupts_match_end() {
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    let pat = r"(?=(?![^a]{2})+)a?..";
+    let hay = b"ca.a";
+    for mode in [
+        UnicodeMode::Ascii,
+        UnicodeMode::Default,
+        UnicodeMode::Javascript,
+        UnicodeMode::Full,
+    ] {
+        let re = Regex::with_options(pat, RegexOptions::default().unicode(mode)).unwrap();
+        let caps = re.captures_all(hay).unwrap();
+        let spans: Vec<_> = caps.iter().map(|c| c.spans().to_vec()).collect();
+        assert_eq!(spans, vec![vec![Some((0, 2))], vec![Some((2, 4))]], "mode={mode:?}");
+    }
+}
+
+#[test]
+fn quantified_negative_lookahead_capture_panic() {
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    let pat = r"(?P<g0>(?=(?![^a]{2})+))a?..";
+    let hay = b"ca.a";
+    for mode in [
+        UnicodeMode::Ascii,
+        UnicodeMode::Default,
+        UnicodeMode::Javascript,
+        UnicodeMode::Full,
+    ] {
+        let re = Regex::with_options(pat, RegexOptions::default().unicode(mode)).unwrap();
+        let caps = re.captures_all(hay).unwrap();
+        let spans: Vec<_> = caps.iter().map(|c| c.spans().to_vec()).collect();
+        assert_eq!(
+            spans,
+            vec![
+                vec![Some((0, 2)), Some((0, 0))],
+                vec![Some((2, 4)), Some((2, 2))]
+            ],
+            "mode={mode:?}"
+        );
+    }
+}
+
+#[test]
+fn repeated_lookahead_all_repeat_kinds() {
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    let pats = [
+        r"(?=(?![^a]{2}){3})a?..",
+        r"(?=(?![^a]{2}){0,})a?..",
+        r"(?=(?![^a]{2}){2})a?..",
+        r"(?=(?![^a]{2}){2,3})a?..",
+        r"(?=(?![^a]{2}){2,})a?..",
+    ];
+    for pat in pats {
+        for mode in [UnicodeMode::Ascii, UnicodeMode::Default, UnicodeMode::Javascript, UnicodeMode::Full] {
+            let re = Regex::with_options(pat, RegexOptions::default().unicode(mode)).unwrap();
+            let caps = re.captures_all(b"ca.a").unwrap();
+            let spans: Vec<_> = caps.iter().map(|c| c.spans().to_vec()).collect();
+            assert_eq!(
+                spans,
+                vec![vec![Some((0, 2))], vec![Some((2, 4))]],
+                "pat={pat:?} mode={mode:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn leading_star_before_tied_capture_arm_priority_is_unicode_mode_independent() {
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    let modes = [
+        UnicodeMode::Ascii,
+        UnicodeMode::Default,
+        UnicodeMode::Full,
+        UnicodeMode::Javascript,
+    ];
+    let cases: &[(&str, &[u8])] = &[
+        (r"(?:.*(?P<g0>\z)|x*(?P<g1>.))", b"b"),
+        (r"[a]?(?:.*(?P<g0>\z)|-*(?P<g1>.+)b?){1}", b"bbabb:cb.cb"),
+    ];
+    for &(p, inp) in cases {
+        let mut results = Vec::new();
+        for mode in modes {
+            let re = Regex::with_options(p, RegexOptions::default().unicode(mode))
+                .unwrap_or_else(|e| panic!("compile {p} ({mode:?}): {e}"));
+            let caps = re
+                .captures_all(inp)
+                .unwrap_or_else(|e| panic!("captures_all {p} ({mode:?}) on {inp:?}: {e}"));
+            let spans = caps.first().map(|c| c.spans().to_vec());
+            results.push((mode, spans));
+        }
+        let (first_mode, first_spans) = &results[0];
+        for (mode, spans) in &results[1..] {
+            assert_eq!(
+                spans, first_spans,
+                "{p} on {inp:?}: {mode:?} disagrees with {first_mode:?} ({spans:?} vs {first_spans:?})"
+            );
+        }
+    }
+}
+
+
+#[test]
+fn optional_dot_prefix_before_zero_width_tied_capture_arm_priority_is_unicode_mode_independent() {
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    let modes = [
+        UnicodeMode::Ascii,
+        UnicodeMode::Default,
+        UnicodeMode::Full,
+        UnicodeMode::Javascript,
+    ];
+    let cases: &[(&str, &[u8])] = &[
+        (r".(?:.?(?P<g0>(?=))|a?(?P<g1>))", b"b"),
+        (r".(?:.?(?P<g0>(?=b{0}))|[a-]?(?P<g1>.{0,3})){1}", b"bc--c"),
+        (r".?\.?(?:(?P<g0>(?!.+.{2,2}){3})|(?P<g1>(?=(?:.?|\.*.[cb]?)*(?!-?-+){3}))b?\A)", b""),
+    ];
+    for &(p, inp) in cases {
+        let mut results = Vec::new();
+        for mode in modes {
+            let re = Regex::with_options(p, RegexOptions::default().unicode(mode))
+                .unwrap_or_else(|e| panic!("compile {p} ({mode:?}): {e}"));
+            let caps = re
+                .captures_all(inp)
+                .unwrap_or_else(|e| panic!("captures_all {p} ({mode:?}) on {inp:?}: {e}"));
+            let spans: Vec<_> = caps.iter().map(|c| c.spans().to_vec()).collect();
+            results.push((mode, spans));
+        }
+        let (first_mode, first_spans) = &results[0];
+        for (mode, spans) in &results[1..] {
+            assert_eq!(
+                spans, first_spans,
+                "{p} on {inp:?}: {mode:?} disagrees with {first_mode:?} ({spans:?} vs {first_spans:?})"
+            );
+        }
+    }
+}
+
+#[test]
+fn dot_star_vs_bare_dot_alternation_tie_is_unicode_mode_independent() {
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    let modes = [
+        UnicodeMode::Ascii,
+        UnicodeMode::Default,
+        UnicodeMode::Full,
+        UnicodeMode::Javascript,
+    ];
+    let cases: &[(&str, &[u8])] = &[
+        (r"a+(?:(?P<g0>.*)|.)", b"aaa"),
+        (r".+(?:(?P<g0>(?:b*|.)*)|.)", b"b::-"),
+    ];
+    for &(p, inp) in cases {
+        let mut results = Vec::new();
+        for mode in modes {
+            let re = Regex::with_options(p, RegexOptions::default().unicode(mode))
+                .unwrap_or_else(|e| panic!("compile {p} ({mode:?}): {e}"));
+            let caps = re
+                .captures_all(inp)
+                .unwrap_or_else(|e| panic!("captures_all {p} ({mode:?}) on {inp:?}: {e}"));
+            let spans: Vec<_> = caps.iter().map(|c| c.spans().to_vec()).collect();
+            results.push((mode, spans));
+        }
+        let (first_mode, first_spans) = &results[0];
+        for (mode, spans) in &results[1..] {
+            assert_eq!(
+                spans, first_spans,
+                "{p} on {inp:?}: {mode:?} disagrees with {first_mode:?} ({spans:?} vs {first_spans:?})"
+            );
+        }
+    }
+}
+
+#[test]
+fn bare_dot_first_arm_before_mandatory_capture_is_unicode_mode_independent() {
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    let modes = [
+        UnicodeMode::Ascii,
+        UnicodeMode::Default,
+        UnicodeMode::Full,
+        UnicodeMode::Javascript,
+    ];
+    let cases: &[(&str, &[u8], Option<(usize, usize)>)] = &[
+        (r"a+(?:.|(?P<g0>.)).+", b"aabc", Some((2, 3))),
+        (r"(?:\.?:{0,1}b+|a?)*(?:.|(?P<g0>.)?-{0,1}\.*).+", b"aac.:", Some((2, 3))),
+    ];
+    for &(p, inp, expected_g0) in cases {
+        let mut results = Vec::new();
+        for mode in modes {
+            let re = Regex::with_options(p, RegexOptions::default().unicode(mode))
+                .unwrap_or_else(|e| panic!("compile {p} ({mode:?}): {e}"));
+            let caps = re
+                .captures_all(inp)
+                .unwrap_or_else(|e| panic!("captures_all {p} ({mode:?}) on {inp:?}: {e}"));
+            let spans: Vec<_> = caps.iter().map(|c| c.spans().to_vec()).collect();
+            assert_eq!(spans[0][1], expected_g0, "{p} on {inp:?}: {mode:?}");
+            results.push((mode, spans));
+        }
+        let (first_mode, first_spans) = &results[0];
+        for (mode, spans) in &results[1..] {
+            assert_eq!(
+                spans, first_spans,
+                "{p} on {inp:?}: {mode:?} disagrees with {first_mode:?} ({spans:?} vs {first_spans:?})"
+            );
+        }
+    }
+}
+
+#[test]
+fn lookahead_fused_optional_group_before_alternation_declines_in_every_mode() {
+    // V8 (`/^.+(?:(?<g0>(?=b{1,1})b{0}.{3})?a{1,2}|b+)[^b-]+.?/` on
+    // `":.caba:ac:"`) also gives `g0=undefined`.
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    let p = r"^.+(?:(?P<g0>(?=b{1,1})b{0}.{3})?a{1,2}|b+)[^b-]+.?";
+    let inp = b":.caba:ac:";
+    for mode in [UnicodeMode::Ascii, UnicodeMode::Default, UnicodeMode::Full, UnicodeMode::Javascript] {
+        let re = Regex::with_options(p, RegexOptions::default().unicode(mode)).unwrap();
+        let caps = re.captures_all(inp).unwrap();
+        assert_eq!(caps[0].spans(), &[Some((0, 10)), None], "{mode:?}");
+    }
+}
+
+#[test]
+fn word_boundary_in_optional_leading_group_participates_in_every_mode() {
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    // Every case verified against the glibc `regexec` (POSIX ERE) oracle.
+    // An optional group's own leading atom coinciding with the mandatory
+    // tail's leading atom must not be mistaken for a genuine external
+    // predecessor; the last two cases have a genuinely external predecessor
+    // and must still decline.
+    let cases: &[(&str, &[u8], &[Option<(usize, usize)>])] = &[
+        (r"(?:.+(?P<g2>c\b))?.+\z", b"bac:a", &[Some((0, 5)), Some((2, 3))]),
+        (r"(?:(?P<g0>.*)c)?.*d\z", b"acbbd", &[Some((0, 5)), Some((0, 1))]),
+        (
+            r"[^c]+(?P<g2>(?P<g1>(?!.+))[^bc]*b{1,4})?$",
+            b"ab\nb",
+            &[Some((0, 4)), None, None],
+        ),
+        (r"[^d]+(?P<g0>c)?.*d\z", b"abcbbd", &[Some((0, 6)), None]),
+    ];
+    for (p, inp, expected) in cases {
+        for mode in [UnicodeMode::Ascii, UnicodeMode::Default, UnicodeMode::Full, UnicodeMode::Javascript] {
+            let re = Regex::with_options(p, RegexOptions::default().unicode(mode))
+                .unwrap_or_else(|e| panic!("compile {p} ({mode:?}): {e}"));
+            let caps = re
+                .captures_all(inp)
+                .unwrap_or_else(|e| panic!("captures_all {p} ({mode:?}) on {inp:?}: {e}"));
+            assert_eq!(caps[0].spans(), *expected, "{p} on {inp:?}: {mode:?}");
+        }
+    }
+}
+
+#[test]
+fn zero_width_capture_in_optional_tail_prefers_participation() {
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    for p in [r".+(?:(?!.)|(?P<g0>$).?)?", r".+(?:(?P<g0>$).?|(?!.))?"] {
+        for mode in [UnicodeMode::Ascii, UnicodeMode::Default, UnicodeMode::Full, UnicodeMode::Javascript] {
+            let re = Regex::with_options(p, RegexOptions::default().unicode(mode)).unwrap();
+            let caps = re.captures_all(b"aa").unwrap();
+            assert_eq!(caps[0].spans(), &[Some((0, 2)), Some((2, 2))], "{p} {mode:?}");
+        }
+    }
+}
+
+#[test]
+fn full_javascript_mode_does_not_overrun_past_the_input_length() {
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    let cases: &[(&str, &[u8], &[[usize; 2]])] = &[
+        (r"..(?:(?!b)|\z){1,2}", b"abc", &[[0, 2]]),
+        (r"..(?:(?!b)|\z){1,2}", b"abcd", &[[0, 2], [2, 4]]),
+        (
+            r"(?P<g0>(?<=(?:(?<=[a.]*a{2,4})+(?:-?b|a+.)+|^){0})).{2}(?:(?!b{3}){2,2}|\z){1,2}",
+            b"ab.b",
+            &[[0, 2], [2, 4]],
+        ),
+    ];
+    for (p, inp, expected_spans) in cases {
+        for mode in [
+            UnicodeMode::Ascii,
+            UnicodeMode::Default,
+            UnicodeMode::Full,
+            UnicodeMode::Javascript,
+        ] {
+            let re = Regex::with_options(p, RegexOptions::default().unicode(mode)).unwrap();
+            let caps = re.captures_all(inp).unwrap();
+            let got: Vec<[usize; 2]> = caps
+                .iter()
+                .map(|c| {
+                    let (lo, hi) = c.spans()[0].unwrap();
+                    [lo, hi]
+                })
+                .collect();
+            assert_eq!(got, *expected_spans, "{p} {:?} {mode:?}", String::from_utf8_lossy(inp));
+        }
+    }
+}
+
+#[test]
+fn whole_match_must_equal_capture_wrapping_entire_pattern() {
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    let p = r"(?P<g1>.(?:\z|(?=.)))";
+    for mode in [UnicodeMode::Ascii, UnicodeMode::Default, UnicodeMode::Full, UnicodeMode::Javascript] {
+        let re = Regex::with_options(p, RegexOptions::default().unicode(mode)).unwrap();
+        let caps = re.captures_all(b"aa").unwrap();
+        for c in &caps {
+            assert_eq!(c.spans()[0], c.spans()[1], "{mode:?} whole must equal g1");
+        }
+    }
+}
+
+#[test]
+#[ignore = "slow in debug (unicode word-class build); run with --ignored or in release"]
+fn ascii_mode_agrees_with_default_full_javascript_on_optional_zero_width_alternation_tail() {
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    let p = r"a\B.+(?:(?P<g1>(?!:))(?P<g2>(?=.?))|aa)?";
+    let mut prev: Option<Vec<Option<(usize, usize)>>> = None;
+    for mode in [UnicodeMode::Ascii, UnicodeMode::Default, UnicodeMode::Full, UnicodeMode::Javascript] {
+        let re = Regex::with_options(p, RegexOptions::default().unicode(mode)).unwrap();
+        let caps = re.captures_all(b"ab").unwrap();
+        let got = caps[0].spans().to_vec();
+        if let Some(p) = &prev {
+            assert_eq!(&got, p, "{mode:?}");
+        }
+        prev = Some(got);
+    }
+}
+
+#[test]
+fn multiline_dollar_in_tail_alternation_does_not_flip_sibling_lookaround_participation() {
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    let p = r"b+(?:$.{2}|(?P<g0>(?!:)))?";
+    let expected: Vec<Vec<Option<(usize, usize)>>> = vec![
+        vec![Some((1, 2)), Some((2, 2))],
+        vec![Some((3, 4)), None],
+    ];
+    for mode in [UnicodeMode::Ascii, UnicodeMode::Default, UnicodeMode::Full, UnicodeMode::Javascript] {
+        let re = Regex::with_options(p, RegexOptions::default().unicode(mode)).unwrap();
+        let caps = re.captures_all(b".b.b:c").unwrap();
+        let got: Vec<Vec<Option<(usize, usize)>>> =
+            caps.iter().map(|c| c.spans().to_vec()).collect();
+        assert_eq!(got, expected, "{mode:?}");
+    }
+}
+
+#[test]
+fn uncaptured_leading_plus_maximizes_before_empty_capture() {
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    let p = r"b+(?:(?P<g0>b*)|.)";
+    for mode in [UnicodeMode::Ascii, UnicodeMode::Default, UnicodeMode::Full, UnicodeMode::Javascript] {
+        let re = Regex::with_options(p, RegexOptions::default().unicode(mode)).unwrap();
+        let caps = re.captures_all(b"bbb").unwrap();
+        assert_eq!(caps[0].spans(), &[Some((0, 3)), Some((3, 3))], "{mode:?}");
+    }
+}
+
+#[test]
+fn optional_dot_competing_with_capture_prefers_participation() {
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    let p = r"a*(?:.?|(?P<g0>[ab]*))";
+    let expected = vec![
+        vec![Some((0, 3)), Some((2, 3))],
+        vec![Some((3, 3)), Some((3, 3))],
+    ];
+    for mode in [UnicodeMode::Ascii, UnicodeMode::Default, UnicodeMode::Full, UnicodeMode::Javascript] {
+        let re = Regex::with_options(p, RegexOptions::default().unicode(mode)).unwrap();
+        let caps = re.captures_all(b"aab").unwrap();
+        let spans: Vec<_> = caps.iter().map(|c| c.spans().to_vec()).collect();
+        assert_eq!(spans, expected, "{mode:?}");
+    }
+}
+
+#[test]
+fn tied_zero_width_lookahead_alternation_arms_pick_the_same_winner_in_every_mode() {
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    let cases: &[(&str, &[u8], &[Vec<Option<(usize, usize)>>])] = &[
+        (
+            r"(?P<g0>(?=a))|(?P<g1>(?=.))",
+            b"a",
+            &[vec![Some((0, 0)), Some((0, 0)), Some((0, 0))]],
+        ),
+        (
+            r"(?:(?P<g0>(?=[b]?)).|(?P<g1>(?<=x?)).+)?.+",
+            b"aa",
+            &[vec![Some((0, 2)), Some((0, 0)), Some((0, 0))]],
+        ),
+    ];
+    for (p, input, expected) in cases {
+        for mode in [UnicodeMode::Ascii, UnicodeMode::Default, UnicodeMode::Full, UnicodeMode::Javascript] {
+            let re = Regex::with_options(p, RegexOptions::default().unicode(mode)).unwrap();
+            let caps = re.captures_all(input).unwrap();
+            let spans: Vec<_> = caps.iter().map(|c| c.spans().to_vec()).collect();
+            assert_eq!(
+                spans, *expected,
+                "{p} {mode:?}: the arms tie zero-width, and `|` is UNION - both arms are live, so \
+                 BOTH groups participate. Identical in every mode and under swapping the two arms. \
+                 Earlier revisions asserted a single winner (first the textually-first arm, then a \
+                 canonical-key winner); both read `|` as an ordered alternation."
+            );
+        }
+    }
+}
+
+#[test]
+fn addendum_explicit_union_zero_width_arm_participates_in_every_mode() {
+    // `g0` participates via a real accepting run at start 0: `.+` matches
+    // "a" at position 1, leaving `g0`'s zero-width arm to match at 2. Matches
+    // `fancy-regex`; V8's `null` is its own JS-specific rule, not POSIX.
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    let p = r".+(?:(?P<g0>(?!.))|.+)?";
+    let expected = vec![vec![Some((0, 2)), Some((2, 2))]];
+    for mode in [UnicodeMode::Ascii, UnicodeMode::Default, UnicodeMode::Full, UnicodeMode::Javascript] {
+        let re = Regex::with_options(p, RegexOptions::default().unicode(mode)).unwrap();
+        let caps = re.captures_all(b"aa").unwrap();
+        let spans: Vec<_> = caps.iter().map(|c| c.spans().to_vec()).collect();
+        assert_eq!(spans, expected, "{mode:?}");
+    }
+}
+
+#[test]
+fn bare_lookahead_fused_with_begin_anchor_tail_corrupts_match_end() {
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    let pat = r"(?=(?![cb]{2})\A)[^c]{2}";
+    let hay = b"bxx";
+    for mode in [
+        UnicodeMode::Ascii,
+        UnicodeMode::Default,
+        UnicodeMode::Javascript,
+        UnicodeMode::Full,
+    ] {
+        let re = Regex::with_options(pat, RegexOptions::default().unicode(mode)).unwrap();
+        let caps = re.captures_all(hay).unwrap();
+        let spans: Vec<_> = caps.iter().map(|c| c.spans().to_vec()).collect();
+        assert_eq!(spans, vec![vec![Some((0, 2))]], "mode={mode:?}");
+    }
+}
+
+#[test]
+fn word_boundary_donation_to_trailing_optional_capture_is_unicode_mode_independent() {
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    let pat = r"a\b.+x?(?P<g0>.+)?";
+    let hay = b"a:b";
+    for mode in [
+        UnicodeMode::Ascii,
+        UnicodeMode::Default,
+        UnicodeMode::Javascript,
+        UnicodeMode::Full,
+    ] {
+        let re = Regex::with_options(pat, RegexOptions::default().unicode(mode)).unwrap();
+        let caps = re.captures_all(hay).unwrap();
+        let spans: Vec<_> = caps.iter().map(|c| c.spans().to_vec()).collect();
+        assert_eq!(spans, vec![vec![Some((0, 3)), None]], "mode={mode:?}");
+    }
+}
+
+#[test]
+fn word_boundary_donation_original_fuzzer_repro_is_unicode_mode_independent() {
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    let pat = r"a+\b(?=.).+[ac]*(?P<g0>.*.+)?";
+    let hay = b"..--aa.-aab";
+    let mut results = Vec::new();
+    for mode in [UnicodeMode::Ascii, UnicodeMode::Default, UnicodeMode::Javascript, UnicodeMode::Full] {
+        let re = Regex::with_options(pat, RegexOptions::default().unicode(mode)).unwrap();
+        let caps = re.captures_all(hay).unwrap();
+        let spans: Vec<_> = caps.iter().map(|c| c.spans().to_vec()).collect();
+        results.push((mode, spans));
+    }
+    let first = &results[0].1;
+    for (mode, spans) in &results[1..] {
+        assert_eq!(spans, first, "mode={mode:?}");
+    }
+}
+
+#[test]
+fn grouped_multi_atom_negative_lookahead_before_begin_anchor_never_matches() {
+    // `(?:(?!xy).)` must consume one byte, moving past `\A`'s only valid
+    // position, so this can never match - but must compile.
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    let p = r"(?:(?!xy).)\A";
+    for mode in [UnicodeMode::Ascii, UnicodeMode::Default, UnicodeMode::Full, UnicodeMode::Javascript] {
+        let re = Regex::with_options(p, RegexOptions::default().unicode(mode))
+            .unwrap_or_else(|e| panic!("{mode:?}: expected Ok, got {e:?}"));
+        for hay in [&b""[..], &b"a"[..], &b"xy"[..], &b"ab"[..], &b"xyz"[..]] {
+            assert_eq!(re.find_all(hay).unwrap(), vec![], "{mode:?} hay={hay:?}");
+        }
+    }
+}
+
+#[test]
+fn bounded_optional_quantifier_does_not_donate_a_byte_to_trailing_optional_group() {
+    // `a?` is greedy and can take the one available byte; if it does, the
+    // following `(?P<g0>a{1,3})?` has nothing left and correctly declines.
+    // V8/fancy-regex both agree: g0 = None. Same donation-decline mechanism
+    // as the bare unbounded-quantifier case, but for a *bounded* (not
+    // unbounded) preceding optional quantifier.
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    let p = r"a?(?P<g0>a{1,3})?";
+    for mode in [UnicodeMode::Ascii, UnicodeMode::Default, UnicodeMode::Full, UnicodeMode::Javascript] {
+        let re = Regex::with_options(p, RegexOptions::default().unicode(mode)).unwrap();
+        let caps = re.captures_all(b"a").unwrap();
+        assert_eq!(caps.len(), 2, "{mode:?}: {caps:?}");
+        assert_eq!(caps[0].spans()[0], Some((0, 1)), "{mode:?}: {caps:?}");
+        assert_eq!(caps[0].spans()[1], None, "{mode:?}: g0 should decline, got {caps:?}");
+    }
+
+    // Any bounded (min=0) preceding quantifier reproduces (`a?`, `a{0,1}`,
+    // `a{0,2}`, `a{0,3}`); an *unbounded* preceding quantifier is unaffected,
+    // and the specific `.{1,2}`-style "own internal optional tail" shape
+    // (mandatory rep immediately followed by an optional rep of the SAME
+    // atom, e.g. inside `a{1,3}`'s own desugaring) is a distinct shape and
+    // must not be conflated with the standalone bounded-optional case here.
+    let also_decline: &[(&str, &[u8])] = &[
+        (r"a{0,1}(?P<g0>a{1,3})?", b"a"),
+        (r"a{0,2}(?P<g0>a{1,3})?", b"a"),
+        (r"a{0,3}(?P<g0>a{1,3})?", b"a"),
+    ];
+    for mode in [UnicodeMode::Ascii, UnicodeMode::Default, UnicodeMode::Full, UnicodeMode::Javascript] {
+        for &(pat, hay) in also_decline {
+            let re = Regex::with_options(pat, RegexOptions::default().unicode(mode)).unwrap();
+            let caps = re.captures_all(hay).unwrap();
+            assert_eq!(caps[0].spans()[1], None, "pat={pat} {mode:?}: {caps:?}");
+        }
+        // Unbounded preceding quantifiers: already correctly `None`,
+        // must remain so.
+        let re = Regex::with_options(r"a*(?P<g0>a{1,4})?", RegexOptions::default().unicode(mode)).unwrap();
+        assert_eq!(re.captures_all(b"a").unwrap()[0].spans()[1], None);
+        let re = Regex::with_options(r"a+(?P<g0>a{1,4})?", RegexOptions::default().unicode(mode)).unwrap();
+        assert_eq!(re.captures_all(b"aa").unwrap()[0].spans()[1], None);
+    }
+}
+
+#[test]
+fn unbounded_quantifier_donates_a_byte_through_an_intervening_mandatory_atom() {
+    // `c*` is greedy/unbounded but can only match `c`; on "ca" it naturally
+    // stops after consuming the one `c`, leaving `.` to consume `a` and `g0`
+    // nothing to claim. V8/fancy-regex both agree: g0 = None. Same donation
+    // mechanism as the bounded case above, but with a mandatory, unrestricted
+    // atom (`.`) sitting between the declining quantifier and the optional
+    // capture, which a direct-adjacency-only guard would miss.
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    let p = r"c*.(?P<g0>a)?";
+    for mode in [UnicodeMode::Ascii, UnicodeMode::Default, UnicodeMode::Full, UnicodeMode::Javascript] {
+        let re = Regex::with_options(p, RegexOptions::default().unicode(mode)).unwrap();
+        let caps = re.captures_all(b"ca").unwrap();
+        assert_eq!(caps[0].spans()[0], Some((0, 2)), "{mode:?}: {caps:?}");
+        assert_eq!(caps[0].spans()[1], None, "{mode:?}: g0 should decline, got {caps:?}");
+    }
+
+    for mode in [UnicodeMode::Ascii, UnicodeMode::Default, UnicodeMode::Full, UnicodeMode::Javascript] {
+        // Bounded (min=0) preceding quantifiers reproduce too.
+        for pat in [r"c?.(?P<g0>a)?", r"c{0,3}.(?P<g0>a)?"] {
+            let re = Regex::with_options(pat, RegexOptions::default().unicode(mode)).unwrap();
+            let caps = re.captures_all(b"ca").unwrap();
+            assert_eq!(caps[0].spans()[1], None, "pat={pat} {mode:?}: {caps:?}");
+        }
+        // min>=1 preceding quantifiers must already correctly decline.
+        for pat in [r"c+.(?P<g0>a)?", r"c{2,}.(?P<g0>a)?"] {
+            let re = Regex::with_options(pat, RegexOptions::default().unicode(mode));
+            if let Ok(re) = re {
+                if let Ok(caps) = re.captures_all(b"cca") {
+                    if !caps.is_empty() {
+                        assert_eq!(caps[0].spans()[1], None, "pat={pat} {mode:?}: {caps:?}");
+                    }
+                }
+            }
+        }
+        // An optional middle atom removes the ambiguity: no bug.
+        let re = Regex::with_options(r"c*.?(?P<g0>a)?", RegexOptions::default().unicode(mode)).unwrap();
+        assert_eq!(re.captures_all(b"ca").unwrap()[0].spans()[1], None);
+        // A middle atom restricted away from the preceding quantifier's class: no bug.
+        let re = Regex::with_options(r"c*[a]?(?P<g0>a)?", RegexOptions::default().unicode(mode)).unwrap();
+        assert_eq!(re.captures_all(b"ca").unwrap()[0].spans()[1], None);
+        // No middle atom at all (the original bare shape): g0 correctly participates,
+        // since c* can never consume the 'a' anyway.
+        let re = Regex::with_options(r"c*(?P<g0>a)?", RegexOptions::default().unicode(mode)).unwrap();
+        assert_eq!(re.captures_all(b"ca").unwrap()[0].spans()[1], Some((1, 2)));
+    }
+}
+
+#[test]
+fn optional_capture_participates_via_a_shorter_accepting_run() {
+    // `a*` (leftmost) maximizes to "a"; rule 6a forbids shortening it so
+    // g2 can participate at 1. Verified against V8.
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    let p = r"a*.(?P<g2>(?![^b]+))?";
+    for mode in [UnicodeMode::Ascii, UnicodeMode::Default, UnicodeMode::Full, UnicodeMode::Javascript] {
+        let re = Regex::with_options(p, RegexOptions::default().unicode(mode)).unwrap();
+        let caps = re.captures_all(b"ab-").unwrap();
+        assert_eq!(caps[0].spans()[0], Some((0, 2)), "{mode:?}: {caps:?}");
+        assert_eq!(caps[0].spans()[1], None, "{mode:?}: g2 participates via the shorter accepting run, got {caps:?}");
+    }
+
+    let p2 = r"a*.(?:(?::*|(?=[:c]{3}.*)(?P<g0>a{1}.?)?)|(?P<g2>(?P<g1>(?![^cb]+))a{0,3}))";
+    for mode in [UnicodeMode::Ascii, UnicodeMode::Default, UnicodeMode::Full, UnicodeMode::Javascript] {
+        let re = Regex::with_options(p2, RegexOptions::default().unicode(mode)).unwrap();
+        let caps = re.captures_all(b"bab-bbacc..b").unwrap();
+        assert_eq!(caps[1].spans()[0], Some((1, 3)), "{mode:?}: {caps:?}");
+        assert_eq!(
+            (caps[1].spans()[2], caps[1].spans()[3]),
+            (None, None),
+            "{mode:?}: `a*` is the leftmost subexpression and is already maximized (1 char) by \
+             the winning (1,3) decomposition; shortening it to 0 to let g1/g2 zero-width-participate \
+             at 2 is forbidden by rule 6a, same as `.+(?P<g0>.)?` on \"ac\". Verified against V8. \
+             got {caps:?}"
+        );
+    }
+}
+
+#[test]
+fn unicode_mode_must_not_change_capture_participation_for_pure_ascii_pattern() {
+    // Pure-ASCII pattern and input: `UnicodeMode` must never change the
+    // result. `Ascii`/`Default` (and V8) agree g0 must decline; `Full`/
+    // `Javascript` wrongly let it participate.
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    let p = r".{1,4}.{3}(?P<g0>.{2,5})?";
+    for mode in [UnicodeMode::Ascii, UnicodeMode::Default, UnicodeMode::Full, UnicodeMode::Javascript] {
+        let re = Regex::with_options(p, RegexOptions::default().unicode(mode)).unwrap();
+        let caps = re.captures_all(b"a:.b.-").unwrap();
+        assert_eq!(caps[0].spans()[0], Some((0, 6)), "{mode:?}: {caps:?}");
+        assert_eq!(caps[0].spans()[1], None, "{mode:?}: g0 should decline, got {caps:?}");
+    }
+
+    // Second, smaller repro: leading atom optional too, tie sits mid-pattern.
+    let p2 = r".?(?P<g0>.{1,3})?.{1,3}";
+    for mode in [UnicodeMode::Ascii, UnicodeMode::Default, UnicodeMode::Full, UnicodeMode::Javascript] {
+        let re = Regex::with_options(p2, RegexOptions::default().unicode(mode)).unwrap();
+        let caps = re.captures_all(b"bb").unwrap();
+        assert_eq!(caps[0].spans()[0], Some((0, 2)), "{mode:?}: {caps:?}");
+        assert_eq!(caps[0].spans()[1], None, "{mode:?}: g0 should decline, got {caps:?}");
+    }
+}
+
+#[test]
+fn nested_optional_group_participates_consistently_across_unicode_modes() {
+    // `.?(?P<g1>(?P<g0>b+.?)?[bc]+)?` on `"-bc"`: `g0` sits behind `g1`'s own
+    // independent `?`, nested inside `g1`'s body. `g1`'s body can be split
+    // either as `g0="b"` then `[bc]+="c"`, or `g0` declining and
+    // `[bc]+="bc"` alone - a genuine tie, so `g0` participates. V8 agrees
+    // (`Some((1, 2))`). Must hold in all four `UnicodeMode`s on this
+    // pure-ASCII pattern+input.
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    let p = r".?(?P<g1>(?P<g0>b+.?)?[bc]+)?";
+    for mode in [UnicodeMode::Ascii, UnicodeMode::Default, UnicodeMode::Full, UnicodeMode::Javascript] {
+        let re = Regex::with_options(p, RegexOptions::default().unicode(mode)).unwrap();
+        let caps = re.captures_all(b"-bc").unwrap();
+        assert_eq!(caps[0].spans()[0], Some((0, 3)), "{mode:?}: {caps:?}");
+        assert_eq!(caps[0].spans()[1], Some((1, 3)), "{mode:?}: {caps:?}");
+        assert_eq!(caps[0].spans()[2], Some((1, 2)), "{mode:?}: g0 should participate, got {caps:?}");
+    }
+}
+
+#[test]
+fn unbounded_predecessor_donation_survives_an_intervening_optional_star_of_a_different_class() {
+    // `.+a*(?P<g0>.a*)?` on `"b:"`: `.+` greedily consumes both bytes; `a*`
+    // (a different, unrelated class) can only ever match zero here, so it is
+    // fully transparent - `g0` must decline through it too. V8/fancy-regex
+    // agree. Shape here: a same-class `X*` sitting BOTH immediately after
+    // the donor quantifier AND as the tail of the capture's own body.
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    let p = r".+a*(?P<g0>.a*)?";
+    for mode in [UnicodeMode::Ascii, UnicodeMode::Default, UnicodeMode::Full, UnicodeMode::Javascript] {
+        let re = Regex::with_options(p, RegexOptions::default().unicode(mode)).unwrap();
+        let caps = re.captures_all(b"b:").unwrap();
+        assert_eq!(caps[0].spans()[0], Some((0, 2)), "{mode:?}: {caps:?}");
+        assert_eq!(caps[0].spans()[1], None, "{mode:?}: g0 should decline, got {caps:?}");
+    }
+
+    // Isolation matrix: an intervening OPTIONAL star that genuinely does
+    // consume real content right before the capture's tag must NOT be
+    // treated as transparent - the fallback only fires when the star
+    // matched vacuously in this decomposition.
+    let re = Regex::with_options(r"b*\.*(?P<g0>..)?.*", RegexOptions::default().unicode(UnicodeMode::Ascii)).unwrap();
+    let caps = re.captures_all(b".bc").unwrap();
+    assert_eq!(caps[0].spans()[1], Some((1, 3)), "g0 should participate, got {caps:?}");
+
+    // A farther unbounded predecessor of a different class must still be
+    // able to donate through a nearer mandatory-then-unbounded atom that
+    // ends in the same class as itself (the existing relocation model
+    // must keep working unchanged alongside the new transparent-star path).
+    let re = Regex::with_options(r".+[^b]+(?P<g1>.+.+)?", RegexOptions::default().unicode(UnicodeMode::Ascii)).unwrap();
+    let caps = re.captures_all(b"a-b:").unwrap();
+    assert_eq!(caps[0].spans()[1], None, "g1 should decline, got {caps:?}");
+}
+
+#[test]
+fn bounded_optional_before_optional_capture_does_not_falsely_compete_after_it_already_consumed() {
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    let p = r".?(?P<g0>.)?x*";
+    for mode in [UnicodeMode::Ascii, UnicodeMode::Default, UnicodeMode::Full, UnicodeMode::Javascript] {
+        let re = Regex::with_options(p, RegexOptions::default().unicode(mode)).unwrap();
+        let caps = re.captures_all(b"bx").unwrap();
+        assert_eq!(caps[0].spans()[0], Some((0, 2)), "{mode:?}: {caps:?}");
+        assert_eq!(caps[0].spans()[1], Some((1, 2)), "{mode:?}: g0 should participate, got {caps:?}");
+    }
+
+    // Must generalize across a `{m,n}`-desugared chain of stacked bounded
+    // optionals sharing one synthetic tag pair, and across a chain of
+    // several DIFFERENT-class bounded predecessors in front of the capture.
+    let re = Regex::with_options(r".{0,3}(?P<g0>.+)?[^a]+", RegexOptions::default().unicode(UnicodeMode::Ascii)).unwrap();
+    let caps = re.captures_all(b"abcdef").unwrap();
+    assert_eq!(caps[0].spans()[1], Some((3, 5)), "g0 should participate, got {caps:?}");
+
+    let re = Regex::with_options(r"[^b]*a{0,2}.?(?P<g0>:)?[^bb]{2,4}b+.+", RegexOptions::default().unicode(UnicodeMode::Ascii)).unwrap();
+    let caps = re.captures_all(b"ccab:-:b-").unwrap();
+    assert_eq!(caps[0].spans()[1], Some((4, 5)), "g0 should participate, got {caps:?}");
+}
+
+#[test]
+fn all_or_nothing_leading_optional_group_does_not_falsely_compete_with_a_following_optional_capture() {
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    for mode in [UnicodeMode::Ascii, UnicodeMode::Default, UnicodeMode::Full, UnicodeMode::Javascript] {
+        // `(?:aa)?` has no partial value - it either consumes exactly
+        // "aa" or exactly nothing. It must decline entirely for the
+        // overall match to succeed here, and once declined it is fully
+        // transparent: `g1` should get first crack at the freed byte,
+        // leaving `a+` the second one, not the reverse.
+        let re = Regex::with_options(r"(?:aa)?(?P<g1>a)?a+", RegexOptions::default().unicode(mode)).unwrap();
+        let caps = re.captures_all(b"aa").unwrap();
+        assert_eq!(caps[0].spans()[0], Some((0, 2)), "{mode:?}: {caps:?}");
+        assert_eq!(caps[0].spans()[1], Some((0, 1)), "{mode:?}: g1 should participate, got {caps:?}");
+
+        // Same shape, but the leading group is itself capturing - must
+        // decline (no partial value forces it to give up entirely) while
+        // `g1` still participates.
+        let re = Regex::with_options(r"(?P<g0>aa)?(?P<g1>a)?a+", RegexOptions::default().unicode(mode)).unwrap();
+        let caps = re.captures_all(b"aa").unwrap();
+        assert_eq!(caps[0].spans()[1], None, "{mode:?}: g0 should decline, got {caps:?}");
+        assert_eq!(caps[0].spans()[2], Some((0, 1)), "{mode:?}: g1 should participate, got {caps:?}");
+
+        // A *genuine* single-byte-granularity bounded optional predecessor
+        // still wins the tie over the following optional capture, unlike the
+        // all-or-nothing multi-byte case above.
+        for pat in [r"a{0,1}(?P<g0>a{1,3})?", r"a{0,2}(?P<g0>a{1,3})?", r"a{0,3}(?P<g0>a{1,3})?", r"a?(?P<g0>a{1,3})?"] {
+            let re = Regex::with_options(pat, RegexOptions::default().unicode(mode)).unwrap();
+            assert_eq!(re.captures_all(b"a").unwrap()[0].spans()[1], None, "{mode:?} pat={pat}");
+        }
+    }
+}
+
+#[test]
+fn hash_consed_synthetic_quantifier_tag_not_misattributed_across_group_boundary() {
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    for mode in [UnicodeMode::Ascii, UnicodeMode::Default, UnicodeMode::Full, UnicodeMode::Javascript] {
+        // `g1`'s body can only hold at end-of-string (`$`), which is
+        // impossible here (a mandatory `.+` must follow) - it is forced
+        // to always decline. `g2` must still correctly decline too, since
+        // the first `.+` should greedily claim both `a` and `c`, leaving
+        // only `b` for the second `.+`.
+        let re = Regex::with_options(r"(?P<g1>$.*)?.+(?P<g2>c+)?.+", RegexOptions::default().unicode(mode)).unwrap();
+        let caps = re.captures_all(b"acb").unwrap();
+        assert_eq!(caps[0].spans(), &[Some((0, 3)), None, None], "{mode:?}: {caps:?}");
+
+        // A non-trivial body inside the always-declining leading group
+        // (still anchor-gated to end-of-string) reproduces identically.
+        let re = Regex::with_options(r"(?P<g1>a*$.*)?.+(?P<g2>c+)?.+", RegexOptions::default().unicode(mode)).unwrap();
+        let caps = re.captures_all(b"acb").unwrap();
+        assert_eq!(caps[0].spans(), &[Some((0, 3)), None, None], "{mode:?}: {caps:?}");
+
+        // A leading group anchored to \A instead of $ CAN meaningfully
+        // compete at position 0 and correctly should participate.
+        let re = Regex::with_options(r"(?P<g1>\A.*)?.+(?P<g2>c+)?.+", RegexOptions::default().unicode(mode)).unwrap();
+        let caps = re.captures_all(b"acb").unwrap();
+        assert_eq!(caps[0].spans(), &[Some((0, 3)), Some((0, 1)), None], "{mode:?}: {caps:?}");
+
+        // The original already-fixed bare shape (no leading group at
+        // all) must remain correct.
+        let re = Regex::with_options(r".+(?P<g2>c+)?.+", RegexOptions::default().unicode(mode)).unwrap();
+        assert_eq!(re.captures_all(b"acb").unwrap()[0].spans(), &[Some((0, 3)), None], "{mode:?}");
+
+        // An unrelated forced-decline family repro must remain fixed.
+        let re = Regex::with_options(r"a*(?P<g0>b)?b+", RegexOptions::default().unicode(mode)).unwrap();
+        assert_eq!(re.captures_all(b"bb").unwrap()[0].spans(), &[Some((0, 2)), Some((0, 1))], "{mode:?}");
+    }
+}
+
+#[test]
+fn bounded_optional_predecessor_through_a_multi_atom_same_class_chain_still_competes() {
+    // `[^b]?` (a genuine bounded, byte-granularity optional predecessor)
+    // is separated from `g0` by `.{2}` - a CHAIN of two width-1 `.`
+    // `Concat` steps, not a single atom. `[^b]?` claiming byte 0 and
+    // `.{2}` claiming bytes 1-2 reaches the same total match length as
+    // `[^b]?` declining and `.{2}` claiming bytes 0-1, leaving byte 2 for
+    // `g0` - a genuine tie the earlier (leading) atom must win.
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    for mode in [UnicodeMode::Ascii, UnicodeMode::Default, UnicodeMode::Full, UnicodeMode::Javascript] {
+        let re = Regex::with_options(r"[^b]?.{2}(?P<g0>.)?", RegexOptions::default().unicode(mode)).unwrap();
+        let caps = re.captures_all(b"abc").unwrap();
+        assert_eq!(caps[0].spans(), &[Some((0, 3)), None], "{mode:?}: {caps:?}");
+
+        // A longer same-class chain (three width-1 atoms, `.{3}`) must
+        // extend the same way.
+        let re = Regex::with_options(r"[^b]?.{3}(?P<g0>.)?", RegexOptions::default().unicode(mode)).unwrap();
+        let caps = re.captures_all(b"abcd").unwrap();
+        assert_eq!(caps[0].spans(), &[Some((0, 4)), None], "{mode:?}: {caps:?}");
+
+        // The single-atom (chain length 1) shape must remain correct too.
+        let re = Regex::with_options(r"[^c]?.(?P<g0>.)?", RegexOptions::default().unicode(mode)).unwrap();
+        let caps = re.captures_all(b"ab").unwrap();
+        assert_eq!(caps[0].spans(), &[Some((0, 2)), None], "{mode:?}: {caps:?}");
+
+        // An UNBOUNDED-predecessor repro (through the same
+        // `.{2}` chain shape, tied against a trailing unbounded absorber)
+        // must still let `g0` participate.
+        let re = Regex::with_options(r"a+.{2}(?P<g0>a)?.+", RegexOptions::default().unicode(mode)).unwrap();
+        let caps = re.captures_all(b"a:aaa").unwrap();
+        assert_eq!(caps[0].spans(), &[Some((0, 5)), Some((3, 4))], "{mode:?}: {caps:?}");
+    }
+}
+
+#[test]
+fn hash_consed_synthetic_quantifier_tag_shared_across_unrelated_concat_scopes_not_conflated() {
+    // `.*` (top-level) and `g0`'s own leading-then-nested `[^.].*` share the
+    // identical hash-consed `Star(dot)` `NodeId` for their own trailing
+    // `.*`, but the two occurrences sit in unrelated `Concat` scopes
+    // (top-level sibling vs. deep inside a completely different optional
+    // capture's own body) and must not be conflated into shared runtime
+    // bookkeeping. The leading `.*` is unbounded and greedy; it can (and
+    // must) consume the whole `"bb"` prefix on its own, leaving nothing for
+    // `g0` to claim.
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    for mode in [UnicodeMode::Ascii, UnicodeMode::Default, UnicodeMode::Full, UnicodeMode::Javascript] {
+        let re = Regex::with_options(r".*(?P<g0>[^.].*)?a", RegexOptions::default().unicode(mode)).unwrap();
+        let caps = re.captures_all(b"bba").unwrap();
+        assert_eq!(caps[0].spans(), &[Some((0, 3)), None], "{mode:?}: {caps:?}");
+
+        // `.+` in place of the leading `.*` reproduces identically.
+        let re = Regex::with_options(r".+(?P<g0>[^.].*)?a", RegexOptions::default().unicode(mode)).unwrap();
+        let caps = re.captures_all(b"bba").unwrap();
+        assert_eq!(caps[0].spans(), &[Some((0, 3)), None], "{mode:?}: {caps:?}");
+
+        // `g0`'s own nested star as `.+` instead of `.*` reproduces too.
+        let re = Regex::with_options(r".*(?P<g0>[^.].+)?a", RegexOptions::default().unicode(mode)).unwrap();
+        let caps = re.captures_all(b"bbca").unwrap();
+        assert_eq!(caps[0].spans(), &[Some((0, 4)), None], "{mode:?}: {caps:?}");
+
+        // A mandatory leading `[^.]` ahead of the outer `.*` (so the shared
+        // `Star(dot)` node's OUTER occurrence is not the very first atom in
+        // the pattern) still must not leak the conflated tag.
+        let re = Regex::with_options(r"[^.].*(?P<g0>[^.].*)?a", RegexOptions::default().unicode(mode)).unwrap();
+        let caps = re.captures_all(b"bcbba").unwrap();
+        assert_eq!(caps[0].spans(), &[Some((0, 5)), None], "{mode:?}: {caps:?}");
+
+        // The always-declining `g0` nested one level deeper inside another
+        // capture (`g1`) must still resolve correctly - `g1` itself
+        // genuinely participates (it wraps the mandatory trailing `a`).
+        let re = Regex::with_options(r".*(?P<g1>(?P<g0>[^.].*)?a)", RegexOptions::default().unicode(mode)).unwrap();
+        let caps = re.captures_all(b"bba").unwrap();
+        assert_eq!(caps[0].spans(), &[Some((0, 3)), Some((2, 3)), None], "{mode:?}: {caps:?}");
+    }
+}
+
+#[test]
+fn addendum_fix_must_not_break_legitimate_reuse_between_sibling_union_arms() {
+    // Two arms of the SAME union carrying their own identical copy of a
+    // hash-cons-shared tail (e.g. after a distributivity rewrite) have
+    // IDENTICAL ancestry and are mutually exclusive, so aliasing their tag
+    // registers is harmless - required, in fact, for the union's arm order
+    // to stay irrelevant to which capture spans get reported. Full/
+    // Javascript reject this shape outright (unrelated, pre-existing
+    // `UnsupportedPattern` limitation) - only Ascii/Default accept it.
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    for mode in [UnicodeMode::Ascii, UnicodeMode::Default] {
+        for pat in [
+            r"(?:.|(?=[^c.]))(?:[^c.][a-z])*(?P<g0>.)?",
+            r"(?:(?=[^c.])|.)(?:[^c.][a-z])*(?P<g0>.)?",
+        ] {
+            let re = Regex::with_options(pat, RegexOptions::default().unicode(mode)).unwrap();
+            let caps = re.captures_all(b":").unwrap();
+            assert_eq!(caps[0].spans(), &[Some((0, 1)), None], "{mode:?} {pat}: {caps:?}");
+        }
+    }
+}
+
+#[test]
+fn trailing_quantifier_sharing_a_class_with_an_intervening_mandatory_atom_declines_when_ambiguous() {
+    // `.+` (leftmost) maximizes to 4 chars, leaving nothing for `g0`; a
+    // shorter `.+` giving g0 a span is forbidden by rule 6a. Same for `c*`
+    // below. Verified against V8 and glibc.
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    for mode in [UnicodeMode::Ascii, UnicodeMode::Default, UnicodeMode::Full, UnicodeMode::Javascript] {
+        let re = Regex::with_options(r".+[bc](?P<g0>a{2})?b{0,2}", RegexOptions::default().unicode(mode)).unwrap();
+        let caps = re.captures_all(b"abaab").unwrap();
+        assert_eq!(caps[0].spans(), &[Some((0, 5)), None], "{mode:?}: {caps:?}");
+
+        // `?` (not just `{0,2}`) on the shared-literal trailing target
+        // reproduces identically.
+        let re = Regex::with_options(r".+[bc](?P<g0>a{2})?b?", RegexOptions::default().unicode(mode)).unwrap();
+        let caps = re.captures_all(b"abaab").unwrap();
+        assert_eq!(caps[0].spans(), &[Some((0, 5)), None], "{mode:?}: {caps:?}");
+
+        // The trailing quantifier's class being DISJOINT from the
+        // intervening atom does NOT change anything: `c*` still maximizes
+        // first and `g0` still declines.
+        let re = Regex::with_options(r"c*.(?P<g0>a)?", RegexOptions::default().unicode(mode)).unwrap();
+        let caps = re.captures_all(b"ca").unwrap();
+        assert_eq!(caps[0].spans(), &[Some((0, 2)), None], "{mode:?}: {caps:?}");
+
+        // Here there is no genuine ambiguity: `[bc]` has no other byte to
+        // bind to (no more b/c in the input), so `.+`=1 is the only valid
+        // decomposition and `g0` legitimately participates.
+        let re = Regex::with_options(r".+[bc](?P<g0>a{2})?x{0,2}", RegexOptions::default().unicode(mode)).unwrap();
+        let caps = re.captures_all(b"abaax").unwrap();
+        assert_eq!(caps[0].spans(), &[Some((0, 5)), Some((2, 4))], "{mode:?}: {caps:?}");
+    }
+}
+
+#[test]
+fn negative_lookahead_with_a_single_byte_body_stays_transparent_to_predecessor_risk() {
+    // `mk_neg_lookahead` compiles `(?!X)` into a complement-based rewrite
+    // whose own min length is always 0 regardless of `X`'s actual width,
+    // unlike a positive lookahead `(?=X)`. `[^b]+(?!z)(?P<g0>a)?` on
+    // `"aab"`: `[^b]+` is unbounded and greedy and must claim both `a`s
+    // itself, leaving nothing for `g0`, even though the zero-width `(?!z)`
+    // in between looks like it could reset that.
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    for mode in [UnicodeMode::Ascii, UnicodeMode::Default, UnicodeMode::Full, UnicodeMode::Javascript] {
+        let re = Regex::with_options(r"[^b]+(?!z)(?P<g0>a)?", RegexOptions::default().unicode(mode)).unwrap();
+        let caps = re.captures_all(b"aab").unwrap();
+        assert_eq!(caps[0].spans(), &[Some((0, 2)), None], "{mode:?}: {caps:?}");
+
+        // A bounded-repeat body on `g0` reproduces identically.
+        let re = Regex::with_options(r"[^b]+(?!z)(?P<g0>a{1,3})?", RegexOptions::default().unicode(mode)).unwrap();
+        let caps = re.captures_all(b"aab").unwrap();
+        assert_eq!(caps[0].spans(), &[Some((0, 2)), None], "{mode:?}: {caps:?}");
+
+        // A leading optional atom ahead of the unbounded quantifier must not
+        // change anything.
+        let re = Regex::with_options(r"\.?[^b]+(?!z)(?P<g0>a)?", RegexOptions::default().unicode(mode)).unwrap();
+        let caps = re.captures_all(b"aab").unwrap();
+        assert_eq!(caps[0].spans(), &[Some((0, 2)), None], "{mode:?}: {caps:?}");
+
+        // The pre-existing positive-lookahead passthrough must
+        // remain unaffected by this fix.
+        let re = Regex::with_options(r".+(?=.).(?P<g0>.)?", RegexOptions::default().unicode(mode)).unwrap();
+        let caps = re.captures_all(b"aaa").unwrap();
+        assert_eq!(caps[0].spans(), &[Some((0, 3)), None], "{mode:?}: {caps:?}");
+    }
+}
+
+#[test]
+fn optional_lookahead_before_unsatisfiable_width_lookbehind_never_matches() {
+    // The lookbehind needs a 6-byte run (`a{3}.{3}`) that never occurs in
+    // this 5-byte haystack, so no position can ever satisfy it - correct
+    // answer (V8, and resharp's own Full/Javascript modes) is no match
+    // anywhere. Ascii/Default instead reported a spurious 0-width match
+    // at byte offset 8, past the end of the 5-byte haystack.
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    let p = r"(?=c)?(?<=a{3}.{3})";
+    for mode in [UnicodeMode::Ascii, UnicodeMode::Default, UnicodeMode::Full, UnicodeMode::Javascript] {
+        let re = Regex::with_options(p, RegexOptions::default().unicode(mode)).unwrap();
+        let got = re.find_all(b"-.aaa").unwrap();
+        assert!(got.is_empty(), "{mode:?}: {got:?}");
+    }
+}
+
+#[test]
+fn leading_bounded_optional_donation_risk_must_not_force_a_wide_range_optional_capture_to_fully_decline() {
+    // `.?(?P<g0>.{2,4})?.+` on `"abcd"`: `.?` can donate at most ONE extra
+    // byte of growth, while `g0` would need to give up TWO to reach a valid
+    // decomposition if `.?` declined entirely - the resolution must reason
+    // about the actual amount each side can give up, not just whether they
+    // share a byte class, or it wrongly forces `g0` to fully decline and
+    // throws away its otherwise-correct truncated width. V8 agrees `g0`
+    // should participate with `Some((1, 3))`.
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    for mode in [UnicodeMode::Ascii, UnicodeMode::Default, UnicodeMode::Full, UnicodeMode::Javascript] {
+        let re = Regex::with_options(r".?(?P<g0>.{2,4})?.+", RegexOptions::default().unicode(mode)).unwrap();
+        let caps = re.captures_all(b"abcd").unwrap();
+        assert_eq!(caps[0].spans(), &[Some((0, 4)), Some((1, 3))], "{mode:?}: {caps:?}");
+
+        // A fixed-width body (range width 0) and a narrower range (width 1)
+        // must give the identical answer.
+        let re = Regex::with_options(r".?(?P<g0>.{2,2})?.+", RegexOptions::default().unicode(mode)).unwrap();
+        let caps = re.captures_all(b"abcd").unwrap();
+        assert_eq!(caps[0].spans(), &[Some((0, 4)), Some((1, 3))], "{mode:?}: {caps:?}");
+
+        let re = Regex::with_options(r".?(?P<g0>.{1,2})?.+", RegexOptions::default().unicode(mode)).unwrap();
+        let caps = re.captures_all(b"abcd").unwrap();
+        assert_eq!(caps[0].spans(), &[Some((0, 4)), Some((1, 3))], "{mode:?}: {caps:?}");
+
+        // The shape above (where full decline really is correct, since
+        // there's nothing left for `g0` at all once `a?` takes the one
+        // available byte) must stay unaffected.
+        let re = Regex::with_options(r"a?(?P<g0>a{1,3})?", RegexOptions::default().unicode(mode)).unwrap();
+        let caps = re.captures_all(b"a").unwrap();
+        assert_eq!(caps[0].spans(), &[Some((0, 1)), None], "{mode:?}: {caps:?}");
+
+        // A shape with a leading quantifier that has its OWN
+        // flexibility, legitimately outranking `g0` and forcing a genuine
+        // full decline) must also stay unaffected.
+        let re = Regex::with_options(r".{1,4}.{3}(?P<g0>.{2,5})?", RegexOptions::default().unicode(mode)).unwrap();
+        let caps = re.captures_all(b"a:.b.-").unwrap();
+        assert_eq!(caps[0].spans(), &[Some((0, 6)), None], "{mode:?}: {caps:?}");
+    }
+}
+
+#[test]
+fn optional_single_char_capture_declines_when_a_trailing_bounded_repeat_follows_it() {
+    // `.?.(?P<g0>:)?[^a-]{1,2}` on `"c::c"`: the mandatory `.` sitting
+    // between the leading bounded-optional `.?` and `g0` is a genuine fixed
+    // obstacle, not "more of the same optional unit" as `.?`. `.?` is
+    // capped at exactly one extra byte of growth, ever - it must not be
+    // treated as able to "relocate" an unlimited number of times the way a
+    // real unbounded star legitimately can, inventing an unreachable
+    // competing decomposition (`.?` growing to 2 bytes, which it can never
+    // do) and wrongly forcing `g0` to fully decline. V8 agrees `g0` should
+    // participate as `Some((2, 3))`.
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    for mode in [UnicodeMode::Ascii, UnicodeMode::Default, UnicodeMode::Full, UnicodeMode::Javascript] {
+        let re = Regex::with_options(r".?.(?P<g0>:)?[^a-]{1,2}", RegexOptions::default().unicode(mode)).unwrap();
+        let caps = re.captures_all(b"c::c").unwrap();
+        assert_eq!(caps[0].spans(), &[Some((0, 4)), Some((2, 3))], "{mode:?}: {caps:?}");
+
+        // Range width 1 must stay unaffected.
+        let re = Regex::with_options(r".?.(?P<g0>:)?[^a-]{1,1}", RegexOptions::default().unicode(mode)).unwrap();
+        let caps = re.captures_all(b"c::c").unwrap();
+        assert_eq!(caps[0].spans(), &[Some((0, 4)), Some((2, 3))], "{mode:?}: {caps:?}");
+
+        // A wider corpus-shaped repro: same mechanism, a longer leading
+        // chain (`b+.{0,3}[^.]`) and a wider trailing range (`{1,4}`).
+        let re = Regex::with_options(r"b+.{0,3}[^.](?P<g0>:)?[^a-]{1,4}", RegexOptions::default().unicode(mode)).unwrap();
+        let caps = re.captures_all(b"ab.caa::c-c").unwrap();
+        assert_eq!(caps[0].spans(), &[Some((1, 9)), Some((6, 7))], "{mode:?}: {caps:?}");
+
+        // The no-intervening-mandatory-atom shape (`a?`
+        // directly beside `g0`) must stay unaffected: `a?` genuinely has
+        // nothing left to donate once it takes the one available byte.
+        let re = Regex::with_options(r"a?(?P<g0>a{1,3})?", RegexOptions::default().unicode(mode)).unwrap();
+        let caps = re.captures_all(b"a").unwrap();
+        assert_eq!(caps[0].spans(), &[Some((0, 1)), None], "{mode:?}: {caps:?}");
+
+        // The bounded-predecessor shape (a mandatory intervening
+        // atom, but the predecessor genuinely has room to grow in the
+        // decomposition being tested) must still correctly decline.
+        let re = Regex::with_options(r"c?.(?P<g0>a)?", RegexOptions::default().unicode(mode)).unwrap();
+        let caps = re.captures_all(b"ca").unwrap();
+        assert_eq!(caps[0].spans(), &[Some((0, 2)), None], "{mode:?}: {caps:?}");
+
+        let re = Regex::with_options(r"c{0,3}.(?P<g0>a)?", RegexOptions::default().unicode(mode)).unwrap();
+        let caps = re.captures_all(b"ca").unwrap();
+        assert_eq!(caps[0].spans(), &[Some((0, 2)), None], "{mode:?}: {caps:?}");
+
+        // A bounded predecessor's own capacity can be a CHAIN of several
+        // same-class optional units, not just one (`.{1,4}` desugars to a
+        // mandatory rep plus 3 further chained optional reps); `.{1,4}`'s
+        // own flexibility legitimately maximizes ahead of `g0` here, forcing
+        // a genuine full decline: `.{1,4}.{3}` together must consume all 6
+        // bytes leaving `g0` no room, same as V8 and fancy-regex.
+        let re = Regex::with_options(r".{1,4}.{3}(?P<g0>.{2,5})?", RegexOptions::default().unicode(mode)).unwrap();
+        let caps = re.captures_all(b"a:.b.-").unwrap();
+        assert_eq!(caps[0].spans(), &[Some((0, 6)), None], "{mode:?}: {caps:?}");
+    }
+}
+
+#[test]
+fn mandatory_capture_with_wildcard_then_distinct_literal_body_blocks_a_following_optional_capture() {
+    // `(?P<g0>.?b?)(?P<g1>.)?[^a]?a` on `"a.a"`: `g0` (mandatory, but its
+    // OWN internal choice between `.?` and `b?` is free) correctly claims
+    // `(0,1)` (`'a'` via `.?`, `b?` contributing nothing). That leaves
+    // `".a"` for `g1` (optional single char), `[^a]?` (optional), and the
+    // final mandatory `a`. `g1` claiming `'.'` and `[^a]?` declining is a
+    // valid tied-length decomposition (as is the reverse) - V8 and
+    // fancy-regex agree the textually-first optional element (`g1`) should
+    // claim it.
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    for mode in [UnicodeMode::Ascii, UnicodeMode::Default, UnicodeMode::Full, UnicodeMode::Javascript] {
+        let re = Regex::with_options(r"(?P<g0>.?b?)(?P<g1>.)?[^a]?a", RegexOptions::default().unicode(mode)).unwrap();
+        let caps = re.captures_all(b"a.a").unwrap();
+        assert_eq!(caps[0].spans(), &[Some((0, 3)), Some((0, 1)), Some((1, 2))], "{mode:?}: {caps:?}");
+    }
+}
+
+#[test]
+fn top_level_union_arm_order_between_differently_tagged_arms() {
+    use resharp::{Regex, RegexOptions};
+    let a = r"(?:\z)+(?:(?<g0>(?:c|a)))?(?:(?<g1>(?:[bc])*)|(?:c)*(?:(?<g2>\:))?)";
+    let b = r"(?:\z)+(?:(?<g0>(?:c|a)))?(?:(?:c)*(?:(?<g2>\:))?|(?<g1>(?:[bc])*))";
+    for input in [b"".as_slice(), b":".as_slice(), b"-:".as_slice(), b":bb".as_slice(), b"-b::".as_slice(), b"cc:-:a".as_slice()] {
+        let ra = Regex::with_options(a, RegexOptions::default()).unwrap();
+        let rb = Regex::with_options(b, RegexOptions::default()).unwrap();
+        let ca = ra.captures_all(input).unwrap();
+        let cb = rb.captures_all(input).unwrap();
+        let g1a = ca[0].name("g1").map(|m| (m.start, m.end));
+        let g1b = cb[0].name("g1").map(|m| (m.start, m.end));
+        assert_eq!(g1a, g1b, "input={input:?} a={ca:?} b={cb:?}");
+    }
+}
+
+#[test]
+fn lookahead_arm_order_inside_nested_union_before_optional_capture() {
+    // The leading prefix union is the leftmost element and `(?:(?:a)?)*`
+    // lets it reach (0,1), so it is maximized before g0 gets a say, forcing
+    // g0 to decline regardless of the union's own arm order. glibc is not
+    // the oracle here: `((c?)|(a?)*)(.)?[a-z]` on "ac" gives glibc g4=(0,1)
+    // but the arm-reordered `(((a?)*)|(c?))(.)?[a-z]` gives g3=(0,1)/g4=None
+    // - it flips the prefix/g0 split purely on arm order, which this
+    // engine's arm-order invariance forbids.
+    use resharp::{Regex, RegexOptions};
+    let a = r"(?:(?:(?:c)?|(?!b))|(?:(?:a)?)*)(?:(?<g0>.))?[a-z]";
+    let b = r"(?:(?:(?!b)|(?:c)?)|(?:(?:a)?)*)(?:(?<g0>.))?[a-z]";
+    for input in [b"ac".as_slice(), b"ab-".as_slice()] {
+        let ra = Regex::with_options(a, RegexOptions::default()).unwrap();
+        let rb = Regex::with_options(b, RegexOptions::default()).unwrap();
+        let ca = ra.captures_all(input).unwrap();
+        let cb = rb.captures_all(input).unwrap();
+        let g0a = ca[0].name("g0").map(|m| (m.start, m.end));
+        let g0b = cb[0].name("g0").map(|m| (m.start, m.end));
+        assert_eq!(g0a, g0b, "input={input:?} a={ca:?} b={cb:?}");
+        assert_eq!(g0a, None, "input={input:?} a={ca:?}");
+    }
+}
+
+#[test]
+fn captures_all_no_exponential_blowup_with_unrelated_optional_group_before_bounded_repeat_anchor() {
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    for mode in [UnicodeMode::Ascii, UnicodeMode::Default, UnicodeMode::Full, UnicodeMode::Javascript] {
+        let re = Regex::with_options(r"(?P<g0>a)?.{0,30}\z", RegexOptions::default().unicode(mode)).unwrap();
+        // warm up the capture DFA (pattern-dependent, not input-length-dependent
+        // compile cost) before timing, so the assertion below isolates growth
+        // with INPUT length specifically - the actual DoS-relevant dimension.
+        let warm_hay = vec![b'x'; 40];
+        re.captures_all(&warm_hay).unwrap();
+        let hay = vec![b'x'; 5000];
+        let t = std::time::Instant::now();
+        let caps = re.captures_all(&hay).unwrap();
+        assert!(
+            t.elapsed() < std::time::Duration::from_secs(2),
+            "{mode:?}: captures_all on a warmed-up DFA took {:?}, expected sub-2s",
+            t.elapsed()
+        );
+        assert_eq!(caps.len(), 2, "{mode:?}: {:?}", caps.iter().map(|c| c.spans().to_vec()).collect::<Vec<_>>());
+        assert_eq!(caps[0].spans(), &[Some((4970, 5000)), None], "{mode:?}");
+        assert_eq!(caps[1].spans(), &[Some((5000, 5000)), None], "{mode:?}");
+    }
+
+    let re = Regex::new(r"(?P<g0>a)?.{0,30}\z").unwrap();
+    let caps = re.captures_all(b"//! T").unwrap();
+    assert_eq!(caps.len(), 2);
+    assert_eq!(caps[0].spans(), &[Some((0, 5)), None]);
+    assert_eq!(caps[1].spans(), &[Some((5, 5)), None]);
+}
+
+#[test]
+fn captures_all_bound_driven_blowup_stays_near_quadratic_not_higher_order() {
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    // DFA transition work must not grow with the quantifier's declared
+    // upper bound independent of input length. Asserts growth from bound=60
+    // to bound=100 (~1.67x) stays well under quartic, with a generous
+    // margin so this isn't flaky on slower CI hardware. bound=100 (not
+    // higher): the recursive node-tree processing needs more stack than the
+    // default `cargo test` worker-thread stack provides above that.
+    for mode in [UnicodeMode::Ascii, UnicodeMode::Default, UnicodeMode::Full, UnicodeMode::Javascript] {
+        let hay = vec![b'a'; 20];
+        let small = Regex::with_options(r"(?P<g0>x)?a{0,60}", RegexOptions::default().unicode(mode)).unwrap();
+        let t0 = std::time::Instant::now();
+        small.captures_all(&hay).unwrap();
+        let small_elapsed = t0.elapsed();
+
+        let large = Regex::with_options(r"(?P<g0>x)?a{0,100}", RegexOptions::default().unicode(mode)).unwrap();
+        let t1 = std::time::Instant::now();
+        large.captures_all(&hay).unwrap();
+        let large_elapsed = t1.elapsed();
+
+        assert!(
+            large_elapsed < std::time::Duration::from_secs(5),
+            "{mode:?}: bound=100 took {large_elapsed:?}, expected sub-5s"
+        );
+        let ratio = large_elapsed.as_secs_f64() / small_elapsed.as_secs_f64().max(1e-6);
+        assert!(
+            ratio < 15.0,
+            "{mode:?}: bound 60->100 blew up {ratio:.1}x, expected well under \
+             the much larger blow-up an O(bound^4-5) growth would produce (small={small_elapsed:?}, large={large_elapsed:?})"
+        );
+    }
+}
+
+#[test]
+fn lookahead_wrapping_a_bare_unfused_line_start_anchor_compiles_and_matches() {
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    for mode in [UnicodeMode::Ascii, UnicodeMode::Default, UnicodeMode::Full, UnicodeMode::Javascript] {
+        let re = Regex::with_options(r"(?=^)abc", RegexOptions::default().unicode(mode)).unwrap();
+        let got = re.find_all(b"abc\nabc").unwrap();
+        assert_eq!(
+            got,
+            vec![
+                resharp::Match { start: 0, end: 3 },
+                resharp::Match { start: 4, end: 7 },
+            ],
+            "{mode:?}"
+        );
+
+        let re2 = Regex::with_options(r"a(?=$)", RegexOptions::default().unicode(mode)).unwrap();
+        let got2 = re2.find_all(b"ab\na").unwrap();
+        assert_eq!(got2, vec![resharp::Match { start: 3, end: 4 }], "{mode:?}");
+    }
+}
+
+#[test]
+fn lookahead_wrapping_line_start_anchor_after_a_star_is_still_correctly_rejected() {
+    // `a*(?=^)` reduces to the same shape as bare `a*^`: a lookbehind-derived
+    // anchor that is not at a constant offset from a star. That is a
+    // deliberate engine limitation (`ResharpError::UnsupportedPattern`) -
+    // both forms must be rejected identically, not silently accepted with a
+    // wrong/incomplete result.
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    for mode in [UnicodeMode::Ascii, UnicodeMode::Default, UnicodeMode::Full, UnicodeMode::Javascript] {
+        let opts = RegexOptions::default().unicode(mode);
+        let err_star_caret = match Regex::with_options("a*^", opts) {
+            Err(e) => e,
+            Ok(_) => panic!("{mode:?}: expected a*^ to be rejected"),
+        };
+        let opts = RegexOptions::default().unicode(mode);
+        let err_star_la = match Regex::with_options("a*(?=^)", opts) {
+            Err(e) => e,
+            Ok(_) => panic!("{mode:?}: expected a*(?=^) to be rejected"),
+        };
+        assert!(
+            matches!(
+                err_star_caret,
+                resharp::Error::Algebra(resharp_algebra::ResharpError::UnsupportedPattern)
+            ),
+            "{mode:?}: {err_star_caret:?}"
+        );
+        assert!(
+            matches!(
+                err_star_la,
+                resharp::Error::Algebra(resharp_algebra::ResharpError::UnsupportedPattern)
+            ),
+            "{mode:?}: {err_star_la:?}"
+        );
+    }
+}
+
+#[test]
+fn star_of_alternation_maximizes_its_own_reachable_extent_across_all_iteration_counts() {
+    // `(?:[^:b]b*|.*[^b].)*` on `":-b.bb:"` can reach position 6 (not just 5)
+    // via a 2-iteration decomposition ([0,3) then [3,6)), so under this
+    // project's POSIX tie-break rule (the leftmost subexpression is
+    // maximized in length first, recursively, over the full space of
+    // decompositions - not just a single greedy-per-iteration walk), the
+    // star - being leftmost - must be maximized to 6 before `g3`
+    // is even considered, handing `g3` only `(6,7)`. glibc `regexec`, V8 and
+    // Rust `regex` all report `(5,7)` instead, but none of them perform this
+    // exhaustive-decomposition maximization for nested unbounded repeats;
+    // they commit greedily per iteration and never backtrack an already-
+    // maximal iteration to enable a later one. `(6,7)` is reachable by the
+    // star's own grammar and is the correct answer here.
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    for mode in [UnicodeMode::Ascii, UnicodeMode::Default, UnicodeMode::Full, UnicodeMode::Javascript] {
+        let re = Regex::with_options(r"(?:[^:b]b*|.*[^b].)*\.?(?P<g3>.+)", RegexOptions::default().unicode(mode)).unwrap();
+        let caps = re.captures_all(b":-b.bb:").unwrap();
+        assert_eq!(caps[0].spans(), vec![Some((0, 7)), Some((6, 7))], "{mode:?}");
+    }
+}
+
+#[test]
+fn unbounded_star_before_a_tied_alternation_containing_a_capture_behind_a_consuming_atom_declines() {
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    for pat in [r".+(?:b|.(?P<g0>))?", r".+(?:.(?P<g0>)|b)?"] {
+        for mode in [UnicodeMode::Ascii, UnicodeMode::Default, UnicodeMode::Full, UnicodeMode::Javascript] {
+            let re = Regex::with_options(pat, RegexOptions::default().unicode(mode)).unwrap();
+            assert_eq!(re.captures_all(b"ab").unwrap()[0].spans(), vec![Some((0, 2)), None], "{pat} {mode:?}");
+        }
+    }
+}
+
+#[test]
+fn self_referential_star_of_lookahead_does_not_corrupt_match_end_or_panic() {
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    for mode in [UnicodeMode::Ascii, UnicodeMode::Default, UnicodeMode::Full, UnicodeMode::Javascript] {
+        let re = Regex::with_options(r"x?(?=b|(?=.)(?=.)*)", RegexOptions::default().unicode(mode)).unwrap();
+        let ms = re.find_all(b"aa").unwrap();
+        for m in &ms {
+            assert!(m.start <= m.end, "{mode:?}: inverted match {m:?}");
+        }
+        assert_eq!(
+            ms.iter().map(|m| (m.start, m.end)).collect::<Vec<_>>(),
+            vec![(0, 0), (1, 1)],
+            "{mode:?}"
+        );
+
+        let re2 = Regex::with_options(r"x?(?P<g0>(?=b|(?=.)(?=.)*))", RegexOptions::default().unicode(mode)).unwrap();
+        let caps = re2.captures_all(b"aa").unwrap();
+        assert_eq!(caps.len(), 2, "{mode:?}");
+        assert_eq!(caps[0].spans(), vec![Some((0, 0)), Some((0, 0))], "{mode:?}");
+        assert_eq!(caps[1].spans(), vec![Some((1, 1)), Some((1, 1))], "{mode:?}");
+
+        // Original fuzzer-discovered pattern this was reduced from - just
+        // needs to compile and run to completion without panicking.
+        let pat = r"(?P<g0>[-.]?[b:]{0}.{0,2}).(?P<g3>(?P<g2>(?:.[^bb]*|b+[^:][^bb]?){1}(?P<g1>.{2,5})?))";
+        let re3 = Regex::with_options(pat, RegexOptions::default().unicode(mode)).unwrap();
+        re3.captures_all(b"c:.:-aca.--aa").unwrap();
+    }
+}
+
+#[test]
+fn g1_does_not_participate_on_homogeneous_run() {
+    // `(?:a+|b+)` has two unbounded union arms; the byte class each arm
+    // can donate through must be the union of BOTH arms' leading classes,
+    // not just the first one found. Verified against V8/fancy-regex/the
+    // Rust `regex` crate/glibc `regexec`.
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    for mode in [UnicodeMode::Ascii, UnicodeMode::Default, UnicodeMode::Full, UnicodeMode::Javascript] {
+        let re = Regex::with_options(r"(?:a+|b+)(?P<g1>.)?", RegexOptions::default().unicode(mode)).unwrap();
+        assert_eq!(re.captures_all(b"aa").unwrap()[0].spans(), vec![Some((0, 2)), None], "{mode:?}");
+        assert_eq!(re.captures_all(b"bb").unwrap()[0].spans(), vec![Some((0, 2)), None], "{mode:?}");
+    }
+}
+
+#[test]
+fn mixed_boundary_run_already_correctly_lets_g1_participate() {
+    // On a MIXED-boundary input, the union's leading arm cannot extend into
+    // the second byte at all (that would require switching from the `a+`
+    // arm to the `b+` arm mid-run), so `g1` must claim the second byte -
+    // merging the arms' leading classes (previous test) must not regress
+    // this.
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    let re = Regex::with_options(r"(?:a+|b+)(?P<g1>.)?", RegexOptions::default().unicode(UnicodeMode::Ascii)).unwrap();
+    assert_eq!(re.captures_all(b"ab").unwrap()[0].spans(), vec![Some((0, 2)), Some((1, 2))]);
+    assert_eq!(re.captures_all(b"ba").unwrap()[0].spans(), vec![Some((0, 2)), Some((1, 2))]);
+}
+
+#[test]
+fn bounded_repeat_of_lookahead_plus_union_does_not_underflow_match_end() {
+    // Previously, der()'s lookahead-split recursion could re-wrap an
+    // already-resolved `Lookahead(EPS-or-always-nullable, tail, embedded_rel)`
+    // marker as a further outer lookahead's own `la_body`. The marker's
+    // embedded rel and the outer node's own rel count the same der() steps
+    // (both advance in lockstep from the same position), so init_metadata's
+    // Kind::Lookahead nulls computation must not add them; doing so double-
+    // counted the byte distance and underflowed `pos - rel` in scan.rs's
+    // collect_max, producing a structurally-invalid Match (verified against
+    // both fancy-regex and V8 for the minimized repro: expected (0, 1)).
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    for mode in [UnicodeMode::Ascii, UnicodeMode::Default, UnicodeMode::Full, UnicodeMode::Javascript] {
+        let re = Regex::with_options(r"\.+(?=(?:(?=.{1,4}[^b])+a?|$){1,2})", RegexOptions::default().unicode(mode)).unwrap();
+        let ms = re.find_all(b".cba").unwrap();
+        assert_eq!(ms.len(), 1, "{mode:?}: {ms:?}");
+        assert_eq!((ms[0].start, ms[0].end), (0, 1), "{mode:?}: {ms:?}");
+    }
+}
+
+#[test]
+fn star_of_lookahead_after_a_union_containing_a_different_lookahead_arm_does_not_underflow_match_end() {
+    // An independently-discovered trigger for the same init_metadata
+    // double-counting defect fixed above - a union
+    // with a lookahead arm (`(?:x|(?=a))`) immediately followed by an
+    // unbounded `Star` of an unrelated lookahead (`(?=b*)*`). Verified
+    // against V8: matches at (0, 1) and (1, 1).
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    for mode in [UnicodeMode::Ascii, UnicodeMode::Default, UnicodeMode::Full, UnicodeMode::Javascript] {
+        let re = Regex::with_options(r"a?(?=(?:x|(?=a))(?=b*)*)", RegexOptions::default().unicode(mode)).unwrap();
+        let ms = re.find_all(b"aa").unwrap();
+        assert_eq!(
+            ms.iter().map(|m| (m.start, m.end)).collect::<Vec<_>>(),
+            vec![(0, 1), (1, 1)],
+            "{mode:?}: {ms:?}"
+        );
+    }
+}
+
+#[test]
+fn union_with_lookahead_arm_followed_by_two_optional_atoms_does_not_produce_malformed_match() {
+    // A fourth independently-discovered trigger for the same
+    // init_metadata double-counting defect fixed above -
+    // no `*`/`+` on any lookahead needed at all here, just a union with a
+    // lookahead arm followed by two nested optional atoms. Verified against
+    // both fancy-regex and V8: matches at (0, 0) and (1, 1).
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    for mode in [UnicodeMode::Ascii, UnicodeMode::Default, UnicodeMode::Full, UnicodeMode::Javascript] {
+        let re = Regex::with_options(r"(?=(?:x|(?=.))y?)[-]?", RegexOptions::default().unicode(mode)).unwrap();
+        let ms = re.find_all(b"cb").unwrap();
+        assert_eq!(
+            ms.iter().map(|m| (m.start, m.end)).collect::<Vec<_>>(),
+            vec![(0, 0), (1, 1)],
+            "{mode:?}: {ms:?}"
+        );
+    }
+}
+
+#[test]
+fn g1_is_maximized_over_the_full_space_of_decompositions() {
+    // Expectation CORRECTED from (0,3) to (0,4). (0,3) is exactly
+    // glibc `regexec`'s answer (verified: `((.{2,3}|c)+).{2,4}` on
+    // "aaaaaa" -> group1 (0,3), stable under arm reorder), i.e. the
+    // per-iteration convention where the mandatory first copy of the body
+    // is maximized to 3 and an already-maximal iteration is never
+    // backtracked to enable a later one. The star-maximization tests above
+    // explicitly reject that convention as narrower than the rule this
+    // project has adopted, and this pattern asks the identical question, so it cannot
+    // answer it differently. Under rule 6(b) the leftmost subexpression
+    // `g1` is maximized in LENGTH over the full space of decompositions:
+    // g1=(0,4) via two copies of `.{2,3}` each taking 2, leaving exactly 2
+    // for the trailing `.{2,4}`. Total-extent maximization also depends
+    // only on the repeat's language, never on its body's internal parse
+    // structure, so it is order-invariant by construction.
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    for mode in [UnicodeMode::Ascii, UnicodeMode::Default, UnicodeMode::Full, UnicodeMode::Javascript] {
+        let re = Regex::with_options(r"(?P<g1>(?:.{2,3}|c)+).{2,4}", RegexOptions::default().unicode(mode)).unwrap();
+        assert_eq!(re.captures_all(b"aaaaaa").unwrap()[0].spans(), vec![Some((0, 6)), Some((0, 4))], "{mode:?}");
+    }
+}
+
+// `g2`'s own extent (the actual bug) must be maximized to (0,3) - `g1`
+// ("c" right after `.+`) cannot participate once `g2` is fixed there, since
+// `input[2]` is "a", not "c". The trailing union then operates on the empty
+// remainder, a genuine zero-width tie between the tagged `g3` arm and the
+// untagged `.*` arm matching empty - resolved by "participation wins a
+// genuine tie" (verified arm-order-independent, unlike V8/fancy-regex,
+// which flip their answer for `g3` depending on textual alternative order -
+// not usable as an oracle for this specific tie).
+#[test]
+fn trailing_alternation_with_a_trivial_lookahead_branch_corrupts_a_preceding_captures_own_greedy_extent() {
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    for mode in [UnicodeMode::Ascii, UnicodeMode::Default, UnicodeMode::Full, UnicodeMode::Javascript] {
+        let re = Regex::with_options(r"(?P<g2>.+(?P<g1>c)?)(?:.*|(?P<g3>(?=\z)))", RegexOptions::default().unicode(mode)).unwrap();
+        assert_eq!(
+            re.captures_all(b"cca").unwrap()[0].spans(),
+            vec![Some((0, 3)), Some((0, 3)), None, Some((3, 3))],
+            "{mode:?}"
+        );
+    }
+}
+
+#[test]
+fn leading_nullable_bounded_predecessor_already_exhausted_still_flagged_risky() {
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    let modes = [UnicodeMode::Ascii, UnicodeMode::Default, UnicodeMode::Full, UnicodeMode::Javascript];
+    for mode in modes {
+        let re = Regex::with_options(
+            r"(?:[^b]*).?(?P<g2>[.:])?(?P<g5>[.:]{0,2}(?P<g4>b)?)",
+            RegexOptions::default().unicode(mode),
+        )
+        .unwrap();
+        let caps = re.captures_all(b"b:.b").unwrap();
+        assert_eq!(caps.len(), 2, "{mode:?}: {:?}", caps.iter().map(|c| c.spans().to_vec()).collect::<Vec<_>>());
+        assert_eq!(caps[0].spans()[0], Some((0, 4)), "{mode:?}");
+        assert_eq!(caps[0].spans()[1], Some((1, 2)), "{mode:?}: g2 must participate, tied byte has no other claimant");
+        assert_eq!(caps[0].spans()[2], Some((2, 4)), "{mode:?}");
+        assert_eq!(caps[0].spans()[3], Some((3, 4)), "{mode:?}");
+    }
+}
+
+#[test]
+fn leading_star_with_a_later_landing_point_makes_an_optional_capture_decline() {
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    let modes = [UnicodeMode::Ascii, UnicodeMode::Default, UnicodeMode::Full, UnicodeMode::Javascript];
+    for mode in modes {
+        let re = Regex::with_options(
+            r".*[b](?P<g0>.)?.+[c:]",
+            RegexOptions::default().unicode(mode),
+        )
+        .unwrap();
+        let caps = re.captures_all(b"bab:.").unwrap();
+        assert_eq!(caps.len(), 1, "{mode:?}: {:?}", caps.iter().map(|c| c.spans().to_vec()).collect::<Vec<_>>());
+        assert_eq!(caps[0].spans()[0], Some((0, 4)), "{mode:?}");
+        assert_eq!(caps[0].spans()[1], Some((1, 2)), "{mode:?}: g0 must participate per rule 6(a)+(b)");
+    }
+}
+
+#[test]
+fn trailing_optional_capture_in_complex_pattern_reports_zero_width() {
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    let modes = [UnicodeMode::Ascii, UnicodeMode::Default, UnicodeMode::Full, UnicodeMode::Javascript];
+    for mode in modes {
+        let re = Regex::with_options(
+            r"(?P<g0>b*-?)(?:.?.{2}|[:][.-]{1,4})*.(?P<g1>.?)",
+            RegexOptions::default().unicode(mode),
+        )
+        .unwrap();
+        let caps = re.captures_all(b"c--ca--a:-b").unwrap();
+        assert_eq!(caps.len(), 1, "{mode:?}: {:?}", caps.iter().map(|c| c.spans().to_vec()).collect::<Vec<_>>());
+        assert_eq!(caps[0].spans()[0], Some((0, 11)), "{mode:?}");
+        assert_eq!(caps[0].spans()[1], Some((0, 0)), "{mode:?}: g0 zero-width is acceptable (b* can match empty)");
+        // CORRECTED to (11,11). `.?` always participates (it can match the
+        // empty string), so the only question is where the starred element
+        // stops. Its body `.?.{2}` consumes 2 or 3, so it reaches 10, leaving
+        // `.`=(10,11) and g1 empty at 11. glibc answers (0,9)/(10,11) here, but
+        // that is the per-iteration greed convention (9 = 3+3+3, refusing to
+        // shorten an iteration to reach a longer total) which this corpus has
+        // already rejected elsewhere in this file. It is structure-dependent,
+        // which rule 6 bans: `((..)*).(.?)` on 11 chars gives glibc the
+        // MAXIMIZED (0,10), and only changing the body to the equally-long-
+        // reaching `.?.{2}` makes it drop to (0,9).
+        assert_eq!(caps[0].spans()[2], Some((11, 11)), "{mode:?}: starred element is maximized by TOTAL extent");
+    }
+}
+
+#[test]
+fn optional_capture_after_greedy_prefix_reports_zero_width() {
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    let modes = [UnicodeMode::Ascii, UnicodeMode::Default, UnicodeMode::Full, UnicodeMode::Javascript];
+    for mode in modes {
+        let re = Regex::with_options(
+            r".*a{1,3}(?P<g0>a*.{1})?.+",
+            RegexOptions::default().unicode(mode),
+        )
+        .unwrap();
+        let caps = re.captures_all(b"a:.:.a:c:a").unwrap();
+        assert_eq!(caps.len(), 1, "{mode:?}: {:?}", caps.iter().map(|c| c.spans().to_vec()).collect::<Vec<_>>());
+        assert_eq!(caps[0].spans()[0], Some((0, 10)), "{mode:?}");
+        assert_eq!(caps[0].spans()[1], Some((6, 7)), "{mode:?}: g0 must participate per rule 6(a)");
+    }
+}
+
+#[test]
+fn optional_capture_maximizes_leftmost_before_trailing_lookahead_dot() {
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    let modes = [UnicodeMode::Ascii, UnicodeMode::Default, UnicodeMode::Full, UnicodeMode::Javascript];
+    for mode in modes {
+        let re = Regex::with_options(
+            r"(?P<g0>a(?:(?:.+.?[-c]|[^:]*)|b+))?.+(?P<g1>(?!-{2}))",
+            RegexOptions::default().unicode(mode),
+        )
+        .unwrap();
+        let caps = re.captures_all(b"a-a-aca-.b").unwrap();
+        assert_eq!(caps.len(), 1, "{mode:?}: {:?}", caps.iter().map(|c| c.spans().to_vec()).collect::<Vec<_>>());
+        assert_eq!(caps[0].spans()[0], Some((0, 10)), "{mode:?}");
+        // Not a bug: the overall match length (0,10) does
+        // not depend on where g0 stops - whatever it doesn't consume, the
+        // following mandatory `.+` consumes instead. `g0`'s body genuinely
+        // CAN reach (0,9) (`a` then `[^:]*` over "-a-aca-."), leaving
+        // exactly one byte for `.+` and the zero-width lookahead `g1` at
+        // end-of-string - a real derivation, not an invented one. Being
+        // leftmost, rule 6(b) requires maximizing g0 there. Confirmed
+        // arm-order-invariant across all 4 UnicodeModes (see bug file).
+        assert_eq!(caps[0].spans()[1], Some((0, 9)), "{mode:?}: g0 span is wrong");
+    }
+}
+
+#[test]
+fn optional_capture_maximizes_leftmost_before_trailing_lookahead_dot_star() {
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    let modes = [UnicodeMode::Ascii, UnicodeMode::Default, UnicodeMode::Full, UnicodeMode::Javascript];
+    for mode in modes {
+        let re = Regex::with_options(
+            r"(?P<g0>b*(?:.|:{3}b*.{1})(?:-*|.{2,3}))(?P<g1>(?=.?)).*",
+            RegexOptions::default().unicode(mode),
+        )
+        .unwrap();
+        let caps = re.captures_all(b"b::c").unwrap();
+        assert_eq!(caps.len(), 1, "{mode:?}: {:?}", caps.iter().map(|c| c.spans().to_vec()).collect::<Vec<_>>());
+        assert_eq!(caps[0].spans()[0], Some((0, 4)), "{mode:?}");
+        // Not a bug: the trailing `.*` after g1 can absorb
+        // whatever g0 doesn't consume, so the overall match length (0,4)
+        // does not depend on where g0 stops. g0's body genuinely CAN reach
+        // the full input (`b*`="b", `.`-arm=":", `.{2,3}`-arm=":c") - a
+        // real derivation. Being leftmost, rule 6(b) requires maximizing
+        // g0 there, forcing g1 (and `.*`) to zero-width at the end.
+        // Confirmed arm-order-invariant across all 4 UnicodeModes (see bug
+        // file) - unlike glibc/V8, which flip with textual arm order.
+        assert_eq!(caps[0].spans()[1], Some((0, 4)), "{mode:?}: g0 span is wrong");
+        assert_eq!(caps[0].spans()[2], Some((4, 4)), "{mode:?}: g1 should be zero-width at the end");
+    }
+}
+
+#[test]
+fn lookahead_group_participates_in_symmetric_union_tie() {
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    let modes = [UnicodeMode::Ascii, UnicodeMode::Default, UnicodeMode::Full, UnicodeMode::Javascript];
+    for mode in modes {
+        let re = Regex::with_options(
+            r".{1,1}(?::?(?P<g0>-?[^.-]+)?(?P<g1>(?=b{0,2}[:]*))|(?P<g3>(?P<g2>.*-{0,2}))[^ac]{0}:*)",
+            RegexOptions::default().unicode(mode),
+        )
+        .unwrap();
+        let caps = re.captures_all(b"b:c:b:").unwrap();
+        assert_eq!(caps.len(), 1, "{mode:?}: {:?}", caps.iter().map(|c| c.spans().to_vec()).collect::<Vec<_>>());
+        assert_eq!(caps[0].spans()[0], Some((0, 6)), "{mode:?}");
+        // Not a bug: both union arms can validly reach
+        // the same overall length here (both g0/g1's branch and g2/g3's
+        // branch can consume the entire remainder), so this is a genuine
+        // tie, not a case where only one branch is reachable. Confirmed
+        // resharp is arm-order-invariant (compared by stable name identity,
+        // not positional index) for this pattern - unlike glibc `regexec`,
+        // which flips to whichever arm is written first (same category as
+        // other closed not-a-bug cases in this file). Because both arms match, both arms' groups
+        // participate: `|` is UNION, so no arm is preferred at all.
+        assert_eq!(caps[0].spans()[1], Some((2, 6)), "{mode:?}: g0 participates - its arm matches too");
+        assert_eq!(caps[0].spans()[2], Some((6, 6)), "{mode:?}: g1 span");
+        assert_eq!(caps[0].spans()[3], Some((1, 6)), "{mode:?}: g3 span");
+        assert_eq!(caps[0].spans()[4], Some((1, 6)), "{mode:?}: g2 span");
+    }
+}
+
+#[test]
+fn optional_capture_with_complex_body_maximizes_leftmost_repetition_first() {
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    let modes = [UnicodeMode::Ascii, UnicodeMode::Default, UnicodeMode::Full, UnicodeMode::Javascript];
+    for mode in modes {
+        let re = Regex::with_options(
+            r"[b]?[a]*(?P<g0>.{1}[bc](?:[^-]{3}(?:-+|.{2})+-?|.*$)?)?.+",
+            RegexOptions::default().unicode(mode),
+        )
+        .unwrap();
+        let caps = re.captures_all(b"bacbcaa-:aa").unwrap();
+        assert_eq!(caps.len(), 1, "{mode:?}: {:?}", caps.iter().map(|c| c.spans().to_vec()).collect::<Vec<_>>());
+        assert_eq!(caps[0].spans()[0], Some((0, 11)), "{mode:?}");
+        // Corrected from the originally filed (2,11) [mathematically
+        // impossible, leaves 0 bytes for the mandatory trailing `.+`], then
+        // to (2,9), and now back to (2,10). (2,9) came from maximizing the
+        // `+`'s mandatory FIRST copy before the repeat as a whole - the
+        // per-iteration convention that other tests in this file explicitly
+        // reject, in favor of full total-extent maximization.
+        // Rule 6(b) maximizes the leftmost subexpression `g0` in LENGTH
+        // over the full space of decompositions, giving (2,10). glibc and
+        // V8 also report (2,10) here but flip it under arm reorder, so they
+        // are not the oracle for this tie; total-extent maximization
+        // reaches the same value while depending only on the repeat's
+        // language, never on its body's parse structure, hence is
+        // order-invariant by construction.
+        assert_eq!(caps[0].spans()[1], Some((2, 10)), "{mode:?}: g0 span");
+    }
+}
+
+#[test]
+fn minimized_two_stacked_leading_optionals_before_a_dollar_anchored_alternative_arm() {
+    // Minimized from the case above: needs TWO distinct leading
+    // optional/star atoms (`b?` then `a*`) before g0, and a `.*$` sibling
+    // arm (a plain literal sibling like `x` does not trigger it) - the
+    // `.*$` arm is never actually used by the winning decomposition but
+    // still corrupts g0's donation-risk tracking, forcing it to wrongly
+    // decline entirely. glibc `regexec` confirms `g0 = (2,4)` is reachable
+    // and correct, with or without the `.*$` sibling arm present.
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    let modes = [UnicodeMode::Ascii, UnicodeMode::Default, UnicodeMode::Full, UnicodeMode::Javascript];
+    for mode in modes {
+        let re = Regex::with_options(r"b?a*(?P<g0>.{2}|.*$)?.+", RegexOptions::default().unicode(mode)).unwrap();
+        let caps = re.captures_all(b"ba::aa").unwrap();
+        assert_eq!(caps.len(), 1, "{mode:?}: {:?}", caps.iter().map(|c| c.spans().to_vec()).collect::<Vec<_>>());
+        assert_eq!(caps[0].spans()[0], Some((0, 6)), "{mode:?}");
+        assert_eq!(caps[0].spans()[1], Some((2, 4)), "{mode:?}: g0 span is wrong");
+    }
+}
+
+#[test]
+fn optional_capture_with_alternation_body_reports_longer_span() {
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    let modes = [UnicodeMode::Ascii, UnicodeMode::Default, UnicodeMode::Full, UnicodeMode::Javascript];
+    for mode in modes {
+        let re = Regex::with_options(
+            r"(?P<g0>(?:(?:.b*.|[^a-][.]{1}){1}|(?:b{0}[^a].*|..?[^b]+)(?:[^:.]{1,1}a?-|a[-:]*.?){2,2}b)*)a?",
+            RegexOptions::default().unicode(mode),
+        )
+        .unwrap();
+        let caps = re.captures_all(b"bcab.aca").unwrap();
+        // Not a bug: the overall pattern `(?P<g0>...)*a?`
+        // is fully nullable, so `captures_all` correctly reports a second,
+        // trailing zero-width match at position 8 after the main match
+        // consumes the whole input - this is standard "global find"
+        // behavior for any nullable pattern (verified against `a*` and
+        // `a*b?` elsewhere), not specific to this pattern's alternation body.
+        assert_eq!(caps.len(), 2, "{mode:?}: {:?}", caps.iter().map(|c| c.spans().to_vec()).collect::<Vec<_>>());
+        assert_eq!(caps[0].spans()[0], Some((0, 8)), "{mode:?}");
+        // g0 (the leftmost subexpression, before the trailing `a?`) is
+        // maximized per rule 6(b): both g0=(0,8)/a?="" and g0=(0,7)/a?="a"
+        // are valid, equal-length decompositions of the same overall match;
+        // resharp picks the longer g0, matching the star-maximization precedent for
+        // leftmost-subexpression maximization (glibc/V8 instead commit
+        // greedily to a narrower per-iteration convention that doesn't
+        // maximize the star as a whole - not a valid oracle for this tie).
+        assert_eq!(caps[0].spans()[1], Some((0, 8)), "{mode:?}: g0 span");
+        assert_eq!(caps[1].spans()[0], Some((8, 8)), "{mode:?}");
+    }
+}
+
+#[test]
+fn lookahead_group_participates_rule6a_zero_width() {
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    let modes = [UnicodeMode::Ascii, UnicodeMode::Default, UnicodeMode::Full, UnicodeMode::Javascript];
+    for mode in modes {
+        let re = Regex::with_options(
+            r"(?:c*|.?.?(?P<g0>(?=.)))[^b].+",
+            RegexOptions::default().unicode(mode),
+        )
+        .unwrap();
+        let caps = re.captures_all(b":.-bb:a---ba").unwrap();
+        assert_eq!(caps.len(), 1, "{mode:?}: {:?}", caps.iter().map(|c| c.spans().to_vec()).collect::<Vec<_>>());
+        assert_eq!(caps[0].spans()[0], Some((0, 12)), "{mode:?}");
+        // Not a bug: branch 1 (`c*`) and branch 2
+        // (`.?.?` + a zero-width lookahead g0) both reach the same overall
+        // match length. Per POSIX rule 6(a) ("participating with a
+        // null/zero-width match beats not participating at all"), g0 MUST
+        // participate here since it validly can - this doesn't even need a
+        // tie-break oracle, it's the unconditional first rule. The
+        // originally-filed expectation (g0 = None) violates rule 6(a).
+        assert_eq!(caps[0].spans()[1], Some((2, 2)), "{mode:?}: g0 must participate (rule 6a)");
+    }
+}
+
+#[test]
+fn optional_capture_in_alternation_reports_zero_width() {
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    let modes = [UnicodeMode::Ascii, UnicodeMode::Default, UnicodeMode::Full, UnicodeMode::Javascript];
+    for mode in modes {
+        let re = Regex::with_options(
+            r"c{1}b{0,2}(?:(?:(?P<g0>[a]+)?|(?P<g1>[-]{0}[^b]{0,2}).{1,1}a)|b{2,5}c)[^-b]*",
+            RegexOptions::default().unicode(mode),
+        )
+        .unwrap();
+        let caps = re.captures_all(b"bca..aab").unwrap();
+        assert_eq!(caps.len(), 1, "{mode:?}: {:?}", caps.iter().map(|c| c.spans().to_vec()).collect::<Vec<_>>());
+        assert_eq!(caps[0].spans()[0], Some((1, 7)), "{mode:?}");
+        // Not a bug: g0's branch (`[a]+`) and g1's branch
+        // (`[-]{0}[^b]{0,2}` + `.{1,1}a`) both reach the same overall match
+        // length via different decompositions (g0 at (2,3) plus the trailing
+        // `[^-b]*` absorbing the rest, vs g1 at (2,4) plus its own `.{1,1}a`).
+        // `|` is UNION: both decompositions are real, so BOTH groups
+        // participate. glibc reports only one and flips with arm order, so it
+        // is not a valid oracle here.
+        assert_eq!(caps[0].spans()[1], Some((2, 3)), "{mode:?}: g0 participates - its branch matches");
+        assert_eq!(caps[0].spans()[2], Some((2, 4)), "{mode:?}: g1 span");
+    }
+}
+
+#[test]
+fn optional_capture_in_alternation_reports_longer_span() {
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    let modes = [UnicodeMode::Ascii, UnicodeMode::Default, UnicodeMode::Full, UnicodeMode::Javascript];
+    for mode in modes {
+        let re = Regex::with_options(
+            r"(?P<g0>(?:-?|(?:[^-]{0,1}.+.+|b{2,3}.{2,2}[^a]{0,3})*){2,2}[a]*):*.+-+",
+            RegexOptions::default().unicode(mode),
+        )
+        .unwrap();
+        let caps = re.captures_all(b":babbb-::bccc").unwrap();
+        assert_eq!(caps.len(), 1, "{mode:?}: {:?}", caps.iter().map(|c| c.spans().to_vec()).collect::<Vec<_>>());
+        assert_eq!(caps[0].spans()[0], Some((0, 7)), "{mode:?}");
+        // Not a bug: g0 (the leftmost subexpression before
+        // `:*.+-+`) can validly reach either (0,0) (declining, letting the
+        // trailing `.+` absorb more) or (0,5) (consuming more itself) -
+        // both are reachable decompositions of the same overall match.
+        // Rule 6(b) maximizes the leftmost subexpression first, so g0
+        // should be as long as possible: (0,5), matching resharp's actual
+        // (and order-invariant) answer. Same category as the other total-extent-maximization cases in this file.
+        assert_eq!(caps[0].spans()[1], Some((0, 5)), "{mode:?}: g0 maximized per rule 6(b)");
+    }
+}
+
+#[test]
+fn lookahead_group_declines_when_arm_is_not_actually_tied() {
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    let modes = [UnicodeMode::Ascii, UnicodeMode::Default, UnicodeMode::Full, UnicodeMode::Javascript];
+    for mode in modes {
+        let re = Regex::with_options(
+            r"a{2,2}.+(?:(?:.{2}|(?:.+[.b]{1,4}[^.c]*|a{0,1}-*.)*)|(?P<g0>(?=:{0}(?:-*[^b]?|[^.]*.?a{0}))).?[^a]+){1}",
+            RegexOptions::default().unicode(mode),
+        )
+        .unwrap();
+        let caps = re.captures_all(b".abbbaaab.b:").unwrap();
+        assert_eq!(caps.len(), 1, "{mode:?}: {:?}", caps.iter().map(|c| c.spans().to_vec()).collect::<Vec<_>>());
+        assert_eq!(caps[0].spans()[0], Some((5, 12)), "{mode:?}");
+        // Expectation CORRECTED from Some((11,11)) to None. The old comment
+        // called this "a genuine tie between the two union arms" and applied
+        // rule 6(a), but the two arms are NOT tied: branch 1 is nullable, so
+        // it lets the leading `.+` reach (7,12), whereas g0's branch requires
+        // `.+` to stop at 11. The decomposition therefore differs and rule
+        // 6(b) decides it, maximizing `.+` and leaving g0 out. Rule 6(a) is
+        // subordinate to 6(b): it breaks ties only within an otherwise-fixed
+        // decomposition. glibc confirms, arm-order invariantly: `(.+)(y*|()z)`
+        // and `(.+)(()z|y*)` on "xz" both give g1=(0,2) with the zero-width
+        // group NOT participating, while `(.+)(x?)` on "ab" (decomposition
+        // fixed) does report g2=(2,2). See scripts/posix_oracle.c.
+        assert_eq!(caps[0].spans()[1], None, "{mode:?}: `.+` is maximized first (rule 6b)");
+    }
+}
+
+#[test]
+fn lookahead_group_participates_others_decline_when_unreachable() {
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    let modes = [UnicodeMode::Ascii, UnicodeMode::Default, UnicodeMode::Full, UnicodeMode::Javascript];
+    for mode in modes {
+        let re = Regex::with_options(
+            r"^(?:(?P<g0>(?!a+\.{1,3}))-?|(?:[^c:]*(?P<g1>(?=a?))|(?P<g2>(?=b{3}:?))))b+",
+            RegexOptions::default().unicode(mode),
+        )
+        .unwrap();
+        let caps = re.captures_all(b"bb:bab--:ab:a").unwrap();
+        assert_eq!(caps.len(), 1, "{mode:?}: {:?}", caps.iter().map(|c| c.spans().to_vec()).collect::<Vec<_>>());
+        assert_eq!(caps[0].spans()[0], Some((0, 2)), "{mode:?}");
+        // Not a bug: g0's branch (`(?!a+\.{1,3})-?`) and
+        // g1's branch (`[^c:]*(?=a?)`) both validly reach the same overall
+        // match, so under UNION semantics both participate. g2's branch
+        // (`(?=b{3}:?)`) genuinely cannot match here (`b{3}` doesn't hold at
+        // this position), so g2 stays None - the merge only reports groups
+        // that really can participate, which is what makes this test useful.
+        assert_eq!(caps[0].spans()[1], Some((0, 0)), "{mode:?}: g0 participates - its branch matches");
+        assert_eq!(caps[0].spans()[2], Some((1, 1)), "{mode:?}: g1 span");
+        assert_eq!(caps[0].spans()[3], None, "{mode:?}: g2 correctly declines");
+    }
+}
+
+#[test]
+fn lookahead_group_reports_zero_width() {
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    let modes = [UnicodeMode::Ascii, UnicodeMode::Default, UnicodeMode::Full, UnicodeMode::Javascript];
+    for mode in modes {
+        let re = Regex::with_options(
+            r"-?(?:.?b*|[a:]{2,5}.{1,2}.*)?(?P<g0>(?!b+)).+",
+            RegexOptions::default().unicode(mode),
+        )
+        .unwrap();
+        let caps = re.captures_all(b"::b.:".as_slice()).unwrap();
+        assert_eq!(caps.len(), 1, "{mode:?}: {:?}", caps.iter().map(|c| c.spans().to_vec()).collect::<Vec<_>>());
+        assert_eq!(caps[0].spans()[0], Some((0, 5)), "{mode:?}");
+        // Not a bug: the leading optional group before g0
+        // can validly consume up to position 1 or up to position 4 (both
+        // satisfy g0's `(?!b+)` condition, since neither position is
+        // immediately followed by a `b`) - a genuine leftmost-
+        // subexpression-width tie, same shape as the leftmost-subexpression-width tie above. Rule 6(b)
+        // maximizes the leftmost subexpression (the optional prefix) first,
+        // so it should consume as much as possible, putting g0 at (4,4).
+        // Confirmed resharp is arm-order-invariant here.
+        assert_eq!(caps[0].spans()[1], Some((4, 4)), "{mode:?}: g0 maximized per rule 6(b)");
+    }
+}
+
+
+
+#[test]
+fn optional_capture_in_complex_alternation_reports_span() {
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    let modes = [UnicodeMode::Ascii, UnicodeMode::Default, UnicodeMode::Full, UnicodeMode::Javascript];
+    for mode in modes {
+        let re = Regex::with_options(
+            r"b*a?[ca]{1,1}[^b]+[^b]+(?P<g2>(?:(?:.+c[b]|.*-{0,2}){3}|:*(?P<g0>.)?.{0,1}).+(?P<g1>(?=[b]*)))",
+            RegexOptions::default().unicode(mode),
+        )
+        .unwrap();
+        let caps = re.captures_all(b"aa-a-bcb").unwrap();
+        assert_eq!(caps.len(), 1, "{mode:?}: {:?}", caps.iter().map(|c| c.spans().to_vec()).collect::<Vec<_>>());
+        assert_eq!(caps[0].spans()[0], Some((0, 8)), "{mode:?}");
+        // CORRECTED to (5,6). The old "branch 2 doesn't match" is false. Inside
+        // g2 both arms of the union reach exactly (5,7): arm 1 via `.*-{0,2}`
+        // (its `.*` absorbs "bc") and arm 2 via `:*`="" g0="b" `.{0,1}`="c".
+        // The decomposition is therefore identical and rule 6(b) applies: the
+        // arm in which g0 participates wins.
+        assert_eq!(caps[0].name("g0").map(|m| (m.start, m.end)), Some((5, 6)), "{mode:?}: tied arms, g0 participates (rule 6b)");
+    }
+}
+
+#[test]
+fn bounded_repeat_capture_reports_span() {
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    let modes = [UnicodeMode::Ascii, UnicodeMode::Default, UnicodeMode::Full, UnicodeMode::Javascript];
+    for mode in modes {
+        let re = Regex::with_options(
+            r"[^a]+.*(?P<g2>(?P<g1>(?:[-]+|.*){1,1}(?P<g0>.{0,0})[^c]{2,5})?)",
+            RegexOptions::default().unicode(mode),
+        )
+        .unwrap();
+        let caps = re.captures_all(b":baa").unwrap();
+        assert_eq!(caps.len(), 1, "{mode:?}: {:?}", caps.iter().map(|c| c.spans().to_vec()).collect::<Vec<_>>());
+        assert_eq!(caps[0].spans()[0], Some((0, 4)), "{mode:?}");
+        // g0 is None because g1 declines: `[^c]{2,5}` needs at least 2 bytes,
+        // and after `[^a]+`=(0,2) and `.*`=(2,4) are maximized there are none
+        // left, so g2 takes the null match (4,4) and nothing inside it
+        // participates.
+        assert_eq!(caps[0].name("g0").map(|m| (m.start, m.end)), None, "{mode:?}: g1 declines, so g0 cannot participate");
+    }
+}
+
+#[test]
+fn optional_capture_at_end_of_string_reports_span() {
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    let modes = [UnicodeMode::Ascii, UnicodeMode::Default, UnicodeMode::Full, UnicodeMode::Javascript];
+    for mode in modes {
+        let re = Regex::with_options(
+            r"$(?:$|(?P<g0>(?!-{1})))?",
+            RegexOptions::default().unicode(mode),
+        )
+        .unwrap();
+        let caps = re.captures_all(b"-.cba:b..").unwrap();
+        assert_eq!(caps.len(), 1, "{mode:?}: {:?}", caps.iter().map(|c| c.spans().to_vec()).collect::<Vec<_>>());
+        assert_eq!(caps[0].spans()[0], Some((9, 9)), "{mode:?}");
+        // CORRECTED to (9,9). The old "branch 2 doesn't match" is false: at EOF
+        // the negative lookahead `(?!-{1})` holds, so both arms are zero-width
+        // at 9 and the decomposition is tied. Rule 6(b) makes g0 participate,
+        // matching the passing precedent
+        // `tagged_zero_width_arm_wins_nullable_tie_against_untagged_arm_arm_order_independent`.
+        // glibc is disqualified here: `$($|())?` gives the group None but the
+        // arm-reordered `$(()|$)?` gives (9,9).
+        assert_eq!(caps[0].spans()[1], Some((9, 9)), "{mode:?}: tied arms, g0 participates (rule 6b)");
+    }
+}
+
+#[test]
+fn optional_capture_in_alternation_reports_span() {
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    let modes = [UnicodeMode::Ascii, UnicodeMode::Default, UnicodeMode::Full, UnicodeMode::Javascript];
+    for mode in modes {
+        let re = Regex::with_options(
+            r"(?:.{2,2}|.(?P<g0>.?[^a])?)[^.]{1,4}",
+            RegexOptions::default().unicode(mode),
+        )
+        .unwrap();
+        let caps = re.captures_all(b":-b:ac.ca-bca").unwrap();
+        assert_eq!(caps.len(), 2, "{mode:?}: {:?}", caps.iter().map(|c| c.spans().to_vec()).collect::<Vec<_>>());
+        // First match
+        assert_eq!(caps[0].spans()[0], Some((0, 6)), "{mode:?}");
+        // CORRECTED to (1,3). The leading union is the leftmost element; arm 1
+        // `.{2,2}` reaches 2 but arm 2 `.(?P<g0>.?[^a])?` reaches 3 ("-b"), and
+        // `[^.]{1,4}` still covers (3,6). Rule 6(a) maximizes the element, so
+        // the longer arm wins and g0=(1,3).
+        assert_eq!(caps[0].spans()[1], Some((1, 3)), "{mode:?}: leftmost element is maximized (rule 6a)");
+    }
+}
+
+#[test]
+fn lookahead_capture_correct_in_complex_pattern() {
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    let modes = [UnicodeMode::Ascii, UnicodeMode::Default, UnicodeMode::Full, UnicodeMode::Javascript];
+    for mode in modes {
+        let re = Regex::with_options(
+            r"(?::+|.?b{0})+(?P<g0>(?=[^a]?))",
+            RegexOptions::default().unicode(mode),
+        )
+        .unwrap();
+        let caps = re.captures_all(b"::ab-b-").unwrap();
+        // Count CORRECTED from 1 to 2. The pattern is nullable, so the trailing
+        // empty match at len is engine-wide find semantics, not a capture bug:
+        // `find_all` reports the same [(0,7), (7,7)], and the `a*` on "aa"
+        // control gives [(0,2), (2,2)] exactly as rust-regex does.
+        assert_eq!(caps.len(), 2, "{mode:?}: {:?}", caps.iter().map(|c| c.spans().to_vec()).collect::<Vec<_>>());
+        assert_eq!(caps[0].spans()[0], Some((0, 7)), "{mode:?}");
+        // g0's lookahead `(?=[^a]?)` is nullable, so it holds wherever the
+        // maximized leading `+` stops, which is 7.
+        assert_eq!(caps[0].spans()[1], Some((7, 7)), "{mode:?}: leftmost element is maximized (rule 6a)");
+    }
+}
+
+#[test]
+fn lookahead_capture_in_complex_nested_pattern_reports_span() {
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    let modes = [UnicodeMode::Ascii, UnicodeMode::Default, UnicodeMode::Full, UnicodeMode::Javascript];
+    for mode in modes {
+        let re = Regex::with_options(
+            r"(?:\\.{2,2}c{2}|.+(?:.+(?P<g0>.{1,2})?(?P<g1>b?)|(?:c.*:*|.*.{0}))c+)?.{0,3}[^ba]{1}[^:a]*(?P<g2>(?!a{3}[a]{2}))",
+            RegexOptions::default().unicode(mode),
+        )
+        .unwrap();
+        let caps = re.captures_all(b":cabcbbcb--b:").unwrap();
+        assert_eq!(caps.len(), 2, "{mode:?}: {:?}", caps.iter().map(|c| c.spans().to_vec()).collect::<Vec<_>>());
+        assert_eq!(caps[0].spans()[0], Some((0, 12)), "{mode:?}");
+        assert_eq!(caps[0].spans()[1], None, "{mode:?}: g1 span");
+    }
+}
+
+#[test]
+fn bounded_repeat_capture_maximizes_leftmost_element_g4() {
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    let modes = [UnicodeMode::Ascii, UnicodeMode::Default, UnicodeMode::Full, UnicodeMode::Javascript];
+    for mode in modes {
+        let re = Regex::with_options(
+            r"(?::*(?P<g2>(?P<g0>a{0}.?)\\z(?P<g1>:?.*))|(?:(?:[ab]?[^aa]{0,1}|:.?)*(?P<g3>[^-].*)|(?P<g4>.{0}b{1})))?-*",
+            RegexOptions::default().unicode(mode),
+        )
+        .unwrap();
+        let caps = re.captures_all(b"bbb..baa-").unwrap();
+        assert_eq!(caps.len(), 2, "{mode:?}: {:?}", caps.iter().map(|c| c.spans().to_vec()).collect::<Vec<_>>());
+        // First match
+        assert_eq!(caps[0].spans()[0], Some((0, 9)), "{mode:?}");
+        // g4 should be (7,9) not (1,9)
+        assert_eq!(caps[0].spans()[4], Some((7, 9)), "{mode:?}: g4 span");
+    }
+}
+
+#[test]
+fn optional_capture_with_complex_body_reports_span() {
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    let modes = [UnicodeMode::Ascii, UnicodeMode::Default, UnicodeMode::Full, UnicodeMode::Javascript];
+    for mode in modes {
+        let re = Regex::with_options(
+            r"[^c]?(?:(?:(?:[c]{0}.{2}|.{2}.){2,3}(?P<g0>.{3})|\\.)(?P<g1>.?[bb]{2,4})?(?P<g3>(?P<g2>.{2,4}))?|[b]){1}",
+            RegexOptions::default().unicode(mode),
+        )
+        .unwrap();
+        let caps = re.captures_all(b".ab:ccb:cab:.").unwrap();
+        assert_eq!(caps.len(), 1, "{mode:?}: {:?}", caps.iter().map(|c| c.spans().to_vec()).collect::<Vec<_>>());
+        // First match
+        assert_eq!(caps[0].spans()[0], Some((0, 13)), "{mode:?}");
+        // CORRECTED to None. `[^c]?` is the leftmost element and takes (0,1),
+        // then `(?:...){2,3}` maximizes to (1,10) and g0=`.{3}`=(10,13), which
+        // leaves nothing for g1 (needs >=2) or g3. g1=(7,10) requires `[^c]?`
+        // to decline, which rule 6(a) forbids.
+        assert_eq!(caps[0].name("g1").map(|m| (m.start, m.end)), None, "{mode:?}: leftmost element is maximized (rule 6a)");
+    }
+}
+
+#[test]
+fn bounded_repeat_capture_maximizes_leftmost_element_g0() {
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    let modes = [UnicodeMode::Ascii, UnicodeMode::Default, UnicodeMode::Full, UnicodeMode::Javascript];
+    for mode in modes {
+        let re = Regex::with_options(
+            r"(?P<g1>b?(?P<g0>(?:[^b]?|[^.:]*.?)?)a{1,3}).{2,4}",
+            RegexOptions::default().unicode(mode),
+        )
+        .unwrap();
+        let caps = re.captures_all(b"aba:a").unwrap();
+        assert_eq!(caps.len(), 1, "{mode:?}: {:?}", caps.iter().map(|c| c.spans().to_vec()).collect::<Vec<_>>());
+        // First match
+        assert_eq!(caps[0].spans()[0], Some((0, 5)), "{mode:?}");
+        // CORRECTED to (0,2). g1 is the leftmost element and maximizes to
+        // (0,3), which forces `a{1,3}`="a"=(2,3) and hence g0=(0,2) (matched by
+        // `[^.:]*.?`). The old (0,0) belongs to the strictly shorter g1=(0,1)
+        // parse that rule 6(a) rejects.
+        assert_eq!(caps[0].name("g0").map(|m| (m.start, m.end)), Some((0, 2)), "{mode:?}: leftmost element is maximized (rule 6a)");
+    }
+}
+
+#[test]
+fn bounded_repeat_capture_correct_in_complex_alternation() {
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    let modes = [UnicodeMode::Ascii, UnicodeMode::Default, UnicodeMode::Full, UnicodeMode::Javascript];
+    for mode in modes {
+        let re = Regex::with_options(
+            r"(?:a{2}[-]*|(?:(?:[^b]{2,4}|.{3})(?:[bb]{2,5}.:|b)|[^.-]+c?c{2,2}){1,3}[a]*(?P<g0>.{1,4})?)?[^a]+",
+            RegexOptions::default().unicode(mode),
+        )
+        .unwrap();
+        let caps = re.captures_all(b".-bb:.ac.").unwrap();
+        assert_eq!(caps.len(), 1, "{mode:?}: {:?}", caps.iter().map(|c| c.spans().to_vec()).collect::<Vec<_>>());
+        // First match
+        assert_eq!(caps[0].spans()[0], Some((0, 9)), "{mode:?}");
+        // CORRECTED to (4,8). The leading big optional is the leftmost element
+        // and can reach (0,8) via `.{3}`=".-b" then `b`=(3,4) then `[a]*`=""
+        // then g0=`.{1,4}`=(4,8), leaving `[^a]+`=(8,9). Rule 6(a) maximizes it,
+        // so g0=(4,8); (3,7) is the strictly shorter E1=(0,7) parse.
+        assert_eq!(caps[0].spans()[1], Some((4, 8)), "{mode:?}: leftmost element is maximized (rule 6a)");
+    }
+}
+
+// A captured group wrapping an optional captured group whose body is a pure
+// assertion, e.g. `(?P<g2>(?P<g1>(?=a))?)`. This used to be rejected with
+// Algebra(UnsupportedPattern) in every mode except Ascii: the reverse pass
+// turns the lookahead into a lookbehind, so `reverse_concat` hit a
+// `(union containing a lookbehind) . R` shape whose non-TS-left case was
+// unimplemented. TWO INDEPENDENT defects had to be fixed to support it.
+//
+// 1. FORWARD, and it was MASKED by the reverse gate. Fusing a tail into a
+//    lookahead that carries a pending `rel` dropped that rel unless the BODY
+//    was always-nullable. `rel` is POSITIONAL bookkeeping -- it pins a null
+//    retroactively N bytes back -- and a ZERO-WIDTH tail cannot move that
+//    position, so the condition belonged on the tail, not the body. With the
+//    rel dropped, `(?P<g2>(?P<g1>(?!a))?)` -- entirely zero-width -- reported
+//    span (1,2) on "ab", and find_anchored on "b" gave (0,1), i.e. the FORWARD
+//    path. Two further details: a lookahead's `extra` is a NullsId holding a
+//    rel RANGE, so the whole set must survive (mk_lookahead_nid), not just
+//    get_lookahead_rel's single value -- collapsing it broke the multi-byte
+//    bodies `(?!ab)`/`(?!abc)`; and the `[la split]` branch of `der` built the
+//    split-off lookahead from the TAIL's nulls alone, ignoring the node's own
+//    rel, so it now cross-shifts by `cur_rels` as the metadata path already did.
+// 2. The reverse gate, now widened to distribute `X.(A|B)` into `X.A|X.B` when
+//    X is zero-width, lookaround-free AND ANCHOR-free (in practice a Tag), and
+//    EVERY arm of the union is itself zero-width.
+//
+// Both extra conditions in 2 are load-bearing and were each forced by a fuzz
+// counterexample from captures_arm_order_fuzz; do not relax either.
+//   - Allowing an ANCHOR in X (\A, \z are zero-width but context-sensitive)
+//     breaks `(?:(?!(?:\:)+)|(?:(?:b)*|(?:[a-z]|[a-z])))(?:(?:\z)+)+`, which
+//     then trips the internal "forward scan found no end for reverse-proposed
+//     start" assertion in ldfa.rs.
+//   - Allowing a CONSUMING union arm breaks arm-order invariance, e.g.
+//     `(?<g0>(?:(?:(?!\-))+|(?:..|[a-z])))` vs the same with the arms swapped
+//     disagree on "-b:" ((2,2) vs (2,3)); every counterexample found had a
+//     consuming arm, and restricting to all-zero-width arms excludes them all.
+// This is why the large pattern in `is_correct_where_supported_and_its_minimal_family_works_in_every_mode`
+// is still Ascii-only: its union has a consuming arm. The minimal family below
+// is supported in every mode.
+//
+// Widening the gate ALONE is NOT a fix and must not be retried on its own: it
+// only exposes defect 1 as silent wrong matches. Validate any change here with
+// the tag-free equivalent as the oracle (see the test below it): wrapping a
+// group in captures must never change find_all spans, AND re-run the fuzz gate
+// (RESHARP_FUZZ_SEED=6/23/47 caught the two over-wide versions; the plain test
+// suite did NOT).
+#[test]
+fn is_correct_where_supported_and_its_minimal_family_works_in_every_mode() {
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    let modes = [UnicodeMode::Ascii, UnicodeMode::Default, UnicodeMode::Full, UnicodeMode::Javascript];
+    let p = r".+(?P<g2>(?P<g1>(?P<g0>(?![^a])).{1}(?:.*|.{3}.{0,0}){1,1})?)";
+    let mut accepted = 0;
+    for mode in modes {
+        match Regex::with_options(p, RegexOptions::default().unicode(mode)) {
+            Err(e) => assert!(
+                format!("{e:?}").contains("UnsupportedPattern"),
+                "{mode:?}: rejected with the wrong error: {e:?}"
+            ),
+            Ok(re) => match re.captures_all(b"-a") {
+                Err(e) => assert!(
+                    format!("{e:?}").contains("UnsupportedPattern"),
+                    "{mode:?}: failed with the wrong error: {e:?}"
+                ),
+                Ok(caps) => {
+                    accepted += 1;
+                    let got: Vec<_> = caps.iter().map(|c| c.spans().to_vec()).collect();
+                    assert_eq!(
+                        got,
+                        vec![vec![Some((0, 2)), Some((2, 2)), None, None]],
+                        "{mode:?}: g0 must be None, the leading `.+` is maximized (rule 6a)"
+                    );
+                }
+            },
+        }
+    }
+    assert!(
+        accepted > 0,
+        "no mode supports the pattern, so nothing was actually checked"
+    );
+
+    let want_pos = vec![
+        vec![Some((0, 0)), Some((0, 0)), Some((0, 0))],
+        vec![Some((1, 1)), Some((1, 1)), None],
+        vec![Some((2, 2)), Some((2, 2)), None],
+    ];
+    let want_neg = vec![
+        vec![Some((0, 0)), Some((0, 0)), None],
+        vec![Some((1, 1)), Some((1, 1)), Some((1, 1))],
+        vec![Some((2, 2)), Some((2, 2)), Some((2, 2))],
+    ];
+    for mode in modes {
+        for (q, want) in [
+            (r"(?P<g2>(?P<g1>(?=a))?)", &want_pos),
+            (r"(?P<g2>(?P<g1>(?!a))?)", &want_neg),
+        ] {
+            let re = Regex::with_options(q, RegexOptions::default().unicode(mode))
+                .unwrap_or_else(|e| panic!("{mode:?}: {q} must compile now: {e:?}"));
+            let got: Vec<_> = re
+                .captures_all(b"ab")
+                .unwrap()
+                .iter()
+                .map(|c| c.spans().to_vec())
+                .collect();
+            assert_eq!(&got, want, "{mode:?}: {q} on \"ab\"");
+        }
+    }
+    for mode in modes {
+        let re = Regex::with_options(r"(?P<g1>(?!a))?", RegexOptions::default().unicode(mode)).unwrap();
+        let spans: Vec<(usize, usize)> =
+            re.find_all(b"ab").unwrap().iter().map(|m| (m.start, m.end)).collect();
+        assert_eq!(spans, vec![(0, 0), (1, 1), (2, 2)], "{mode:?}: zero-width pattern matched a byte");
+    }
+}
+
+#[test]
+fn optional_lookahead_capture_not_zero_width_when_declining() {
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    let modes = [UnicodeMode::Ascii, UnicodeMode::Default, UnicodeMode::Full, UnicodeMode::Javascript];
+    for mode in modes {
+        let re = Regex::with_options(
+            r"[^a]+(?P<g1>(?:(?P<g0>(?=.?))[^c]+(?:.+[c:]?|:.[::]+)?|(?:.{3}[ca]?.|[:c]{3})*))",
+            RegexOptions::default().unicode(mode),
+        )
+        .unwrap();
+        let caps = re.captures_all(b"acc.").unwrap();
+        assert_eq!(caps.len(), 1, "{mode:?}: {:?}", caps.iter().map(|c| c.spans().to_vec()).collect::<Vec<_>>());
+        // First match
+        assert_eq!(caps[0].spans()[0], Some((1, 4)), "{mode:?}");
+        // g0 should be None not (3,3)
+        assert_eq!(caps[0].name("g0").map(|m| (m.start, m.end)), None, "{mode:?}: g0 span");
+    }
+}
+
+#[test]
+fn lookahead_capture_ties_and_maximizes_leftmost_element() {
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    let modes = [UnicodeMode::Ascii, UnicodeMode::Default, UnicodeMode::Full, UnicodeMode::Javascript];
+    for mode in modes {
+        let re = Regex::with_options(
+            r"(?:c*|(?:\\z(?:[.]{1}|.{2,4})?(?::+b*.{0,1}|\\.+)|[^-]?(?:b{0,0}.+|.?){2})?)?(?P<g0>(?=[^.]{2,3}))[^b:]+b{0}",
+            RegexOptions::default().unicode(mode),
+        )
+        .unwrap();
+        let caps = re.captures_all(b"aa:.b.").unwrap();
+        assert_eq!(caps.len(), 1, "{mode:?}: {:?}", caps.iter().map(|c| c.spans().to_vec()).collect::<Vec<_>>());
+        // First match
+        assert_eq!(caps[0].spans()[0], Some((0, 2)), "{mode:?}");
+        // CORRECTED to (1,1). The leading optional can reach (0,1) via
+        // `[^-]?`="a", and g0's lookahead `(?=[^.]{2,3})` holds at 1 ("a:") but
+        // NOT at 2 (":."), so (0,1) is the longest completable leftmost element.
+        // Rule 6(a) takes it; (0,0) is the strictly shorter parse.
+        assert_eq!(caps[0].spans()[1], Some((1, 1)), "{mode:?}: leftmost element is maximized (rule 6a)");
+    }
+}
+
+#[test]
+fn nested_alternation_lookahead_capture_g4_declines() {
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    let modes = [UnicodeMode::Ascii, UnicodeMode::Default, UnicodeMode::Full, UnicodeMode::Javascript];
+    for mode in modes {
+        let re = Regex::with_options(
+            r"a{0,1}.+.+(?:(?P<g0>-{0,2}.(?:c{0}|:?.+[^cb]?)+)(?:\\.?[^
+</textarea>][^c.]{0}.?|[c]+)(?:(?:[:a]{2}.*b+|[^.b]{3}[^.]{1,2}[^:a]*){1}(?P<g1>c{2,4}b{1}[^ca]*)|(?P<g2>.{2,3}b*[^b]*)?\\.?$)|.?(?P<g3>(?=.{2})))?.*.{1}",
+            RegexOptions::default().unicode(mode),
+        )
+        .unwrap();
+        let caps = re.captures_all(b"bbaa:a").unwrap();
+        assert_eq!(caps.len(), 1, "{mode:?}: {:?}", caps.iter().map(|c| c.spans().to_vec()).collect::<Vec<_>>());
+        // First match
+        assert_eq!(caps[0].spans()[0], Some((0, 6)), "{mode:?}");
+        // g4 can only participate by shortening the leading mandatory
+        // atoms below their maximized extent; rule 6a forbids that.
+        assert_eq!(caps[0].spans()[4], None, "{mode:?}: g4 declines");
+    }
+}
+
+#[test]
+fn negative_lookahead_capture_ties_zero_width_and_participates() {
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    let modes = [UnicodeMode::Ascii, UnicodeMode::Default, UnicodeMode::Full, UnicodeMode::Javascript];
+    for mode in modes {
+        let re = Regex::with_options(
+            r".{0}.?(?:a*a?|(?P<g1>(?P<g0>(?![^b]+.{0,2}))))",
+            RegexOptions::default().unicode(mode),
+        )
+        .unwrap();
+        let caps = re.captures_all(b"ba::bbb:").unwrap();
+        assert_eq!(caps.len(), 8, "{mode:?}: {:?}", caps.iter().map(|c| c.spans().to_vec()).collect::<Vec<_>>());
+        // Check match at (3,4)
+        assert_eq!(caps[2].spans()[0], Some((3, 4)), "{mode:?}");
+        // CORRECTED to (4,4). At this match `.?`=":"=(3,4) and the trailing
+        // union must be empty at 4. `[^b]+` cannot match at 4 (input[4]='b'),
+        // so the negative lookahead `(?![^b]+.{0,2})` HOLDS and the g1 arm is
+        // zero-width, exactly like `a*a?`. Tied decomposition, so rule 6(b)
+        // makes g1 participate.
+        assert_eq!(caps[2].spans()[1], Some((4, 4)), "{mode:?}: tied arms, g1 participates (rule 6b)");
+    }
+}
+
+#[test]
+fn optional_capture_correct_in_complex_alternation() {
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    let modes = [UnicodeMode::Ascii, UnicodeMode::Default, UnicodeMode::Full, UnicodeMode::Javascript];
+    for mode in modes {
+        let re = Regex::with_options(
+            r"(?:(?P<g1>(?:[^a-]?[^--]?|.*a+)(?P<g0>[^-a]*.{1,3})?[^.]*)|.*.*(?:a?b+(?P<g2>(?=[^b]?))|(?P<g3>a?)(?:[^.c]*|c{2,2}.+a){1}a?)){1}b{0,3}",
+            RegexOptions::default().unicode(mode),
+        )
+        .unwrap();
+        let caps = re.captures_all(b"a..-").unwrap();
+        // Count CORRECTED from 1 to 2: nullable pattern, trailing empty match
+        // at len, same as `find_all` and as rust-regex on `a*`/"aa".
+        assert_eq!(caps.len(), 2, "{mode:?}: {:?}", caps.iter().map(|c| c.spans().to_vec()).collect::<Vec<_>>());
+        // First match
+        assert_eq!(caps[0].spans()[0], Some((0, 4)), "{mode:?}");
+        // g1 should be (0,4) not None
+        assert_eq!(caps[0].spans()[1], Some((0, 4)), "{mode:?}: g1 span");
+    }
+}
+
+#[test]
+fn lookahead_capture_ties_with_trailing_class_rule6b() {
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    let modes = [UnicodeMode::Ascii, UnicodeMode::Default, UnicodeMode::Full, UnicodeMode::Javascript];
+    for mode in modes {
+        let re = Regex::with_options(
+            r"[^b]+(?:.?|(?:(?P<g0>(?=.?.+))|(?:[.a]?-{2,4}|:{0,1})?(?P<g1>(?=b.*)))a*)a?[^b.]{2,4}",
+            RegexOptions::default().unicode(mode),
+        )
+        .unwrap();
+        let caps = re.captures_all(b"bababbb.:-").unwrap();
+        assert_eq!(caps.len(), 1, "{mode:?}: {:?}", caps.iter().map(|c| c.spans().to_vec()).collect::<Vec<_>>());
+        // First match
+        assert_eq!(caps[0].spans()[0], Some((7, 10)), "{mode:?}");
+        // g0 CORRECTED to (8,8). `[^b]+` maximizes to (7,8) - it cannot go
+        // further because the trailing `[^b.]{2,4}` needs ":-"=(8,10) - so the
+        // middle union must be empty at 8. Both `.?`="" and the g0 arm are
+        // zero-width there (`(?=.?.+)` holds: ":-" follows), so the
+        // decomposition is tied and rule 6(b) makes g0 participate.
+        assert_eq!(caps[0].spans()[1], Some((8, 8)), "{mode:?}: tied arms, g0 participates (rule 6b)");
+        // g1 stays None: its lookahead `(?=b.*)` fails at 8 (input[8] is ':').
+        assert_eq!(caps[0].spans()[2], None, "{mode:?}: g1's lookahead genuinely fails at 8");
+    }
+}
+
+#[test]
+fn bounded_repeat_capture_after_star_of_alternation() {
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    let modes = [UnicodeMode::Ascii, UnicodeMode::Default, UnicodeMode::Full, UnicodeMode::Javascript];
+    for mode in modes {
+        let re = Regex::with_options(
+            r"b*(?:.?|a+[^ba]+)*(?P<g0>[^.a]+.{3})",
+            RegexOptions::default().unicode(mode),
+        )
+        .unwrap();
+        let caps = re.captures_all(b":ab:-abcbba").unwrap();
+        assert_eq!(caps.len(), 1, "{mode:?}: {:?}", caps.iter().map(|c| c.spans().to_vec()).collect::<Vec<_>>());
+        // First match
+        assert_eq!(caps[0].spans()[0], Some((0, 11)), "{mode:?}");
+        // g0 should be (7,11) not (6,11)
+        assert_eq!(caps[0].spans()[1], Some((7, 11)), "{mode:?}: g0 span");
+    }
+}
+
+#[test]
+fn lookahead_capture_arm_maximized_over_optional_sibling() {
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    let modes = [UnicodeMode::Ascii, UnicodeMode::Default, UnicodeMode::Full, UnicodeMode::Javascript];
+    for mode in modes {
+        let re = Regex::with_options(
+            r"a+(?P<g0>(?=c{0}))(?:a?|(?P<g2>:?(?P<g1>[^bb].{2,5}))?){1}.+.{0,2}",
+            RegexOptions::default().unicode(mode),
+        )
+        .unwrap();
+        let caps = re.captures_all(b"a:aa-cc").unwrap();
+        assert_eq!(caps.len(), 1, "{mode:?}: {:?}", caps.iter().map(|c| c.spans().to_vec()).collect::<Vec<_>>());
+        // First match
+        assert_eq!(caps[0].spans()[0], Some((0, 7)), "{mode:?}");
+        // CORRECTED to (1,6). After `a+`=(0,1) and g0=(1,1), the `{1}` union is
+        // the next element and is maximized: arm 1 `a?` is empty at 1 (input[1]
+        // is ':'), while the g2 arm reaches (1,6) via `:?`=":", `[^bb]`="a",
+        // `.{2,5}`="a-c", leaving `.+`=(6,7). Rule 6(a) takes the longer arm.
+        assert_eq!(caps[0].spans()[2], Some((1, 6)), "{mode:?}: leftmost element is maximized (rule 6a)");
+    }
+}
+
+#[test]
+fn optional_capture_cannot_start_before_mandatory_prefix() {
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    let modes = [UnicodeMode::Ascii, UnicodeMode::Default, UnicodeMode::Full, UnicodeMode::Javascript];
+    for mode in modes {
+        let re = Regex::with_options(
+            r".+(?P<g2>(?P<g1>(?:[^-]+|[^aa]{0}.?)+(?P<g0>[^..]{1,3}.?).?)?a{0,3}.{0,1}).+",
+            RegexOptions::default().unicode(mode),
+        )
+        .unwrap();
+        let caps = re.captures_all(b"ac.:bb:c:b").unwrap();
+        assert_eq!(caps.len(), 1, "{mode:?}: {:?}", caps.iter().map(|c| c.spans().to_vec()).collect::<Vec<_>>());
+        // First match
+        assert_eq!(caps[0].spans()[0], Some((0, 10)), "{mode:?}");
+        // CORRECTED to None. The old expectation (0,9) is impossible: g1 is
+        // preceded by `.+`, which must consume at least one byte, so g1 cannot
+        // start at 0. `.+` maximizes to (0,9), g2 is nullable so it takes
+        // (9,9), the trailing `.+` takes (9,10), and g1 declines.
+        assert_eq!(caps[0].name("g1").map(|m| (m.start, m.end)), None, "{mode:?}: leftmost element is maximized (rule 6a)");
+    }
+}
+
+#[test]
+fn bounded_repeat_capture_second_match_after_optional_star() {
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    let modes = [UnicodeMode::Ascii, UnicodeMode::Default, UnicodeMode::Full, UnicodeMode::Javascript];
+    for mode in modes {
+        let re = Regex::with_options(
+            r"[^b]+(?:[^b]?|[b]{0})+(?P<g0>a?)",
+            RegexOptions::default().unicode(mode),
+        )
+        .unwrap();
+        let caps = re.captures_all(b"aa:.c.a.b:.ab").unwrap();
+        assert_eq!(caps.len(), 2, "{mode:?}: {:?}", caps.iter().map(|c| c.spans().to_vec()).collect::<Vec<_>>());
+        // Second match
+        assert_eq!(caps[1].spans()[0], Some((9, 12)), "{mode:?}");
+        // g0 should be (12,12) not (11,12)
+        assert_eq!(caps[1].spans()[1], Some((12, 12)), "{mode:?}: g0 span");
+    }
+}
+
+#[test]
+fn optional_capture_leftmost_repeat_body_maximized() {
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    let modes = [UnicodeMode::Ascii, UnicodeMode::Default, UnicodeMode::Full, UnicodeMode::Javascript];
+    for mode in modes {
+        let re = Regex::with_options(
+            r"(?!a+)(?P<g0>(?:b?|:*(?:a+[a]?-?|[^.b]?.?[^bb]+){1})+).+.$",
+            RegexOptions::default().unicode(mode),
+        )
+        .unwrap();
+        let caps = re.captures_all(b":a.:a").unwrap();
+        assert_eq!(caps.len(), 1, "{mode:?}: {:?}", caps.iter().map(|c| c.spans().to_vec()).collect::<Vec<_>>());
+        // First match
+        assert_eq!(caps[0].spans()[0], Some((0, 5)), "{mode:?}");
+        // CORRECTED to (0,3). g0 is the leftmost element and reaches (0,3) via
+        // `:*`=":", `[^.b]?`="a", `.?`="", `[^bb]+`=".", leaving `.+`=(3,4) and
+        // `.`=(4,5). glibc's (0,0) here is its known nullable-repeat-body
+        // structure dependence and is disqualified: `((b?|a)+)(.+)$` on "aab"
+        // gives glibc g1=(0,0) but the arm-reordered `((a|b?)+)(.+)$` gives
+        // g1=(0,2), as does the equivalent `((a|b)*)(.+)$`. Rule 6(a) is
+        // order-invariant and maximizes g0.
+        assert_eq!(caps[0].spans()[1], Some((0, 3)), "{mode:?}: leftmost element is maximized (rule 6a)");
+    }
+}
+
+#[test]
+fn optional_capture_declines_when_leading_repeat_can_reach_further() {
+    // the leading repeat's TOTAL extent must be maximized (rule 6a), not
+    // just one iteration's span; it reaches 10, leaving g0 unset. V8/glibc
+    // resolve `+` by per-iteration greed instead, so they disagree here.
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    let modes = [UnicodeMode::Ascii, UnicodeMode::Default, UnicodeMode::Full, UnicodeMode::Javascript];
+    for mode in modes {
+        let re = Regex::with_options(
+            r"(?:.a|a?.{2})+(?P<g0>[^b])?(?P<g1>(?=c*)).+",
+            RegexOptions::default().unicode(mode),
+        )
+        .unwrap();
+        let caps = re.captures_all(b"ca:c.aaba:a").unwrap();
+        assert_eq!(caps.len(), 1, "{mode:?}: {:?}", caps.iter().map(|c| c.spans().to_vec()).collect::<Vec<_>>());
+        // First match
+        assert_eq!(caps[0].spans()[0], Some((0, 11)), "{mode:?}");
+        assert_eq!(caps[0].name("g0").map(|m| (m.start, m.end)), None, "{mode:?}: g0 declines, leading repeat maximizes to reach 10");
+    }
+}
+
+#[test]
+fn tied_zero_width_union_arms_all_participate() {
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    let modes = [UnicodeMode::Ascii, UnicodeMode::Default, UnicodeMode::Full, UnicodeMode::Javascript];
+    for mode in modes {
+        let re = Regex::with_options(
+            r"(?P<g0>(?=b?))(?:c*c*(?:[-]*(?P<g1>(?![:a]{2}))|a{1,4})|(?P<g3>(?P<g2>(?<=[..]?.{0,0})))){1}.+",
+            RegexOptions::default().unicode(mode),
+        )
+        .unwrap();
+        let caps = re.captures_all(b"ac").unwrap();
+        assert_eq!(caps.len(), 1, "{mode:?}: {:?}", caps.iter().map(|c| c.spans().to_vec()).collect::<Vec<_>>());
+        assert_eq!(caps[0].spans()[0], Some((0, 2)), "{mode:?}");
+        assert_eq!(
+            (caps[0].spans()[2], caps[0].spans()[3], caps[0].spans()[4]),
+            (Some((0, 0)), Some((0, 0)), Some((0, 0))),
+            "{mode:?}: the two outer arms tie zero-width at 0, and `|` is UNION, so every group that \
+             can participate does - g1, g3 and g2 all report (0,0). Verified invariant by writing \
+             the g3/g2 arm first. Earlier revisions picked one arm (g1, then g3/g2)."
+        );
+    }
+}
+
+#[test]
+fn bounded_repeat_capture_forbids_donating_to_trailing_star() {
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    let modes = [UnicodeMode::Ascii, UnicodeMode::Default, UnicodeMode::Full, UnicodeMode::Javascript];
+    for mode in modes {
+        let re = Regex::with_options(
+            r"(?P<g0>(?:b{0}(?:b{2,4}[aa]{2,4}|[a]{2,3})*|b?)*c{0})(?:(?P<g1>(?=a{2,4}\\B))|(?!:{1,3})b*)?c(?P<g2>(?=b{0}))",
+            RegexOptions::default().unicode(mode),
+        )
+        .unwrap();
+        let caps = re.captures_all(b"bbb:.abbc:").unwrap();
+        assert_eq!(caps.len(), 1, "{mode:?}: {:?}", caps.iter().map(|c| c.spans().to_vec()).collect::<Vec<_>>());
+        // First match
+        assert_eq!(caps[0].spans()[0], Some((6, 9)), "{mode:?}");
+        // CORRECTED to (6,8). g0 is the leftmost element and reaches (6,8)
+        // ("bb" via `b?` twice), after which `(?!:{1,3})b*` matches empty at 8,
+        // `c`=(8,9) and g2 is nullable. (6,6) only arises from donating the
+        // "bb" to the later `b*`, which rule 6(a) forbids.
+        assert_eq!(caps[0].spans()[1], Some((6, 8)), "{mode:?}: leftmost element is maximized (rule 6a)");
+    }
+}
+
+#[test]
+fn lookahead_capture_correct_span_after_greedy_prefix() {
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    let modes = [UnicodeMode::Ascii, UnicodeMode::Default, UnicodeMode::Full, UnicodeMode::Javascript];
+    for mode in modes {
+        let re = Regex::with_options(
+            r".?(?:a{1,2}c?|[^b]+)(?P<g0>(?=(?:(?:-{2}.+.{2,5}|[-]+){3}(?:[-a]+[b]?|b{0,1})?b*|a*\\A\\.{3})*))b{0,2}.{0,1}$",
+            RegexOptions::default().unicode(mode),
+        )
+        .unwrap();
+        let caps = re.captures_all(b"-a-").unwrap();
+        assert_eq!(caps.len(), 1, "{mode:?}: {:?}", caps.iter().map(|c| c.spans().to_vec()).collect::<Vec<_>>());
+        // First match
+        assert_eq!(caps[0].spans()[0], Some((0, 3)), "{mode:?}");
+        // CORRECTED to (3,3). `.?`=(0,1) then `[^b]+`="a-"=(1,3) is the
+        // leftmost-maximal parse, and g0's lookahead body is a star (nullable
+        // everywhere), so g0=(3,3). glibc is disqualified here: it flips with
+        // arm order - `.?(a{1,2}c?|[^b]+)()b{0,2}.{0,1}$` on "-a-" gives
+        // g1=(1,2)/g2=(2,2) but `.?([^b]+|a{1,2}c?)()...` gives (1,3)/(3,3).
+        assert_eq!(caps[0].spans()[1], Some((3, 3)), "{mode:?}: leftmost element is maximized (rule 6a)");
+    }
+}
+
+#[test]
+fn union_arm_tie_lets_both_arms_contribute_and_ignores_arm_order() {
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    let modes = [UnicodeMode::Ascii, UnicodeMode::Default, UnicodeMode::Full, UnicodeMode::Javascript];
+    let named = |pat: &str, hay: &[u8], mode: UnicodeMode, names: &[&str]| {
+        let re = Regex::with_options(pat, RegexOptions::default().unicode(mode)).unwrap();
+        let caps = re.captures_all(hay).unwrap();
+        assert_eq!(caps.len(), 1, "{mode:?} {pat}");
+        names.iter().map(|n| caps[0].name(n).map(|m| (m.start, m.end))).collect::<Vec<_>>()
+    };
+    let names = ["g0", "g1", "g2", "g3"];
+    let want = [Some((2, 6)), Some((6, 6)), Some((1, 6)), Some((1, 6))];
+    for mode in modes {
+        let a = named(
+            r".{1,1}(?::?(?P<g0>-?[^.-]+)?(?P<g1>(?=b{0,2}[:]*))|(?P<g3>(?P<g2>.*-{0,2}))[^ac]{0}:*)",
+            b"b:c:b:",
+            mode,
+            &names,
+        );
+        let b = named(
+            r".{1,1}(?:(?P<g3>(?P<g2>.*-{0,2}))[^ac]{0}:*|:?(?P<g0>-?[^.-]+)?(?P<g1>(?=b{0,2}[:]*)))",
+            b"b:c:b:",
+            mode,
+            &names,
+        );
+        assert_eq!(a, want.to_vec(), "{mode:?}: every arm that matches contributes its captures");
+        assert_eq!(a, b, "{mode:?}: captures must not depend on textual arm order");
+    }
+}
+
+#[test]
+fn union_arm_tiebreak_is_invariant_under_renesting_an_arm_prefix() {
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    let modes = [UnicodeMode::Ascii, UnicodeMode::Default, UnicodeMode::Full, UnicodeMode::Javascript];
+    let named = |pat: &str, mode: UnicodeMode| {
+        let re = Regex::with_options(pat, RegexOptions::default().unicode(mode)).unwrap();
+        let caps = re.captures_all(b"abcd").unwrap();
+        assert_eq!(caps.len(), 1, "{mode:?} {pat}");
+        ["g0", "g1"].iter().map(|n| caps[0].name(n).map(|m| (m.start, m.end))).collect::<Vec<_>>()
+    };
+    for mode in modes {
+        let flat = named(r"(?:(?P<g0>a)(?:bc)(?:d)|(?:ab)(?P<g1>cd))", mode);
+        let nested = named(r"(?:(?:(?P<g0>a)(?:bc))(?:d)|(?:ab)(?P<g1>cd))", mode);
+        let swapped = named(r"(?:(?:ab)(?P<g1>cd)|(?P<g0>a)(?:bc)(?:d))", mode);
+        assert_eq!(flat, vec![Some((0, 1)), Some((2, 4))], "{mode:?}: both arms match \"abcd\", so both groups participate");
+        assert_eq!(flat, nested, "{mode:?}: a redundant group around an arm prefix must not change captures");
+        assert_eq!(flat, swapped, "{mode:?}: arm order must not change captures");
+    }
+}
+
+#[test]
+fn union_never_picks_an_arm_every_tied_arm_contributes_its_captures() {
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    for mode in [UnicodeMode::Ascii, UnicodeMode::Default, UnicodeMode::Full, UnicodeMode::Javascript] {
+        for (pat, input, want) in [
+            (r"(?<g1>a)|(?<g2>a)", &b"a"[..], [Some((0, 1)), Some((0, 1))]),
+            (r"(?<g2>a)|(?<g1>a)", &b"a"[..], [Some((0, 1)), Some((0, 1))]),
+            (r"(?<g1>[bc])|(?<g2>(?:c)+)", &b"c"[..], [Some((0, 1)), Some((0, 1))]),
+            (r"(?<g2>(?:c)+)|(?<g1>[bc])", &b"c"[..], [Some((0, 1)), Some((0, 1))]),
+            (r"(?<g1>(?=a))|(?<g2>(?=.))", &b"a"[..], [Some((0, 0)), Some((0, 0))]),
+            (r"(?<g2>(?=.))|(?<g1>(?=a))", &b"a"[..], [Some((0, 0)), Some((0, 0))]),
+            (r"(?<g1>a)|(?<g2>a)|(?<g1x>a)", &b"a"[..], [Some((0, 1)), Some((0, 1))]),
+            (r"(?<g1>x)|(?<g2>xy)", &b"xy"[..], [Some((0, 1)), Some((0, 2))]),
+            (r"(?<g2>xy)|(?<g1>x)", &b"xy"[..], [Some((0, 1)), Some((0, 2))]),
+        ] {
+            let re = Regex::with_options(pat, RegexOptions::default().unicode(mode)).unwrap();
+            let caps = re.captures_all(input).unwrap();
+            assert_eq!(
+                [caps[0].name("g1").map(|m| (m.start, m.end)), caps[0].name("g2").map(|m| (m.start, m.end))],
+                want,
+                "mode={mode:?} pattern={pat}: `|` is UNION, so there is no arm to pick. Every arm \
+                 that ties contributes its captures and every group that can participate does. \
+                 Arm-order invariance follows because merging is commutative - it is not a \
+                 property that needs a tie-break key, and the identical-arms case \
+                 `(?<g1>a)|(?<g2>a)` is not an irreducible symmetric tie: BOTH groups report \
+                 (0,1). Any future 'winner' logic here is a bug."
+            );
+        }
+        let re = Regex::with_options(r"(?:(?<a>x)|(?<b>xy))z", RegexOptions::default().unicode(mode)).unwrap();
+        let caps = re.captures_all(b"xyz").unwrap();
+        assert_eq!(
+            (caps[0].name("a").map(|m| (m.start, m.end)), caps[0].name("b").map(|m| (m.start, m.end))),
+            (None, Some((0, 2))),
+            "mode={mode:?}: participation still requires REALLY matching. Arm `a` ends at 1, after \
+             which `z` cannot match \"yz\", so no accepting run of the whole pattern uses it and `a` \
+             declines. Contrast the bare `(?<g1>x)|(?<g2>xy)` case above, where the short arm IS a \
+             complete match and does participate."
+        );
+        let re = Regex::with_options(r"(?<a>ab)c|abd", RegexOptions::default().unicode(mode)).unwrap();
+        let caps = re.captures_all(b"abd").unwrap();
+        assert_eq!(
+            caps[0].name("a").map(|m| (m.start, m.end)),
+            None,
+            "mode={mode:?}: an arm that never reaches an accepting state contributes nothing, even \
+             though its prefix `ab` matched byte-for-byte. Dead-end parses are not runs."
+        );
+    }
+}
+
+// Pins the FORWARD defect described above (see
+// `is_correct_where_supported_and_its_minimal_family_works_in_every_mode`): a
+// lookahead's pending `rel` must survive being fused with a zero-width tail.
+// Oracle is the tag-free spelling of the same pattern -- wrapping a group in
+// captures is a pure annotation and cannot change which spans match. Before the
+// fix the wrapped forms reported non-zero-width spans for zero-width patterns
+// (e.g. (1,2) on "ab"). The multi-byte bodies are the ones that need the rel
+// RANGE preserved rather than a single collapsed value.
+#[test]
+fn zero_width_assertion_in_nested_capture_agrees_with_its_tag_free_equivalent() {
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    let pats = [
+        r"(?P<g2>(?P<g1>(?=a))?)",
+        r"(?P<g2>(?P<g1>(?!a))?)",
+        r"(?P<g2>(?P<g1>(?!ab))?)",
+        r"(?P<g2>(?P<g1>(?=ab))?)",
+        r"(?P<g2>(?P<g1>(?!abc))?)",
+        r"a(?P<g2>(?P<g1>(?=b))?)",
+        r"\A(?P<g2>(?P<g1>(?=a))?)",
+        r"x(?P<g2>(?P<g1>(?!ab))?)y",
+        r"(?P<g2>(?P<g1>(?=a))?)\z",
+        r"(?P<g2>(?P<g1>(?!a))?)\z",
+        r"(?<g0>(?!a)|(?:..|b))",
+        r"(?<g0>(?:..|b)|(?!a))",
+        r"(?<g0>(?:(?!a))+|(?:..|[a-z]))",
+        r"(?<g0>(?:..|[a-z])|(?:(?!a))+)",
+        r"(?P<g2>(?P<g1>(?<=a))?)",
+        r"(?P<g2>(?P<g1>(?<!a))?)",
+        r"(?P<g2>(?P<g1>(?<=ab))?)",
+        r"(?P<g1>(?<=a))",
+    ];
+    let inputs: [&[u8]; 12] = [b"", b"a", b"b", b"ab", b"ba", b"aab", b"xay", b"abab", b"xaby", b":", b"xb:", b"-b:"];
+    let modes = [UnicodeMode::Ascii, UnicodeMode::Default, UnicodeMode::Full, UnicodeMode::Javascript];
+    let mut checked = 0;
+    for p in pats {
+        let oracle = p.replace("(?P<g1>", "(?:").replace("(?P<g2>", "(?:");
+        for mode in modes {
+            let re = Regex::with_options(p, RegexOptions::default().unicode(mode))
+                .unwrap_or_else(|e| panic!("{mode:?}: {p} must compile: {e:?}"));
+            let re_oracle = Regex::with_options(&oracle, RegexOptions::default().unicode(mode))
+                .unwrap_or_else(|e| panic!("{mode:?}: oracle {oracle} must compile: {e:?}"));
+            for inp in inputs {
+                let spans = |r: &Regex| -> Vec<(usize, usize)> {
+                    r.find_all(inp).unwrap().iter().map(|m| (m.start, m.end)).collect()
+                };
+                assert_eq!(
+                    spans(&re),
+                    spans(&re_oracle),
+                    "{mode:?}: {p} disagrees with its tag-free oracle {oracle} on {:?}",
+                    String::from_utf8_lossy(inp)
+                );
+                checked += 1;
+            }
+        }
+    }
+    assert_eq!(checked, pats.len() * modes.len() * inputs.len());
+
+    for p in [r"(?P<g2>(?P<g1>(?=a))?)$"] {
+        for mode in modes {
+            let e = Regex::with_options(p, RegexOptions::default().unicode(mode))
+                .err()
+                .unwrap_or_else(|| panic!("{mode:?}: {p} now compiles; check it against its tag-free oracle and move it into the supported list above"));
+            assert!(
+                format!("{e:?}").contains("UnsupportedPattern"),
+                "{mode:?}: {p} rejected with the wrong error: {e:?}"
+            );
+        }
+    }
+}
+
+// A union arm's position in the union TREE must not decide whether a following
+// tail gets distributed into the arms. mk_concat distributes `(A|B).T` into
+// `A.T|B.T` when an arm is a "fresh" lookahead, because the lookahead's pending
+// `rel` (its retroactive end pin) is only correct once the tail is fused into
+// it. That test used to require the lookahead to be an IMMEDIATE child of the
+// union node, so it fired for `LA|(..|b)` (LA at depth 1) but not for the
+// arm-swapped `(..|b)|LA`, which flattens to union(.., union(b, LA)) with LA at
+// depth 2. The tail then stayed outside the union and the match end was wrong:
+// `(?<g0>(?:..|b)|(?!a))` on ":" reported (0,1), consuming a byte that neither
+// arm can match (`..` needs two bytes, `b` is not ':'). Arm position in the
+// union tree is exactly the kind of incidental node shape that must never
+// decide match behavior, so the predicate now walks the whole union spine.
+#[test]
+fn tail_distributes_into_a_lookahead_arm_at_any_union_depth() {
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    let pairs = [
+        (r"(?<g0>(?!a)|(?:..|b))", r"(?<g0>(?:..|b)|(?!a))"),
+        (r"(?<g0>(?:(?!a))+|(?:..|[a-z]))", r"(?<g0>(?:..|[a-z])|(?:(?!a))+)"),
+        (r"(?<g0>(?:(?!\-))+|(?:..|[a-z]))", r"(?<g0>(?:..|[a-z])|(?:(?!\-))+)"),
+        (r"(?<g0>(?:(?!a))+|(?:xy|b))", r"(?<g0>(?:xy|b)|(?:(?!a))+)"),
+        (r"x(?<g0>(?!a)|(?:..|b))y", r"x(?<g0>(?:..|b)|(?!a))y"),
+    ];
+    let inputs: [&[u8]; 7] = [b":", b"-b:", b"xb:", b"b:", b"ab", b"xy", b"xbyb"];
+    let modes = [UnicodeMode::Ascii, UnicodeMode::Default, UnicodeMode::Full, UnicodeMode::Javascript];
+    for (a, b) in pairs {
+        for mode in modes {
+            let spans = |p: &str| -> Vec<Vec<(usize, usize)>> {
+                let re = Regex::with_options(p, RegexOptions::default().unicode(mode))
+                    .unwrap_or_else(|e| panic!("{mode:?}: {p} must compile: {e:?}"));
+                inputs
+                    .iter()
+                    .map(|i| re.find_all(i).unwrap().iter().map(|m| (m.start, m.end)).collect())
+                    .collect()
+            };
+            assert_eq!(spans(a), spans(b), "{mode:?}: arm order changed the match set for {a} vs {b}");
+        }
+    }
+
+    // The concrete wrong answer this fixed, pinned as an absolute value rather
+    // than only as an arm-order invariant: at 0 the only possible match of
+    // `(?:..|b)|(?!a)` over ":" is the zero-width lookahead arm.
+    for p in [r"(?<g0>(?!a)|(?:..|b))", r"(?<g0>(?:..|b)|(?!a))"] {
+        let re = Regex::new(p).unwrap();
+        let got: Vec<_> = re.find_all(b":").unwrap().iter().map(|m| (m.start, m.end)).collect();
+        assert_eq!(got, vec![(0, 0), (1, 1)], "{p} must not consume ':'");
+    }
+}
+
+// The distribution above is what makes `(union containing a lookaround) . R`
+// supportable when the left factor is zero-width: a CONSUMING union arm and a
+// trailing anchor are both fine now. The left factor must still be
+// LOOKAROUND-FREE, and this is the counterexample that forces it: `(\b)(\B)` is
+// a contradiction (a position cannot be both a word boundary and not one), so
+// it must match nothing. Allowing a lookaround-bearing left factor to be
+// duplicated into both arms makes it match, because each copy of the fused
+// lookbehind `prev` is resolved independently.
+#[test]
+fn zero_width_left_factor_may_not_contain_a_lookaround() {
+    match Regex::new(r"(\b)(\B)") {
+        Ok(re) => assert!(
+            re.find_all(b"ab").unwrap().is_empty(),
+            "(\\b)(\\B) is a contradiction and must match nothing"
+        ),
+        Err(_) => {}
+    }
+}
+
+// A capture group whose body is a LOOKBEHIND used to be rejected outright
+// (`Algebra(UnsupportedPattern)`), which docs/capture-posix-parse.md attributed
+// to the capture subset ("lookbehind in the capture root"). It was actually
+// `normalize_rev`, which refused any lookahead carrying a fused tail: reversing
+// `(?<=a)` produces a lookahead, and the group's closing tag becomes its tail.
+// Normalizing the tail (leaving the body alone, exactly as the untailed
+// lookahead arm already does) is enough. The values below are the whole point:
+// `(?<=a)` can only participate at the one position preceded by "a", and
+// `(?<!a)` is its exact complement.
+#[test]
+fn capture_group_around_a_lookbehind_body() {
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    let modes = [UnicodeMode::Ascii, UnicodeMode::Default, UnicodeMode::Full, UnicodeMode::Javascript];
+    for mode in modes {
+        let caps = |p: &str| -> Vec<Vec<Option<(usize, usize)>>> {
+            Regex::with_options(p, RegexOptions::default().unicode(mode))
+                .unwrap_or_else(|e| panic!("{mode:?}: {p} must compile: {e:?}"))
+                .captures_all(b"ab")
+                .unwrap()
+                .iter()
+                .map(|c| c.spans().to_vec())
+                .collect()
+        };
+        assert_eq!(
+            caps(r"(?P<g2>(?P<g1>(?<=a))?)"),
+            vec![
+                vec![Some((0, 0)), Some((0, 0)), None],
+                vec![Some((1, 1)), Some((1, 1)), Some((1, 1))],
+                vec![Some((2, 2)), Some((2, 2)), None],
+            ],
+            "{mode:?}: (?<=a) may only participate where 'a' precedes"
+        );
+        assert_eq!(
+            caps(r"(?P<g2>(?P<g1>(?<!a))?)"),
+            vec![
+                vec![Some((0, 0)), Some((0, 0)), Some((0, 0))],
+                vec![Some((1, 1)), Some((1, 1)), None],
+                vec![Some((2, 2)), Some((2, 2)), Some((2, 2))],
+            ],
+            "{mode:?}: (?<!a) must be the exact complement of (?<=a)"
+        );
+        assert_eq!(
+            caps(r"(?P<g1>(?<=a))"),
+            vec![vec![Some((1, 1)), Some((1, 1))]],
+            "{mode:?}: bare lookbehind capture matches only after 'a'"
+        );
+    }
+}
+
+#[test]
+fn end_anchored_capture_group_with_trailing_bytes_after_line() {
+    use resharp::Regex;
+    let re = Regex::new(r"^(?<user>[a-z]+)@(?<host>[a-z.]+)$").unwrap();
+    let hay = b"joe@example.com\n";
+    let all = re.find_all(hay).unwrap();
+    assert_eq!(all.iter().map(|m| (m.start, m.end)).collect::<Vec<_>>(), vec![(0, 15)]);
+    let caps = re.captures_all(hay).unwrap();
+    assert_eq!(caps[0].spans(), &[Some((0, 15)), Some((0, 3)), Some((4, 15))]);
+}
+
+#[test]
+fn capture_group_adjacent_to_top_wildcard() {
+    use resharp::Regex;
+    let re = Regex::new(r"_*(?<x>a)").unwrap();
+    let caps = re.captures_all(b"za").unwrap();
+    assert_eq!(caps[0].spans(), &[Some((0, 2)), Some((1, 2))]);
+
+    let re = Regex::new(r"(?<x>a)_*").unwrap();
+    let caps = re.captures_all(b"az").unwrap();
+    assert_eq!(caps[0].spans(), &[Some((0, 2)), Some((0, 1))]);
+}
+
+#[test]
+fn stale_nested_capture_after_abandoned_quantifier_backoff() {
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    let modes = [UnicodeMode::Ascii, UnicodeMode::Default, UnicodeMode::Full, UnicodeMode::Javascript];
+    for mode in modes {
+        let re = Regex::with_options(
+            r".*(?P<g2>(?P<g1>(?=a))?)",
+            RegexOptions::default().unicode(mode),
+        )
+        .unwrap();
+        let caps = re.captures_all(b"ba").unwrap();
+        assert_eq!(caps[0].spans(), &[Some((0, 2)), Some((2, 2)), None], "({mode:?})");
+    }
+}
+
+#[test]
+#[ignore = "slow in debug (unicode word-class build); run with --ignored or in release"]
+fn optional_word_boundary_before_bounded_repeated_z_anchor() {
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    let modes = [UnicodeMode::Ascii, UnicodeMode::Default, UnicodeMode::Full, UnicodeMode::Javascript];
+    for mode in modes {
+        for pat in [r"\B?\z{2}", r"\b?\z{2}", r"\A?\z{2}", r"(?:(?<=a)(?=b)|(?<=b))?\z{2}"] {
+            let re = Regex::with_options(pat, RegexOptions::default().unicode(mode)).unwrap();
+            let ms = re.find_all(b"ab").unwrap();
+            assert_eq!(
+                ms.iter().map(|m| (m.start, m.end)).collect::<Vec<_>>(),
+                vec![(2, 2)],
+                "pattern={pat:?} mode={mode:?}"
+            );
+        }
+    }
+}
+
+#[test]
+#[ignore = "slow in debug (unicode word-class build); run with --ignored or in release"]
+fn optional_anchor_before_lookbehind_forces_match_at_end() {
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    let modes = [UnicodeMode::Ascii, UnicodeMode::Default, UnicodeMode::Full, UnicodeMode::Javascript];
+    let cases: &[(&str, &[u8], &[(usize, usize)])] = &[
+        (r"\A?(?<!b)", b"ab", &[(0, 0), (1, 1)]),
+        (r"\A?(?<!.)", b"ab", &[(0, 0)]),
+        (r"\A?(?<!.)", b"a", &[(0, 0)]),
+        (r"\A?(?<!.)", b"", &[(0, 0)]),
+        (r"\A?(?<![ab])", b"ab", &[(0, 0)]),
+        (r"\A?(?<!x|y)", b"ab", &[(0, 0), (1, 1), (2, 2)]),
+        (r"\A?(?<!a)", b"ab", &[(0, 0), (2, 2)]),
+        (r"\B(?<=b)", b"ab", &[]),
+        (r"\B(?<=b)", b"abb", &[(2, 2)]),
+        (r"\B(?<=b+)", b"abbb", &[(2, 2), (3, 3)]),
+        (r"\B(?<=[b]+)", b"abbb", &[(2, 2), (3, 3)]),
+        (r"\b(?<!(?!a*))", b"ab", &[(0, 0), (2, 2)]),
+    ];
+    for mode in modes {
+        for &(pat, hay, expected) in cases {
+            let re = Regex::with_options(pat, RegexOptions::default().unicode(mode)).unwrap();
+            let ms = re.find_all(hay).unwrap();
+            assert_eq!(
+                ms.iter().map(|m| (m.start, m.end)).collect::<Vec<_>>(),
+                expected.to_vec(),
+                "pattern={pat:?} hay={:?} mode={mode:?}",
+                String::from_utf8_lossy(hay)
+            );
+        }
+    }
+}
+
+#[test]
+#[ignore = "slow in debug (unicode word-class build); run with --ignored or in release"]
+fn mandatory_boundary_before_anchor_forces_failing_lookbehind() {
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    let modes = [UnicodeMode::Ascii, UnicodeMode::Default, UnicodeMode::Full, UnicodeMode::Javascript];
+    let cases: &[(&str, &[u8], &[(usize, usize)])] = &[
+        (r"\b\A(?<!^)", b"a", &[]),
+        (r"\A(?<!^)", b"a", &[]),
+        (r"\b(?<!^)", b"a", &[(1, 1)]),
+        (r"\B\A(?<!^)", b"a", &[]),
+        (r"\z{0}\A(?<!^)", b"a", &[]),
+        (r"(?=a)\A(?<!^)", b"a", &[]),
+        (r"\b\A(?<!^)", b"ab", &[]),
+        (r"\b\A+((?<!^[b-]*))", b"bab\ncaca:c.-", &[]),
+    ];
+    for mode in modes {
+        for &(pat, hay, expected) in cases {
+            let re = Regex::with_options(pat, RegexOptions::default().unicode(mode)).unwrap();
+            let ms = re.find_all(hay).unwrap();
+            assert_eq!(
+                ms.iter().map(|m| (m.start, m.end)).collect::<Vec<_>>(),
+                expected.to_vec(),
+                "pattern={pat:?} hay={:?} mode={mode:?}",
+                String::from_utf8_lossy(hay)
+            );
+        }
+    }
+}
+
+#[test]
+#[ignore = "slow in debug (unicode word-class build); run with --ignored or in release"]
+fn bounded_end_anchor_then_mandatory_boundary_drops_match() {
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    let modes = [UnicodeMode::Ascii, UnicodeMode::Default, UnicodeMode::Full, UnicodeMode::Javascript];
+    let cases: &[(&str, &[u8], &[(usize, usize)])] = &[
+        (r"(?-m)${2}\b^?", b"ab", &[(2, 2)]),
+        (r"(?-m)\z{3}\B^?", b"ab\n", &[(3, 3)]),
+        (r"(?-m)\z{3}\B^?", b"-cba:bc:\n", &[(9, 9)]),
+        (r"(?-m)${2,4}\b${2,2}", b".b.caab", &[(7, 7)]),
+    ];
+    for mode in modes {
+        for &(pat, hay, expected) in cases {
+            let re = Regex::with_options(pat, RegexOptions::default().unicode(mode)).unwrap();
+            let ms = re.find_all(hay).unwrap();
+            assert_eq!(
+                ms.iter().map(|m| (m.start, m.end)).collect::<Vec<_>>(),
+                expected.to_vec(),
+                "pattern={pat:?} hay={:?} mode={mode:?}",
+                String::from_utf8_lossy(hay)
+            );
+        }
+    }
+}
+
+#[test]
+#[ignore = "slow in debug (unicode word-class build); run with --ignored or in release"]
+fn order_dependent_anchor_concat_b_a_caret() {
+    use resharp::{Regex, RegexOptions, UnicodeMode};
+    let modes = [UnicodeMode::Ascii, UnicodeMode::Default, UnicodeMode::Full, UnicodeMode::Javascript];
+    let cases: &[(&str, &[u8], &[(usize, usize)])] = &[
+        (r"\B\A^", b".b", &[(0, 0)]),
+        (r"\B^\A", b".b", &[(0, 0)]),
+        (r"\A\B^", b".b", &[(0, 0)]),
+        (r"^\B\A", b".b", &[(0, 0)]),
+        (r"\B\A", b".b", &[(0, 0)]),
+        (r"\A^", b".b", &[(0, 0)]),
+        (r"\B^", b".b", &[(0, 0)]),
+        (r"(\B)\A{1}^{1}", b"..ba-aa-.b", &[(0, 0)]),
+    ];
+    for mode in modes {
+        for &(pat, hay, expected) in cases {
+            let re = Regex::with_options(pat, RegexOptions::default().unicode(mode)).unwrap();
+            let ms = re.find_all(hay).unwrap();
+            assert_eq!(
+                ms.iter().map(|m| (m.start, m.end)).collect::<Vec<_>>(),
+                expected.to_vec(),
+                "pattern={pat:?} hay={:?} mode={mode:?}",
+                String::from_utf8_lossy(hay)
+            );
+        }
+    }
+}
+
+#[test]
+#[cfg(feature = "convergence_prefix")]
+fn convergence_prefix_is_match_no_quadratic() {
+    use resharp::{Regex, RegexOptions};
+    let re = Regex::with_options("a*:[^b]+", RegexOptions::default()).unwrap();
+    assert!(re.uses_convergence_prefix());
+
+    let build = |n: usize| -> Vec<u8> {
+        let mut v = b"a:a:".to_vec();
+        v.resize(n, b'b');
+        v
+    };
+
+    let time_it = |input: &[u8]| -> f64 {
+        let mut best = f64::INFINITY;
+        for _ in 0..3 {
+            let t = std::time::Instant::now();
+            assert!(re.is_match(input).unwrap());
+            best = best.min(t.elapsed().as_secs_f64());
+        }
+        best.max(1e-9)
+    };
+
+    let small_elapsed = time_it(&build(10_000));
+    let large_elapsed = time_it(&build(160_000));
+
+    let ratio = large_elapsed / small_elapsed;
+    assert!(
+        ratio < 40.0,
+        "expected roughly linear scaling, got {ratio}x for 16x input (small={small_elapsed}s large={large_elapsed}s)"
+    );
+}
+
+

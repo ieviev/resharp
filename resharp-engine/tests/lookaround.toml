@@ -1187,3 +1187,403 @@ name = "no_wrapper_group_is_unaffected"
 pattern = "(?=(?!zz).?b)-*"
 input = "-bb"
 matches = [[0, 1], [1, 1], [2, 2]]
+
+[[test]]
+name = "caret_literal_inside_lookbehind_then_plus"
+pattern = '(?<=^a).+'
+input = "aa:a:aaab"
+matches = [[1, 9]]
+ascii = true
+
+[[test]]
+name = "caret_literal_inside_lookbehind_then_plus_no_match"
+pattern = '(?<=^a).+'
+input = "xa:a:aaab"
+matches = []
+ascii = true
+
+[[test]]
+name = "caret_literal_inside_lookbehind_then_plus_multiline_second_line"
+pattern = '(?<=^a).+'
+input = "a\nab"
+matches = [[3, 4]]
+ascii = true
+
+[[test]]
+name = "caret_two_literals_inside_lookbehind_then_plus"
+pattern = '(?<=^ab).+'
+input = "ab:c"
+matches = [[2, 4]]
+ascii = true
+
+[[test]]
+name = "optional_negative_lookbehind_then_begin_anchor_then_optional_atom"
+pattern = '(?:(?<!x))?\Ac?'
+input = "c.c"
+matches = [[0, 1]]
+ascii = true
+
+[[test]]
+name = "optional_negative_lookbehind_then_begin_anchor_then_optional_atom_absent"
+pattern = '(?:(?<!x))?\Ac?'
+input = ".cc"
+matches = [[0, 0]]
+ascii = true
+
+[[test]]
+name = "optional_negative_lookbehind_then_begin_anchor_then_atom"
+pattern = '(?:(?<!x))?\Ac'
+input = "c.c"
+matches = [[0, 1]]
+ascii = true
+
+[[test]]
+name = "negative_lookbehind_then_begin_anchor_then_optional_atom"
+pattern = '(?<!x)\Ac?'
+input = "c.c"
+matches = [[0, 1]]
+ascii = true
+
+[[test]]
+name = "variable_bounded_repeat_of_negative_lookbehind_then_begin_anchor"
+pattern = '(?:(?<!x)){1,2}\A'
+input = "abc"
+matches = [[0, 0]]
+ascii = true
+
+[[test]]
+name = "variable_bounded_repeat_of_negative_lookbehind_then_begin_anchor_lb_byte_present"
+pattern = '(?:(?<!x)){1,2}\A'
+input = "xabc"
+matches = [[0, 0]]
+ascii = true
+
+[[test]]
+name = "exact_repeat_of_negative_lookbehind_then_begin_anchor"
+pattern = '(?<!x){2}\A'
+input = "abc"
+matches = [[0, 0]]
+ascii = true
+
+[[test]]
+name = "one_one_repeat_of_negative_lookbehind_then_begin_anchor"
+pattern = '(?<!x){1,1}\A'
+input = "abc"
+matches = [[0, 0]]
+ascii = true
+
+[[test]]
+name = "negative_lookbehind_then_begin_anchor"
+pattern = '(?<!x)\A'
+input = "abc"
+matches = [[0, 0]]
+ascii = true
+
+[[test]]
+name = "caret_then_dot_star_then_begin_anchor"
+pattern = '^.*\A'
+input = "abc"
+matches = [[0, 0]]
+ascii = true
+
+[[test]]
+name = "two_stacked_lookbehinds_never_match"
+pattern = '(?<=x)(?<=y)z'
+input = "xyz"
+matches = []
+ascii = true
+
+[[test]]
+name = "lookbehind_with_line_start_anchor_then_literal_then_dot"
+pattern = '(?<=^a).'
+input = "a"
+matches = []
+ascii = true
+
+[[test]]
+name = "lookbehind_with_line_start_anchor_then_class_then_dot"
+pattern = '(?<=^[a]).'
+input = "a"
+matches = []
+ascii = true
+
+[[test]]
+name = "lookbehind_with_line_start_anchor_then_negated_class_then_dot"
+pattern = '(?<=^[^b]).'
+input = "."
+matches = []
+ascii = true
+
+[[test]]
+name = "lookbehind_with_line_start_anchor_then_dot_then_dot"
+pattern = '(?<=^.).'
+input = "a"
+matches = []
+ascii = true
+
+[[test]]
+name = "negative_lookbehind_of_negative_begin_anchor_lookahead_then_optional_literal"
+pattern = '(?<!(?!\A)x?)'
+input = "a"
+matches = [[0, 0]]
+ascii = true
+
+[[test]]
+name = "negative_lookbehind_of_negative_begin_anchor_lookahead_then_optional_literal_empty_input"
+pattern = '(?<!(?!\A)x?)'
+input = ""
+matches = [[0, 0]]
+ascii = true
+
+[[test]]
+name = "negative_lookbehind_of_optional_literal"
+pattern = '(?<!x?)'
+input = "a"
+matches = []
+ascii = true
+
+[[test]]
+name = "repeated_negative_lookbehind_of_negative_begin_anchor_lookahead_then_literal"
+pattern = '((?<!(?!\A.*)\n?)){1}b'
+input = "b:b:b"
+matches = [[0, 1]]
+ascii = true
+
+[[test]]
+name = "begin_anchor_then_negative_lookbehind_of_negative_lookahead_then_optional_begin_anchor"
+pattern = '\A(?<!(?!\z?))\A?'
+input = "-a-ba"
+matches = [[0, 0]]
+ascii = true
+
+[[test]]
+name = "optional_lookahead_then_begin_anchor_lookahead_then_nullable_quantifier"
+pattern = '(?:(?=b))?(?=\A)\n*'
+input = ":\nbabaca-a"
+matches = [[0, 0]]
+ascii = true
+
+[[test]]
+name = "zero_one_lookahead_then_begin_anchor_lookahead_then_nullable_quantifier"
+pattern = '(?=b){0,1}(?=\A)\n*'
+input = ":\nbabaca-a"
+matches = [[0, 0]]
+ascii = true
+
+[[test]]
+name = "negative_lookahead_of_negative_begin_anchor_lookahead_then_optional_literal"
+pattern = '(?!(?!\A)x?)'
+input = "a"
+matches = [[0, 0]]
+ascii = true
+
+[[test]]
+name = "negative_lookahead_of_negative_begin_anchor_lookahead_then_optional_literal_empty_input"
+pattern = '(?!(?!\A)x?)'
+input = ""
+matches = [[0, 0]]
+ascii = true
+
+[[test]]
+name = "negative_lookahead_of_negative_begin_anchor_lookahead_then_literal"
+pattern = '(?!(?!\A)x)'
+input = "a"
+matches = [[0, 0], [1, 1]]
+ascii = true
+
+[[test]]
+name = "negative_lookahead_of_negative_begin_anchor_lookahead_then_literal_repeated_byte"
+pattern = '(?!(?!\A)x)'
+input = "xx"
+matches = [[0, 0], [2, 2]]
+ascii = true
+
+[[test]]
+name = "negative_lookbehind_of_lookbehind_of_negative_lookbehind_multi_atom_body"
+pattern = '(?<!(?<=(?<!..)\z).?)'
+input = "bab"
+matches = [[0, 0], [1, 1], [2, 2], [3, 3]]
+ascii = true
+
+[[test]]
+name = "optional_lookahead_of_unsatisfiable_lookbehind_before_begin_anchor_one_byte"
+pattern = '(?=(?<=b\A).)?\A'
+input = "a"
+matches = [[0, 0]]
+ascii = true
+
+[[test]]
+name = "optional_lookahead_of_unsatisfiable_lookbehind_before_begin_anchor_two_bytes"
+pattern = '(?=(?<=b\A).)?\A'
+input = "aa"
+matches = [[0, 0]]
+ascii = true
+
+[[test]]
+name = "optional_lookahead_of_unsatisfiable_lookbehind_before_begin_anchor_three_bytes"
+pattern = '(?=(?<=b\A).)?\A'
+input = "aaa"
+matches = [[0, 0]]
+ascii = true
+
+[[test]]
+name = "mandatory_lookahead_of_unsatisfiable_lookbehind_before_begin_anchor"
+pattern = '(?=(?<=b\A).)\A'
+input = "a"
+matches = []
+ascii = true
+
+[[test]]
+name = "literal_or_lookbehind_alternation_single_occurrence"
+pattern = '(?:b|(?<=(?:-|:)))c'
+input = "b-c"
+matches = [[2, 3]]
+ascii = true
+
+[[test]]
+name = "literal_or_lookbehind_alternation_one_repeat"
+pattern = '(?:b|(?<=(?:-|:))){1}c'
+input = "b-c"
+matches = [[2, 3]]
+ascii = true
+
+[[test]]
+name = "is_match_negative_lookahead"
+pattern = 'foo(?!bar)'
+input = "foobar"
+matches = []
+
+[[test]]
+name = "nested_lookahead_neg_lookahead_optional_anchor_overextends_optional_atom"
+pattern = '(?=(?=(?!x)\A?)a)c?'
+input = "a"
+matches = [[0, 0]]
+
+[[test]]
+name = "nested_lookbehind_z_caret_optional_a_spurious_match"
+pattern = '(?<=(?<=\z^)\A?)a?'
+input = "a"
+matches = []
+
+[[test]]
+name = "negative_lookahead_of_begin_inside_lookbehind_before_optional_atom"
+pattern = '(?<=(?!\A)-)c?'
+input = "-"
+matches = []
+
+[[test]]
+name = "negative_lookahead_of_begin_inside_lookbehind_before_optional_atom_matches_when_not_at_start"
+pattern = '(?<=(?!\A)-)c?'
+input = "x-c"
+matches = [[2, 3]]
+
+[[test]]
+name = "negative_lookahead_of_begin_inside_lookbehind_before_optional_atom_ascii"
+pattern = '(?<=(?!\A)-)c?'
+ascii = true
+input = "-"
+matches = []
+
+[[test]]
+name = "negative_lookahead_of_begin_inside_lookbehind_before_optional_atom_javascript"
+pattern = '(?<=(?!\A)-)c?'
+javascript = true
+input = "-"
+matches = []
+
+[[test]]
+name = "negative_lookahead_of_begin_inside_lookbehind_before_optional_atom_full"
+pattern = '(?<=(?!\A)-)c?'
+full = true
+input = "-"
+matches = []
+
+[[test]]
+name = "negative_lookbehind_optional_before_mandatory_literal"
+pattern = '(?!x)\B?\n'
+input = "-\n"
+matches = [[1, 2]]
+
+[[test]]
+name = "negative_lookbehind_optional_before_mandatory_literal_longer"
+pattern = '(?!x)\B?\n'
+input = "a-\n"
+matches = [[2, 3]]
+
+[[test]]
+name = "explicit_negative_lookbehind_variant"
+pattern = '(?!x)(?:(?<!y)|)\n'
+input = "a-\n"
+matches = [[2, 3]]
+
+[[test]]
+name = "negative_lookahead_optional_negative_lookbehind_before_literal"
+pattern = '(?!y)(?:(?<!x))?\.'
+input = "bb."
+matches = [[2, 3]]
+
+[[test]]
+name = "negative_lookahead_optional_word_boundary_before_literal"
+pattern = '(?!x)\b?bb'
+input = ".bb"
+matches = [[1, 3]]
+
+[[test]]
+name = "dollar_star_caret_zero_width_match"
+pattern = '((?!b)$*)^'
+input = "a"
+matches = [[0, 0]]
+
+[[test]]
+name = "dollar_bare_caret_no_match"
+pattern = '((?!b)$)^'
+input = "a"
+matches = []
+
+[[test]]
+name = "leading_and_trailing_neg_lookahead_around_nullable_union"
+pattern = '(?!.{2,5})a*(?!.{3}$)'
+input = "c"
+matches = [[0, 0], [1, 1]]
+
+[[test]]
+name = "leading_and_trailing_neg_lookahead_around_epsilon_union_arm"
+pattern = '(?!..)(a|)(?!b$)'
+input = "c"
+matches = [[0, 0], [1, 1]]
+
+[[test]]
+name = "negative_lookahead_optional_negative_lookahead_before_begin_anchor"
+pattern = '(?!x)((?!\A))?\A'
+input = "a-"
+matches = [[0, 0]]
+
+[[test]]
+name = "positive_lookahead_optional_negative_lookahead_before_begin_anchor"
+pattern = '(?=a)(?!\A)?\A'
+input = "a-"
+matches = [[0, 0]]
+
+[[test]]
+name = "exact_count_lookahead_optional_atom_repeated_trailing_lookahead"
+pattern = '(?=.{3})(.)?((?=.))+'
+input = "aaaa"
+matches = [[0, 1], [1, 2]]
+
+[[test]]
+name = "lookahead_dollar_then_star_repeat_not_anchor"
+pattern = '(?=.*$)c*(?!\A)'
+input = "bb"
+matches = [[1, 1], [2, 2]]
+
+[[test]]
+name = "optional_atom_between_two_lookaheads"
+pattern = '((?!.*x))b?((?!$))'
+input = "ab"
+matches = [[0, 0], [1, 1]]
+
+[[test]]
+name = "dot_repeat_negative_lookahead_optional_positive_lookahead"
+pattern = '.{2}(?!.+c).?(?=.+)'
+input = ":cba"
+matches = [[0, 3]]
