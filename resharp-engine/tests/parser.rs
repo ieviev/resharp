@@ -46,9 +46,18 @@ fn deeply_nested_repetitions_rejected() {
 }
 
 #[test]
-fn mixed_alt_and_intersection_top_level_does_not_panic() {
-    let cases = ["^&|&$", r"\s|&nbsp;", "&|x", "&&|\\|\\|"];
-    for p in cases {
-        assert!(Regex::new(p).is_err(), "expected error for {p:?}");
+fn mixed_alt_and_intersection_top_level_matches_explicit_grouping() {
+    let cases = [
+        ("^&|&$", "(?:^&)|(?:&$)"),
+        (r"\s|&nbsp;", r"\s|(?:&nbsp;)"),
+        ("&|x", "(?:&)|x"),
+        ("&&|\\|\\|", "(?:&&)|(?:\\|\\|)"),
+    ];
+    let render = |p: &str| match Regex::new(p) {
+        Ok(re) => format!("{:?}", re.find_all(b"a&b").unwrap()),
+        Err(e) => format!("ERR {e:?}"),
+    };
+    for (mixed, explicit) in cases {
+        assert_eq!(render(mixed), render(explicit), "{mixed:?}");
     }
 }

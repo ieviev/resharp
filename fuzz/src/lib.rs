@@ -8,13 +8,8 @@
 use arbitrary::{Arbitrary, Result, Unstructured};
 use resharp::{RegexOptions, UnicodeMode};
 
-/// representative `RegexOptions` configurations.
-///
-/// every entry is a distinct compile / match code path: the unicode modes
-/// drive different class-compilation logic, `hardened` swaps in the O(N*S)
-/// forward scan, and the flag bundle exercises the `(?ismx)`-style toggles.
-/// returns a fixed-size array (stack-allocated, no per-call heap allocation)
-/// of fresh owned values, since `RegexOptions` is consumed by `with_options`.
+/// Representative `RegexOptions` configs, each a distinct compile/match code
+/// path (unicode class logic, hardened O(N*S) scan, `(?ismx)`-style flags).
 pub fn option_sweep() -> [RegexOptions; 6] {
     [
         RegexOptions::default(),
@@ -30,10 +25,8 @@ pub fn option_sweep() -> [RegexOptions; 6] {
     ]
 }
 
-/// hex rendering of arbitrary bytes for crash reproducers.
-///
-/// haystacks are raw `&[u8]`; printing them with `{:?}` mangles non-utf8 input,
-/// so emit a compact hex string the reporter can paste back verbatim.
+/// Hex rendering of arbitrary bytes for crash reproducers (haystacks are raw
+/// `&[u8]`; `{:?}` mangles non-utf8 input).
 pub fn hex(bytes: &[u8]) -> String {
     let mut out = String::with_capacity(bytes.len() * 2);
     for b in bytes {
@@ -43,15 +36,11 @@ pub fn hex(bytes: &[u8]) -> String {
     out
 }
 
-/// a regex drawn from the subset where resharp and the `regex` crate share
-/// `is_match` semantics: ascii literals, `.`, character classes, alternation,
-/// concatenation, grouping, and greedy quantifiers.
-///
-/// deliberately excludes everything that diverges between the two engines:
-/// anchors (`^`/`$`/`\A`/`\z`), word boundaries (`\b`), the `\w`/`\d`/`\s`
-/// perl classes (unicode width differs), backreferences, and the resharp-only
-/// operators (`&`, `~`, `_`, lookarounds). within this subset, leftmost-longest
-/// vs leftmost-greedy only changes match *length*, never match *existence*, so
+/// A regex from the subset where resharp and `regex` share `is_match`
+/// semantics: ascii literals, `.`, classes, alternation, concat, grouping,
+/// greedy quantifiers. Excludes anchors, `\b`, unicode-width-sensitive
+/// `\w`/`\d`/`\s`, backreferences, and resharp-only operators -- everywhere
+/// leftmost-longest vs leftmost-greedy can only change match length, so
 /// `is_match` must agree byte-for-byte.
 #[derive(Debug)]
 pub struct DiffPattern(pub String);

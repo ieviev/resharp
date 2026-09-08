@@ -1,12 +1,9 @@
-// differential `is_match` against the `regex` crate, over the syntax subset
-// where the two engines share semantics (see `DiffPattern`). a disagreement is
-// a correctness finding in one of the engines (almost always resharp, since the
-// regex crate is the more battle-tested oracle).
-//
-// only existence is compared, never match offsets: resharp is leftmost-longest
-// and regex is leftmost-greedy, so positions legitimately differ while
-// `is_match` must not. resharp runs in `UnicodeMode::Ascii` and regex runs with
-// `.unicode(false)` so `.` and negated classes are byte-oriented on both sides.
+// Differential `is_match` against `regex`, over the subset where the two
+// share semantics (see `DiffPattern`); a disagreement is a finding (almost
+// always in resharp -- `regex` is the more battle-tested oracle). Only
+// existence is compared, not offsets: resharp is leftmost-longest vs regex's
+// leftmost-greedy, so positions may differ while `is_match` must not. Both
+// run byte-oriented (`UnicodeMode::Ascii` / `.unicode(false)`).
 
 #![no_main]
 

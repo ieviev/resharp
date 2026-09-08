@@ -18,9 +18,7 @@ impl Error {
         &self.kind
     }
 
-    /// The original pattern string in which this error occurred.
-    ///
-    /// Every span reported by this error is reported in terms of this string.
+    /// The original pattern string; every span is reported in terms of it.
     pub fn pattern(&self) -> &str {
         &self.pattern
     }
@@ -30,11 +28,8 @@ impl Error {
         &self.span
     }
 
-    /// Return an auxiliary span. This span exists only for some errors that
-    /// benefit from being able to point to two locations in the original
-    /// regular expression. For example, "duplicate" errors will have the
-    /// main error position set to the duplicate occurrence while its
-    /// auxiliary span will be set to the initial occurrence.
+    /// A second span for errors pointing at two locations, e.g. "duplicate"
+    /// errors point `span` at the duplicate and this at the original.
     pub fn auxiliary_span(&self) -> Option<&Span> {
         use self::ErrorKind::*;
         match self.kind {
@@ -46,57 +41,45 @@ impl Error {
     }
 }
 
-/// The type of an error that occurred while building an AST.
-///
-/// This error type is marked as `non_exhaustive`. This means that adding a
-/// new variant is not considered a breaking change.
+/// The type of an error that occurred while building an AST. `non_exhaustive`:
+/// adding a variant is not a breaking change.
 #[non_exhaustive]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ErrorKind {
-    /// The capturing group limit was exceeded.
-    ///
-    /// Note that this represents a limit on the total number of capturing
-    /// groups in a regex and not necessarily the number of nested capturing
-    /// groups. That is, the nest limit can be low and it is still possible for
-    /// this error to occur.
+    /// Too many capturing groups (regardless of nesting).
     CaptureLimitExceeded,
-    /// An invalid escape sequence was found in a character class set.
+    /// Invalid escape sequence in a character class set.
     ClassEscapeInvalid,
-    /// An invalid character class range was found. An invalid range is any
-    /// range where the start is greater than the end.
+    /// Character class range with start greater than end.
     ClassRangeInvalid,
-    /// An invalid range boundary was found in a character class. Range
-    /// boundaries must be a single literal codepoint, but this error indicates
-    /// that something else was found, such as a nested class.
+    /// Character class range boundary that isn't a single literal codepoint.
     ClassRangeLiteral,
-    /// An opening `[` was found with no corresponding closing `]`.
+    /// Opening `[` with no corresponding closing `]`.
     ClassUnclosed,
-    /// An empty decimal number was found where one was expected.
+    /// Empty decimal number where one was expected.
     DecimalEmpty,
-    /// An invalid decimal number was given where one was expected.
+    /// Invalid decimal number where one was expected.
     DecimalInvalid,
-    /// A bracketed hex literal was empty.
+    /// Empty bracketed hex literal.
     EscapeHexEmpty,
-    /// A bracketed hex literal did not correspond to a Unicode scalar value.
+    /// Bracketed hex literal that isn't a Unicode scalar value.
     EscapeHexInvalid,
-    /// An invalid hexadecimal digit was found.
+    /// Invalid hexadecimal digit.
     EscapeHexInvalidDigit,
-    /// EOF was found before an escape sequence was completed.
+    /// EOF before an escape sequence was completed.
     EscapeUnexpectedEof,
-    /// An unrecognized escape sequence.
+    /// Unrecognized escape sequence.
     EscapeUnrecognized,
-    /// A dangling negation was used when setting flags, e.g., `i-`.
+    /// Dangling negation when setting flags, e.g., `i-`.
     FlagDanglingNegation,
-    /// A flag was used twice, e.g., `i-i`.
+    /// A flag was used twice, e.g., `i-i`. `original` is the first occurrence.
     FlagDuplicate {
-        /// The position of the original flag. The error position
-        /// points to the duplicate flag.
+        /// Position of the original (non-duplicate) flag.
         original: Span,
     },
     /// The negation operator was used twice, e.g., `-i-s`.
     FlagRepeatedNegation {
-        /// The position of the original negation operator. The error position
-        /// points to the duplicate negation operator.
+        /// Position of the original negation operator.
         original: Span,
     },
     /// Expected a flag but got EOF, e.g., `(?`.
@@ -105,64 +88,44 @@ pub enum ErrorKind {
     FlagUnrecognized,
     /// A duplicate capture name was found.
     GroupNameDuplicate {
-        /// The position of the initial occurrence of the capture name. The
-        /// error position itself points to the duplicate occurrence.
+        /// Position of the initial occurrence of the capture name.
         original: Span,
     },
     /// A capture group name is empty, e.g., `(?P<>abc)`.
     GroupNameEmpty,
-    /// An invalid character was seen for a capture group name. This includes
-    /// errors where the first character is a digit (even though subsequent
-    /// characters are allowed to be digits).
+    /// Invalid character for a capture group name (e.g. leading digit).
     GroupNameInvalid,
     /// A closing `>` could not be found for a capture group name.
     GroupNameUnexpectedEof,
-    /// An unclosed group, e.g., `(ab`.
-    ///
-    /// The span of this error corresponds to the unclosed parenthesis.
+    /// An unclosed group, e.g., `(ab`; span points at the open paren.
     GroupUnclosed,
     /// An unopened group, e.g., `ab)`.
     GroupUnopened,
-    /// The nest limit was exceeded. The limit stored here is the limit
-    /// configured in the parser.
+    /// The configured nest limit was exceeded.
     NestLimitExceeded(u32),
-    /// The range provided in a counted repetition operator is invalid. The
-    /// range is invalid if the start is greater than the end.
+    /// A counted repetition range with start greater than end.
     RepetitionCountInvalid,
-    /// An opening `{` was not followed by a valid decimal value.
-    /// For example, `x{}` or `x{]}` would fail.
+    /// An opening `{` not followed by a valid decimal value, e.g. `x{}`.
     RepetitionCountDecimalEmpty,
-    /// An opening `{` was found with no corresponding closing `}`.
+    /// An opening `{` with no corresponding closing `}`.
     RepetitionCountUnclosed,
-    /// A repetition operator was applied to a missing sub-expression. This
-    /// occurs, for example, in the regex consisting of just a `*` or even
-    /// `(?i)*`. It is, however, possible to create a repetition operating on
-    /// an empty sub-expression. For example, `()*` is still considered valid.
+    /// A repetition operator applied to a missing sub-expression, e.g. a bare
+    /// `*`. (`()*` is fine: the sub-expression is empty, not missing.)
     RepetitionMissing,
-    /// The special word boundary syntax, `\b{something}`, was used, but
-    /// either EOF without `}` was seen, or an invalid character in the
-    /// braces was seen.
+    /// `\b{something}` with no closing `}`, or an invalid char in the braces.
     SpecialWordBoundaryUnclosed,
-    /// The special word boundary syntax, `\b{something}`, was used, but
-    /// `something` was not recognized as a valid word boundary kind.
+    /// `\b{something}` where `something` isn't a valid word boundary kind.
     SpecialWordBoundaryUnrecognized,
-    /// The syntax `\b{` was observed, but afterwards the end of the pattern
-    /// was observed without being able to tell whether it was meant to be a
-    /// bounded repetition on the `\b` or the beginning of a special word
-    /// boundary assertion.
+    /// `\b{` followed by EOF, ambiguous between a bounded repetition on `\b`
+    /// and a special word boundary assertion.
     SpecialWordOrRepetitionUnexpectedEof,
-    /// The Unicode class is not valid. This typically occurs when a `\p` is
-    /// followed by something other than a `{`.
+    /// Invalid Unicode class, typically `\p` not followed by `{`.
     UnicodeClassInvalid,
-    /// When octal support is disabled, this error is produced when an octal
-    /// escape is used. The octal escape is assumed to be an invocation of
-    /// a backreference, which is the common case.
+    /// Octal escape used while octal support is disabled (assumed to be an
+    /// attempted backreference, the common case).
     UnsupportedBackreference,
-    /// When syntax similar to PCRE's look-around is used, this error is
-    /// returned. Some example syntaxes that are rejected include, but are
-    /// not necessarily limited to, `(?=re)`, `(?!re)`, `(?<=re)` and
-    /// `(?<!re)`. Note that all of these syntaxes are otherwise invalid; this
-    /// error is used to improve the user experience.
+    /// PCRE look-around syntax rejected for a better error message, e.g.
+    /// `(?=re)`, `(?!re)`, `(?<=re)`, `(?<!re)` (otherwise invalid anyway).
     UnsupportedLookAround,
     /// Unsupported RE# regex construct.
     UnsupportedResharpRegex,
@@ -293,12 +256,8 @@ impl core::fmt::Display for ErrorKind {
     }
 }
 
-/// An abstract syntax tree for a singular expression along with comments
-/// found.
-///
-/// Comments are not stored in the tree itself to avoid complexity. Each
-/// comment contains a span of precisely where it occurred in the original
-/// regular expression.
+/// An AST plus the comments found alongside it (kept separate from the tree
+/// to avoid complexity); each comment carries its span in the original regex.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct WithComments {
     /// The actual ast.
@@ -307,26 +266,18 @@ pub struct WithComments {
     pub comments: Vec<Comment>,
 }
 
-/// A comment from a regular expression with an associated span.
-///
-/// A regular expression can only contain comments when the `x` flag is
-/// enabled.
+/// A comment from a regular expression with an associated span. Only
+/// possible when the `x` flag is enabled.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Comment {
     /// The span of this comment, including the beginning `#` and ending `\n`.
     pub span: Span,
-    /// The comment text, starting with the first character following the `#`
-    /// and ending with the last character preceding the `\n`.
+    /// The comment text, between the `#` and the `\n` (exclusive).
     pub comment: String,
 }
 
-/// An abstract syntax tree for a single regular expression.
-///
-/// An `Ast`'s `fmt::Display` implementation uses constant stack space and heap
-/// space proportional to the size of the `Ast`.
-///
-/// This type defines its own destructor that uses constant stack space and
-/// heap space proportional to the size of the `Ast`.
+/// An abstract syntax tree for a single regular expression. `fmt::Display`
+/// and the destructor both use O(size-of-Ast) stack and heap, not recursion.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Ast {
     /// An empty regex that matches everything.
@@ -511,11 +462,7 @@ pub struct Alternation {
 }
 
 impl Alternation {
-    /// Return this alternation as an AST.
-    ///
-    /// If this alternation contains zero ASTs, then `Ast::empty` is returned.
-    /// If this alternation contains exactly 1 AST, then the corresponding AST
-    /// is returned. Otherwise, `Ast::alternation` is returned.
+    /// `Ast::empty` if no arms, the sole arm if one, else `Ast::alternation`.
     pub fn into_ast(mut self) -> Ast {
         match self.asts.len() {
             0 => Ast::empty(self.span),
@@ -535,11 +482,7 @@ pub struct Concat {
 }
 
 impl Concat {
-    /// Return this concatenation as an AST.
-    ///
-    /// If this alternation contains zero ASTs, then `Ast::empty` is returned.
-    /// If this alternation contains exactly 1 AST, then the corresponding AST
-    /// is returned. Otherwise, `Ast::concat` is returned.
+    /// `Ast::empty` if no parts, the sole part if one, else `Ast::concat`.
     pub fn into_ast(mut self) -> Ast {
         match self.asts.len() {
             0 => Ast::empty(self.span),
@@ -644,12 +587,8 @@ impl RepetitionRange {
     }
 }
 
-/// A grouped regular expression.
-///
-/// This includes both capturing and non-capturing groups. This does **not**
-/// include flag-only groups like `(?is)`, but does contain any group that
-/// contains a sub-expression, e.g., `(a)`, `(?P<name>a)`, `(?:a)` and
-/// `(?is:a)`.
+/// A capturing or non-capturing group with a sub-expression, e.g. `(a)`,
+/// `(?P<name>a)`, `(?:a)`, `(?is:a)`. Excludes flag-only groups like `(?is)`.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Group {
     /// The span of this group.
@@ -681,9 +620,7 @@ impl Group {
         }
     }
 
-    /// Returns the capture index of this group, if this is a capturing group.
-    ///
-    /// This returns a capture index precisely when `is_capturing` is `true`.
+    /// The capture index, iff `is_capturing` is `true`.
     pub fn capture_index(&self) -> Option<u32> {
         match self.kind {
             GroupKind::CaptureIndex(_) => None,
@@ -695,10 +632,9 @@ impl Group {
         }
     }
 
-    /// Like `capture_index`, but also returns the index a bare `(...)`
-    /// group already reserved even though it doesn't capture by default -
-    /// for use only when the caller has independently decided this bare
-    /// group DOES capture (`implicit_captures`).
+    /// Like `capture_index`, but also covers the index a bare `(...)` group
+    /// reserved even though it doesn't capture by default. Only for callers
+    /// that decided this bare group DOES capture (`implicit_captures`).
     pub fn capture_index_or_plain(&self) -> Option<u32> {
         match self.kind {
             GroupKind::CaptureIndex(i) => Some(i),
@@ -728,10 +664,7 @@ pub enum GroupKind {
     Complement,
 }
 
-/// A capture name.
-///
-/// This corresponds to the name itself between the angle brackets in, e.g.,
-/// `(?P<foo>expr)`.
+/// The name between the angle brackets in, e.g., `(?P<foo>expr)`.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CaptureName {
     /// The span of this capture name.
@@ -751,9 +684,7 @@ pub struct SetFlags {
     pub flags: Flags,
 }
 
-/// A group of flags.
-///
-/// This corresponds only to the sequence of flags themselves, e.g., `is-u`.
+/// A sequence of flags themselves, e.g., `is-u`.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Flags {
     /// The span of this group of flags.
@@ -764,11 +695,7 @@ pub struct Flags {
 }
 
 impl Flags {
-    /// Add the given item to this sequence of flags.
-    ///
-    /// If the item was added successfully, then `None` is returned. If the
-    /// given item is a duplicate, then `Some(i)` is returned, where
-    /// `items[i].kind == item.kind`.
+    /// Adds `item`; `None` on success, `Some(i)` if `items[i]` is a duplicate.
     pub fn add_item(&mut self, item: FlagsItem) -> Option<usize> {
         for (i, x) in self.items.iter().enumerate() {
             if x.kind == item.kind {
@@ -779,15 +706,7 @@ impl Flags {
         None
     }
 
-    /// Returns the state of the given flag in this set.
-    ///
-    /// If the given flag is in the set but is negated, then `Some(false)` is
-    /// returned.
-    ///
-    /// If the given flag is in the set and is not negated, then `Some(true)`
-    /// is returned.
-    ///
-    /// Otherwise, `None` is returned.
+    /// `Some(true)`/`Some(false)` if `flag` is set (non-negated/negated), else `None`.
     pub fn flag_state(&self, flag: Flag) -> Option<bool> {
         let mut negated = false;
         for x in &self.items {

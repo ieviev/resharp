@@ -1,16 +1,7 @@
-// self-consistency of matching: for any pattern that compiles and any haystack,
-// `find_all` / `find_anchored` / `is_match` must satisfy the invariants the API
-// documents, with no oracle required.
-//
-//   * every match is a valid `[start, end)` slice of the haystack
-//     (`start <= end <= len`);
-//   * `find_all` returns leftmost-longest, non-overlapping matches
-//     (`match[i].start >= match[i-1].end`);
-//   * `find_all` is non-empty  <=>  `is_match` is true;
-//   * `find_anchored`, when it matches, matches at offset 0.
-//
-// both the default and hardened engines are checked, since hardened swaps in a
-// different forward-scan algorithm that must agree on these invariants.
+// self-consistency, no oracle needed: matches are valid `[start,end)` slices,
+// `find_all` is leftmost-longest/non-overlapping, `find_all` non-empty iff
+// `is_match`, and `find_anchored` (if it matches) matches at offset 0. Checks
+// both default and hardened engines, since they use different fwd scans.
 
 #![no_main]
 

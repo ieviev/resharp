@@ -63,12 +63,10 @@ pub unsafe extern "C" fn resharp_is_match(r: *const Regex, input: *const u8, len
     }
 }
 
-/// Writes up to `cap/2` `(start, end)` pairs into `out`. Returns the total
-/// match count, which may exceed the pairs written, or -1 on error.
+/// Writes up to `cap/2` `(start, end)` pairs into `out`; returns total match count (may exceed pairs written) or -1 on error.
 ///
 /// # Safety
-/// `r` live from `resharp_compile`, `input` valid for `len` bytes,
-/// `out` valid for `cap` writes.
+/// `r` live from `resharp_compile`, `input`/`out` valid for `len`/`cap`.
 #[no_mangle]
 pub unsafe extern "C" fn resharp_find_all(
     r: *const Regex,
@@ -95,12 +93,10 @@ pub unsafe extern "C" fn resharp_find_all(
     }
 }
 
-/// Longest match at position 0 as `(start, end)` in `out`.
-/// Returns 1 if found, 0 if not, -1 on error.
+/// Longest match at position 0 as `(start, end)` in `out`; 1 found, 0 not found, -1 error.
 ///
 /// # Safety
-/// `r` live from `resharp_compile`, `input` valid for `len` bytes,
-/// `out` valid for 2 writes.
+/// `r` live from `resharp_compile`, `input` valid for `len` bytes, `out` valid for 2 writes.
 #[no_mangle]
 pub unsafe extern "C" fn resharp_find_anchored(
     r: *const Regex,
@@ -122,8 +118,7 @@ pub unsafe extern "C" fn resharp_find_anchored(
     }
 }
 
-/// Capture slots per match: whole match plus one per group. Row stride, in
-/// pairs, of `resharp_captures_all`.
+/// Capture slots per match (whole match + one per group); the row stride, in pairs, of `resharp_captures_all`.
 ///
 /// # Safety
 /// `r` live from `resharp_compile`.
@@ -133,14 +128,10 @@ pub unsafe extern "C" fn resharp_capture_slots(r: *const Regex) -> usize {
     (*r).capture_names().len()
 }
 
-/// Writes up to `cap / (2 * slots)` rows into `out`, one per match, each
-/// `resharp_capture_slots(r)` `(start, end)` pairs: pair 0 is the whole match,
-/// then one per group, absent groups `(SIZE_MAX, SIZE_MAX)`. Returns the total
-/// match count, which may exceed the rows written, or -1 on error.
+/// Writes up to `cap / (2 * slots)` rows into `out`, one per match: `resharp_capture_slots(r)` `(start, end)` pairs each, pair 0 the whole match, absent groups `(SIZE_MAX, SIZE_MAX)`. Returns total match count (may exceed rows written) or -1 on error.
 ///
 /// # Safety
-/// `r` live from `resharp_compile`, `input` valid for `len` bytes,
-/// `out` valid for `cap` writes.
+/// `r` live from `resharp_compile`, `input`/`out` valid for `len`/`cap`.
 #[cfg(feature = "experimental_capture_groups")]
 #[no_mangle]
 pub unsafe extern "C" fn resharp_captures_all(
@@ -172,8 +163,7 @@ pub unsafe extern "C" fn resharp_captures_all(
     }
 }
 
-/// Copies the last error into `buf`, not null-terminated. Returns its full
-/// length, which may exceed `cap`.
+/// Copies the last error into `buf` (not null-terminated); returns its full length, which may exceed `cap`.
 ///
 /// # Safety
 /// `buf` valid for `cap` bytes.

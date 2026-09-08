@@ -1,6 +1,18 @@
 mod common;
 
 #[test]
+fn double_nested_negative_lookbehind_is_match_stays_bounded() {
+    let re = Regex::new(r"(?<!(?<!-).):").unwrap();
+    for n in [1usize, 100, 803, 5000, 50_000] {
+        assert_eq!(
+            re.is_match(&vec![b':'; n]).unwrap(),
+            true,
+            "is_match on {n} colons"
+        );
+    }
+}
+
+#[test]
 fn consuming_alternation_fixed_lookbehind() {
     let cases: &[(&str, &str, &[&str])] = &[
         (r".|(?<=ab)y", "Xaby", &["X", "a", "b", "y"]),
@@ -104,6 +116,42 @@ fn length_one_lookbehind_alternation_supported() {
     );
     let re = Regex::new(r"\ba{0}\b").unwrap();
     assert_eq!(re.is_match(b"").unwrap(), false);
+}
+
+#[test]
+fn bounded_repeat_mixed_lookaround_union_reject_is_fast() {
+    let pat = r"(?:x|(?<!x)|(?=x)){0,28}";
+    let t = std::time::Instant::now();
+    let re = Regex::new(pat);
+    assert!(
+        t.elapsed() < std::time::Duration::from_secs(1),
+        "reject of bounded-repeat-of-mixed-lookaround-union took {:?}, expected sub-second",
+        t.elapsed()
+    );
+    assert!(re.is_err(), "expected UnsupportedPattern for {pat}");
+}
+
+#[test]
+#[ignore = "slow in debug; run with --ignored or in release"]
+fn bounded_union_before_mandatory_trailing_class_not_quadratic() {
+    let pat = "(?:[cx]{0,50}|[^b]+){0,50}[bx]+";
+    let re = Regex::with_options(
+        pat,
+        RegexOptions::default().unicode(resharp::UnicodeMode::Ascii).hardened(true),
+    )
+    .unwrap();
+    let mut hay = "c".repeat(50).into_bytes();
+    hay.extend(std::iter::repeat(b'x').take(20));
+    let t = std::time::Instant::now();
+    let n = re.find_all(&hay).unwrap().len();
+    let elapsed = t.elapsed();
+    assert!(n > 0);
+    assert!(
+        elapsed < std::time::Duration::from_millis(150),
+        "find_all took {:?}, expected well under 150ms (~500ms before the incremental mk_union insert, ~18ms \
+         after memoizing nullable_subsumes and splicing instead of rebuilding in attempt_rw_unions)",
+        elapsed
+    );
 }
 
 #[test]
@@ -1877,10 +1925,19 @@ mod parser_size {
     }
 
     #[test]
-    fn mixed_alt_and_intersection_top_level_does_not_panic() {
-        let cases = ["^&|&$", r"\s|&nbsp;", "&|x", "&&|\\|\\|"];
-        for p in cases {
-            assert!(Regex::new(p).is_err(), "expected error for {p:?}");
+    fn mixed_alt_and_intersection_top_level_matches_explicit_grouping() {
+        let cases = [
+            ("^&|&$", "(?:^&)|(?:&$)"),
+            (r"\s|&nbsp;", r"\s|(?:&nbsp;)"),
+            ("&|x", "(?:&)|x"),
+            ("&&|\\|\\|", "(?:&&)|(?:\\|\\|)"),
+        ];
+        let render = |p: &str| match Regex::new(p) {
+            Ok(re) => format!("{:?}", re.find_all(b"a&b").unwrap()),
+            Err(e) => format!("ERR {e:?}"),
+        };
+        for (mixed, explicit) in cases {
+            assert_eq!(render(mixed), render(explicit), "{mixed:?}");
         }
     }
 }
@@ -2373,17 +2430,22 @@ fn lookahead_rel_max_preserves_multibranch_body() {
 }
 
 #[test]
-fn strip_lb_rejects_lookbehind_in_intersection() {
-    match resharp::Regex::new("(?:(?=a)&(?<=_))") {
-        Ok(re) => {
-            let ms = re
-                .find_all(b"________________________________________________________________")
-                .unwrap();
-            assert!(ms.is_empty(), "spurious matches: {:?}", ms);
-            let ms = re.find_all(&[b'a'; 128]).unwrap();
-            assert!(ms.is_empty(), "spurious matches on a's: {:?}", ms);
-        }
-        Err(_) => {}
+fn lookahead_intersect_lookbehind_matches_concatenation() {
+    let re = resharp::Regex::new("(?:(?=a)&(?<=_))").unwrap();
+    let cat = resharp::Regex::new("(?=a)(?<=_)").unwrap();
+    let underscores = b"________________________________________________________________";
+    assert!(re.find_all(underscores).unwrap().is_empty());
+    assert!(cat.find_all(underscores).unwrap().is_empty());
+    let a128 = [b'a'; 128];
+    let expected: Vec<(usize, usize)> = (1..128).map(|i| (i, i)).collect();
+    for r in [&re, &cat] {
+        let got: Vec<(usize, usize)> = r
+            .find_all(&a128)
+            .unwrap()
+            .into_iter()
+            .map(|m| (m.start, m.end))
+            .collect();
+        assert_eq!(got, expected);
     }
 }
 #[test]
@@ -6041,8 +6103,8 @@ fn convergence_prefix_hardened_no_quadratic() {
     let re = Regex::with_options("x[ax]*c", RegexOptions::default().hardened(true)).unwrap();
     assert!(re.is_hardened());
 
-    let small = "x".repeat(64_000).into_bytes();
-    let large = "x".repeat(1_024_000).into_bytes();
+    let small = "x".repeat(8_000_000).into_bytes();
+    let large = "x".repeat(128_000_000).into_bytes();
 
     let time_it = |input: &[u8]| -> f64 {
         let mut best = f64::INFINITY;
@@ -10035,7 +10097,3 @@ fn convergence_prefix_is_match_no_quadratic() {
         "expected roughly linear scaling, got {ratio}x for 16x input (small={small_elapsed}s large={large_elapsed}s)"
     );
 }
-
-
-
-

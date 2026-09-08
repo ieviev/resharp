@@ -1614,3 +1614,196 @@ pattern = '(?<=bb|dd)(?:)*'
 javascript = true
 input = "db"
 matches = []
+
+[[test]]
+name = "lookahead_intersect_class_survives_when_body_matches"
+pattern = "(?=ab)a+"
+input = "ab"
+matches = [[0, 1]]
+
+[[test]]
+name = "lookahead_body_not_consumed_by_double_underscore_intersection"
+pattern = "(?=ab)a+&__"
+input = "ab"
+matches = []
+
+[[test]]
+name = "lookahead_intersect_dot_class_keeps_body_match"
+pattern = "(?=ab)a+&_"
+input = "ab"
+matches = [[0, 1]]
+
+[[test]]
+name = "lookahead_a_plus_matches_at_second_position"
+pattern = "(?=ab)a+"
+input = "baba"
+matches = [[1, 2]]
+
+[[test]]
+name = "lookahead_intersect_exact_three_class_no_match"
+pattern = "(?=ab)a+&_{3}"
+input = "baba"
+matches = []
+
+[[test]]
+name = "lookahead_intersect_two_underscore_optional_b_no_match"
+pattern = "(?=ab)a+&__b?"
+input = "baba"
+matches = []
+
+[[test]]
+name = "lookahead_intersect_two_underscore_optional_b_no_match_short_hay"
+pattern = "(?=ab)a+&__b?"
+input = "ab"
+matches = []
+
+[[test]]
+name = "lookahead_intersect_two_underscore_optional_b_and_star_no_match"
+pattern = "(?=ab)a+&__b?&_*"
+input = "baba"
+matches = []
+
+[[test]]
+name = "lookahead_intersect_exact_two_class_optional_b_no_match"
+pattern = "(?=ab)a+&_{2}b{0,2}"
+input = "baba"
+matches = []
+
+[[test]]
+name = "optional_b_lookahead_intersect_plus_zero_width_excluded"
+pattern = "b?(?=a)&_+"
+input = "a"
+matches = []
+
+[[test]]
+name = "optional_b_lookahead_intersect_bounded_repeat_zero_width_excluded"
+pattern = "b?(?=a)&_{1,4}"
+input = "a"
+matches = []
+
+[[test]]
+name = "lookahead_intersect_plus_zero_width_excluded"
+pattern = "(?=a)&_+"
+input = "a"
+matches = []
+
+[[test]]
+name = "optional_b_lookahead_intersect_plus_matches_with_prefix"
+pattern = "b?(?=a)&_+"
+input = "ba"
+matches = [[0, 1]]
+
+[[test]]
+name = "intersection_zero_width_and_dot_no_match_b"
+pattern = "(?:(?:b|(?<!a))&a?)&."
+input = "b"
+matches = []
+
+[[test]]
+name = "intersection_zero_width_and_dot_no_match_bbb"
+pattern = "(?:(?:b|(?<!a))&a?)&."
+input = "bbb"
+matches = []
+
+[[test]]
+name = "intersection_zero_width_and_dot_no_match_abab"
+pattern = "(?:(?:b|(?<!a))&a?)&."
+input = "abab"
+matches = []
+
+[[test]]
+name = "intersection_neg_lookbehind_union_c_associative_left"
+pattern = "~(.)&(?:(?<!b)|bc)&c?"
+input = "bca"
+matches = [[0, 0], [2, 2], [3, 3]]
+
+[[test]]
+name = "intersection_neg_lookbehind_union_c_associative_grouped_left"
+pattern = "(?:~(.)&(?:(?<!b)|bc))&c?"
+input = "bca"
+matches = [[0, 0], [2, 2], [3, 3]]
+
+[[test]]
+name = "intersection_neg_lookbehind_union_c_associative_grouped_right"
+pattern = "~(.)&(?:(?:(?<!b)|bc)&c?)"
+input = "bca"
+matches = [[0, 0], [2, 2], [3, 3]]
+
+[[test]]
+name = "zero_width_a_intersect_optional_b_lookahead_not_b"
+pattern = "a{0}&b?(?!b)a?"
+input = "ac"
+matches = [[0, 0], [1, 1], [2, 2]]
+
+[[test]]
+name = "zero_width_a_intersect_epsilon_union_lookahead_not_b"
+pattern = "a{0}&(?:b|)(?!b)(?:a|)"
+input = "ac"
+matches = [[0, 0], [1, 1], [2, 2]]
+
+[[test]]
+name = "zero_width_a_intersect_optional_b_lookahead_a"
+pattern = "a{0}&b?(?=a)a?"
+input = "ac"
+matches = [[0, 0]]
+
+[[test]]
+name = "negative_lookahead_start_optional_word_boundary_before_a"
+pattern = '(?!\A)\b?a'
+input = "..a"
+matches = [[2, 3]]
+
+[[test]]
+name = "star_a_intersect_optional_b_lookahead_not_b_recovers_all_starts"
+pattern = "a*&b?(?!b)a?"
+input = "ac"
+matches = [[0, 1], [1, 1], [2, 2]]
+
+[[test]]
+name = "optional_b_lookahead_not_b_optional_a_all_starts"
+pattern = "b?(?!b)a?"
+input = "ac"
+matches = [[0, 1], [1, 1], [2, 2]]
+
+[[test]]
+name = "star_a_intersect_optional_b_lookahead_not_b_on_c"
+pattern = "a*&b?(?!b)a?"
+input = "c"
+matches = [[0, 0], [1, 1]]
+
+[[test]]
+name = "intersection_distributes_over_union_lookahead_lookahead"
+pattern = "(?=a)&(?:(?!c)|b)"
+input = "ab"
+matches = [[0, 0]]
+
+[[test]]
+name = "intersection_distributes_over_union_lookahead_lookahead_explicit"
+pattern = "(?:(?=a)&(?!c))|(?:(?=a)&b)"
+input = "ab"
+matches = [[0, 0]]
+
+[[test]]
+name = "intersection_distributes_over_union_lookahead_lookahead_b"
+pattern = "(?!c)&(?:(?!a)|b)"
+input = "b"
+matches = [[0, 0], [1, 1]]
+
+[[test]]
+name = "intersection_distributes_over_union_lookahead_lookahead_b_explicit"
+pattern = "(?:(?!c)&(?!a))|(?:(?!c)&b)"
+input = "b"
+matches = [[0, 0], [1, 1]]
+
+[[test]]
+name = "double_nested_negative_lookbehind"
+pattern = '(?<!(?<!-).):'
+input = ":::::"
+matches = [[0, 1]]
+
+[[test]]
+name = "complement_of_star_zero_width_end_no_match"
+pattern = '~(_*\z)\z'
+input = "abc"
+matches = []
+

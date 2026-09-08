@@ -284,3 +284,59 @@ name = "nullable_intersection_complement_no_drop"
 pattern = '((?!a)|b)&(~((c)))'
 input = "abab"
 matches = [[1, 2], [3, 4], [4, 4]]
+
+[[test]]
+name = "intersection_binds_tighter_than_alternation_a"
+pattern = "a|b&c"
+ascii = true
+input = "abc"
+matches = [[0, 1]]
+
+[[test]]
+name = "intersection_binds_tighter_than_alternation_ab_bb"
+pattern = "ab|b&b"
+ascii = true
+input = "ab"
+matches = [[0, 2]]
+
+[[test]]
+name = "intersection_binds_tighter_than_alternation_aa_b"
+pattern = "a&a|b"
+ascii = true
+input = "b"
+matches = [[0, 1]]
+
+[[test]]
+name = "intersection_binds_tighter_than_alternation_triple"
+pattern = "a|b&c&d|e"
+ascii = true
+input = "abc"
+matches = [[0, 1]]
+
+[[test]]
+name = "intersection_binds_tighter_than_alternation_complement"
+pattern = "~(a)|b&c"
+ascii = true
+input = "abc"
+matches = [[0, 3], [3, 3]]
+
+[[test]]
+name = "intersection_binds_tighter_than_alternation_left_side"
+pattern = "(?:a&b|c)"
+ascii = true
+input = "abc"
+matches = [[2, 3]]
+
+[[test]]
+name = "intersection_binds_tighter_than_alternation_leading_star"
+pattern = "_*a_*&_*b_*|c"
+ascii = true
+input = "abc"
+matches = [[0, 3]]
+
+[[test]]
+name = "intersection_binds_tighter_than_alternation_surrounding_literals"
+pattern = "x(?:a|b&c)y"
+ascii = true
+input = "xay"
+matches = [[0, 3]]

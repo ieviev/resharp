@@ -246,7 +246,8 @@ impl LDFA {
         );
 
         // state 3
-        let initial_pruned = match (is_forward, crate::prefix::rev_boundary_shape(b, initial)) {
+        let bshape = crate::prefix::rev_boundary_shape(b, initial);
+        let initial_pruned = match (is_forward, bshape) {
             (false, Some((rc, _, _))) => rc,
             _ => b.prune_begin(initial),
         };

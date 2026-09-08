@@ -1,20 +1,11 @@
-// robustness of `Regex::with_options`: an arbitrary pattern string compiled
-// under one configuration from the option sweep must never panic, abort, or
-// hang. parse / capacity / size rejections are expected and returned as `Err`;
-// only a crash (panic, stack overflow, OOM, ASAN report) is a finding.
+// `Regex::with_options` must never panic/abort/hang on an arbitrary pattern
+// under one `option_sweep()` config; Err (parse/capacity/size) is fine, only a
+// crash is a finding. Primary target for the known defect class (intersection
+// over alternation/quantifier, nullability asserts), all surfacing at compile.
 //
-// this is the primary target: the known resharp defect class (intersection
-// over alternation, intersection + quantifier, nullability assertions) all
-// surface here, at compile time, inside `Regex::new` / `with_options`.
-//
-// one compile per unit: the first input byte selects which `option_sweep()`
-// config to use, and the rest is the pattern (decoded as the longest valid
-// UTF-8 prefix, matching how a `&str` fuzz argument is produced). compiling
-// under a single option per unit keeps the libFuzzer `-timeout` watchdog
-// measuring one `Regex::with_options` call. compiling all six per unit instead
-// multiplied a benign sub-second compile by six under ASAN, tripping
-// `-timeout=10` on patterns that are not actually slow (see the resharp
-// troubleshooting doc, "Compile-time timeouts on small patterns").
+// One compile per unit, one config (first byte picks it): compiling all six
+// per unit multiplied a benign sub-second compile by six under ASAN, tripping
+// libFuzzer's `-timeout=10` on patterns that aren't actually slow.
 
 #![no_main]
 

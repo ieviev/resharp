@@ -838,15 +838,27 @@ fn lb_is_unbounded(b: &RegexBuilder, lb_node: NodeId) -> bool {
 }
 
 fn any_unbounded_lookback(b: &RegexBuilder, node: NodeId) -> bool {
+    let mut memo = std::collections::HashMap::new();
+    any_unbounded_lookback_memo(b, node, &mut memo)
+}
+
+fn any_unbounded_lookback_memo(
+    b: &RegexBuilder,
+    node: NodeId,
+    memo: &mut std::collections::HashMap<NodeId, bool>,
+) -> bool {
     if !node.contains_lookbehind(b) {
         return false;
     }
-    if node.is_lookbehind(b) && lb_is_unbounded(b, node) {
-        return true;
+    if let Some(&cached) = memo.get(&node) {
+        return cached;
     }
-    [node.left(b), node.right(b)]
-        .into_iter()
-        .any(|c| c != NodeId::MISSING && any_unbounded_lookback(b, c))
+    let result = node.is_lookbehind(b) && lb_is_unbounded(b, node)
+        || [node.left(b), node.right(b)]
+            .into_iter()
+            .any(|c| c != NodeId::MISSING && any_unbounded_lookback_memo(b, c, memo));
+    memo.insert(node, result);
+    result
 }
 
 /// heuristic checks if we can support an union with lookbehinds,

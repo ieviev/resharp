@@ -922,18 +922,65 @@ impl<'s> ResharpParser<'s> {
         })
     }
 
+    fn close_intersection(&self, concat: Concat) -> (Ast, Position) {
+        use self::GroupState::*;
+
+        let start = concat.span.start;
+        let mut stack = self.parser().stack_group.borrow_mut();
+        if let Some(&Intersection(_)) = stack.last() {
+            let Some(Intersection(mut int)) = stack.pop() else {
+                unreachable!()
+            };
+            let start = int.span.start;
+            int.span.end = self.pos();
+            int.asts.push(concat.into_ast());
+            return (Ast::intersection(int), start);
+        }
+        (concat.into_ast(), start)
+    }
+
     fn push_or_add_alternation(&self, concat: Concat) {
         use self::GroupState::*;
 
+        let (arm, start) = self.close_intersection(concat);
         let mut stack = self.parser().stack_group.borrow_mut();
         if let Some(&mut Alternation(ref mut alts)) = stack.last_mut() {
-            alts.asts.push(concat.into_ast());
+            alts.asts.push(arm);
             return;
         }
         stack.push(Alternation(ast::Alternation {
-            span: Span::new(concat.span.start, self.pos()),
-            asts: vec![concat.into_ast()],
+            span: Span::new(start, self.pos()),
+            asts: vec![arm],
         }));
+    }
+
+    fn close_ops(&self, concat: Concat) -> Ast {
+        use self::GroupState::*;
+
+        let mut ast = concat.into_ast();
+        let mut stack = self.parser().stack_group.borrow_mut();
+        loop {
+            match stack.last() {
+                Some(Intersection(_)) => {
+                    let Some(Intersection(mut int)) = stack.pop() else {
+                        unreachable!()
+                    };
+                    int.span.end = self.pos();
+                    int.asts.push(ast);
+                    ast = Ast::intersection(int);
+                }
+                Some(Alternation(_)) => {
+                    let Some(Alternation(mut alt)) = stack.pop() else {
+                        unreachable!()
+                    };
+                    alt.span.end = self.pos();
+                    alt.asts.push(ast);
+                    ast = Ast::alternation(alt);
+                }
+                _ => break,
+            }
+        }
+        ast
     }
 
     #[inline(never)]
@@ -1037,69 +1084,24 @@ impl<'s> ResharpParser<'s> {
     fn pop_group(&self, mut group_concat: Concat) -> Result<Concat> {
         use self::GroupState::*;
         assert_eq!(self.char(), ')');
+        group_concat.span.end = self.pos();
+        let inner_ast = self.close_ops(group_concat);
         let mut stack = self.parser().stack_group.borrow_mut();
-        let topstack = stack.pop();
-
-        let (mut prior_concat, mut group, ignore_whitespace, alt) = match topstack {
+        let (mut prior_concat, mut group, ignore_whitespace) = match stack.pop() {
             Some(Group {
                 concat,
                 group,
                 ignore_whitespace,
-            }) => (concat, group, ignore_whitespace, None),
-            Some(Alternation(alt)) => match stack.pop() {
-                Some(Group {
-                    concat,
-                    group,
-                    ignore_whitespace,
-                }) => (
-                    concat,
-                    group,
-                    ignore_whitespace,
-                    Some(Either::Left::<ast::Alternation, ast::Intersection>(alt)),
-                ),
-                None | Some(Alternation(_)) | Some(Intersection(_)) => {
-                    return Err(self.error(self.span_char(), ast::ErrorKind::GroupUnopened));
-                }
-            },
-            Some(Intersection(int)) => match stack.pop() {
-                Some(Group {
-                    concat,
-                    group,
-                    ignore_whitespace,
-                }) => (
-                    concat,
-                    group,
-                    ignore_whitespace,
-                    Some(Either::Right::<ast::Alternation, ast::Intersection>(int)),
-                ),
-                None | Some(Alternation(_)) | Some(Intersection(_)) => {
-                    return Err(self.error(self.span_char(), ast::ErrorKind::GroupUnopened));
-                }
-            },
-
-            None => {
+            }) => (concat, group, ignore_whitespace),
+            None | Some(Alternation(_)) | Some(Intersection(_)) => {
                 return Err(self.error(self.span_char(), ast::ErrorKind::GroupUnopened));
             }
         };
+        drop(stack);
         self.parser().ignore_whitespace.set(ignore_whitespace);
-        group_concat.span.end = self.pos();
         self.bump();
         group.span.end = self.pos();
-        match alt {
-            Some(Either::Left(mut alt)) => {
-                alt.span.end = group_concat.span.end;
-                alt.asts.push(group_concat.into_ast());
-                group.ast = Box::new(alt.into_ast());
-            }
-            Some(Either::Right(mut int)) => {
-                int.span.end = group_concat.span.end;
-                int.asts.push(group_concat.into_ast());
-                group.ast = Box::new(int.into_ast());
-            }
-            None => {
-                group.ast = Box::new(group_concat.into_ast());
-            }
-        }
+        group.ast = Box::new(inner_ast);
 
         if group.kind == GroupKind::Complement {
             let complement = ast::Complement {
@@ -1118,35 +1120,15 @@ impl<'s> ResharpParser<'s> {
     #[inline(never)]
     fn pop_group_end(&self, mut concat: ast::Concat) -> Result<Ast> {
         concat.span.end = self.pos();
+        let ast = self.close_ops(concat);
         let mut stack = self.parser().stack_group.borrow_mut();
-        let ast = match stack.pop() {
-            None => Ok(concat.into_ast()),
-            Some(GroupState::Alternation(mut alt)) => {
-                alt.span.end = self.pos();
-                alt.asts.push(concat.into_ast());
-                Ok(Ast::alternation(alt))
-            }
-            Some(GroupState::Intersection(mut int)) => {
-                int.span.end = self.pos();
-                int.asts.push(concat.into_ast());
-
-                Ok(Ast::intersection(int))
-            }
-            Some(GroupState::Group { group, .. }) => {
-                return Err(self.error(group.span, ast::ErrorKind::GroupUnclosed));
-            }
-        };
-        // If we try to pop again, there should be nothing.
         match stack.pop() {
-            None => ast,
-            Some(GroupState::Alternation(alt)) => {
-                Err(self.error(alt.span, ast::ErrorKind::UnsupportedResharpRegex))
-            }
-            Some(GroupState::Intersection(int)) => {
-                Err(self.error(int.span, ast::ErrorKind::UnsupportedResharpRegex))
-            }
+            None => Ok(ast),
             Some(GroupState::Group { group, .. }) => {
                 Err(self.error(group.span, ast::ErrorKind::GroupUnclosed))
+            }
+            Some(GroupState::Alternation(_)) | Some(GroupState::Intersection(_)) => {
+                unreachable!("close_ops must consume every pending Alternation/Intersection")
             }
         }
     }
