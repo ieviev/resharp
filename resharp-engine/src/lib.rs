@@ -1083,7 +1083,7 @@ fn ensure_supported_rec(
             ensure_supported_rec(b, node.left(b), at_start, strict_lb_start, memo)
         }
         Kind::Ordered => ensure_supported_rec(b, node.left(b), at_start, strict_lb_start, memo),
-        Kind::Compl => ensure_supported_rec(b, node.left(b), at_start, strict_lb_start, memo),
+        Kind::Compl => Err(resharp_algebra::ResharpError::UnsupportedPattern),
         Kind::Lookbehind => {
             let prev = node.right(b);
             let (_, prev_max) = if prev == NodeId::MISSING {
@@ -1315,7 +1315,6 @@ impl Regex {
             eprintln!("[fwd]: {:.70}", b.pp(node));
             eprintln!("[ts_rev]: {:.70}", b.pp(ts_rev_start));
         }
-
         let is_empty_lang = node_fwd_simpl == NodeId::BOT;
         // TODO: make it configurable to actually check and reject empty lang entriely
         let body_after_begin = body_after_begin_of(&mut b, node_fwd_simpl);
@@ -1324,7 +1323,7 @@ impl Regex {
         let has_look = b.contains_look(node_fwd_simpl);
         let rev_node = b.reverse(node_fwd_simpl)?;
         let rev_end_nullable = initial_nullability.has(Nullability::END)
-            || b.nullability(ts_rev_start).has(Nullability::BEGIN)
+            || (!b.is_begin_anchored(node) && b.nullability(ts_rev_start).has(Nullability::BEGIN))
             || neg_lookbehind_marker_prev_end_nullable(&mut b, node_fwd_simpl);
         let rev_end_anchored = b.is_begin_anchored(rev_node) && !fwd_end_nullable;
         let fixed_length = b.get_fixed_length(node_fwd_simpl);

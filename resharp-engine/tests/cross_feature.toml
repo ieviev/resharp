@@ -139,6 +139,30 @@ expect_error = true
 input = "x"
 
 [[test]]
+name = "compl_in_lookaround_err_la_trailing_ts_star"
+pattern = '~((?=.)_*)'
+expect_error = true
+input = "d"
+
+[[test]]
+name = "compl_in_lookaround_err_nested_in_neg_lookahead"
+pattern = '(?!~((?:(?=.)|.)))'
+expect_error = true
+input = "b"
+
+[[test]]
+name = "begin_anchor_star_end_anchor_no_spurious_second_match"
+pattern = '\A_*\z'
+input = "b"
+matches = [[0, 1]]
+
+[[test]]
+name = "begin_union_before_trailing_ts_no_spurious_match_at_non_begin"
+pattern = '(?:_*(?:\A|b)_*c)&_'
+input = "cc"
+matches = [[0, 1]]
+
+[[test]]
 name = "inter_lookbehind_word"
 pattern = '(?<=a)\w+&.*c'
 input = "xabcx"

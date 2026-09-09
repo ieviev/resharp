@@ -2377,8 +2377,11 @@ impl<'s> ResharpParser<'s> {
                 Ok(tb.mk_inters(children.into_iter()))
             }
             Ast::Complement(complement) => {
-                let body = self.ast_to_node_id(&complement.ast, translator, tb);
-                body.map(|x| tb.mk_compl(x))
+                if self.ast_contains_lookaround(&complement.ast) {
+                    return Err(self.error(complement.span, ast::ErrorKind::UnsupportedResharpRegex));
+                }
+                let body = self.ast_to_node_id(&complement.ast, translator, tb)?;
+                Ok(tb.mk_compl(body))
             }
         }
     }
@@ -2519,6 +2522,19 @@ impl<'s> ResharpParser<'s> {
             Ast::Complement(x) => self.ast_has_capture(&x.ast),
             Ast::Repetition(r) => self.ast_has_capture(&r.ast),
             Ast::Lookaround(l) => self.ast_has_capture(&l.ast),
+            _ => false,
+        }
+    }
+
+    fn ast_contains_lookaround(&self, ast: &Ast) -> bool {
+        match ast {
+            Ast::Lookaround(_) => true,
+            Ast::Group(g) => self.ast_contains_lookaround(&g.ast),
+            Ast::Alternation(a) => a.asts.iter().any(|x| self.ast_contains_lookaround(x)),
+            Ast::Concat(c) => c.asts.iter().any(|x| self.ast_contains_lookaround(x)),
+            Ast::Intersection(x) => x.asts.iter().any(|a| self.ast_contains_lookaround(a)),
+            Ast::Complement(x) => self.ast_contains_lookaround(&x.ast),
+            Ast::Repetition(r) => self.ast_contains_lookaround(&r.ast),
             _ => false,
         }
     }

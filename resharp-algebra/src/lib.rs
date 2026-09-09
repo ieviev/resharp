@@ -5682,7 +5682,7 @@ impl RegexBuilder {
         let tr = tail.right(self);
         let y_tset = y.pred_tset(self);
         let covers_all = if tl == NodeId::TS {
-            true
+            self.solver().is_full_id(y_tset)
         } else if let Some(x_pred) = tl.is_pred_star(self) {
             let x_ts = x_pred.pred_tset(self);
             let combined = self.solver().or_id(x_ts, y_tset);
