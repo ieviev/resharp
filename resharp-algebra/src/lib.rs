@@ -2934,7 +2934,9 @@ impl RegexBuilder {
                 if union.left(self).contains_lookbehind(self)
                     || union.right(self).contains_lookbehind(self)
                 {
-                    if new_left.is_ts() {
+                    if Some(new_left) == self.cached_reversed(union) {
+                        self.mk_concat(new_left, new_right)
+                    } else if new_left.is_ts() {
                         let ul = self.reverse(union.left(self))?;
                         let ur = self.reverse(union.right(self))?;
                         let l = self.distribute_concat_over_union(new_left, ul);
@@ -4095,9 +4097,10 @@ impl RegexBuilder {
                 break self.init_as(key, u);
             }
 
-            if self.building_reverse_depth == 0 && head.is_union(self) && head.contains_lookahead(self) {
+            if head.is_union(self) && head.contains_lookahead(self) {
                 let (hl, hr) = (head.left(self), head.right(self));
-                if self.union_has_fresh_lookahead(hl) || self.union_has_fresh_lookahead(hr) {
+                let fresh = self.union_has_fresh_lookahead(hl) || self.union_has_fresh_lookahead(hr);
+                if tail.is_begin() || (self.building_reverse_depth == 0 && fresh) {
                     let l = self.mk_concat(hl, tail);
                     let r = self.mk_concat(hr, tail);
                     let u = self.mk_union(l, r);
@@ -4148,6 +4151,10 @@ impl RegexBuilder {
                 break NodeId::BOT;
             }
 
+            if tail.is_begin() && self.get_min_length_only(head) >= 1 {
+                break NodeId::BOT;
+            }
+
             if head.is_lookbehind(self) {
                 let tail_starts_begin = self.starts_with_begin_past_tags(tail);
                 if tail_starts_begin {
@@ -4165,6 +4172,10 @@ impl RegexBuilder {
                             break self.init_as(key, result);
                         }
                         (false, false) => break NodeId::BOT,
+                        (true, false) if tail.is_begin() && head_prev.is_missing() => {
+                            let commuted = self.mk_concat(NodeId::BEGIN, head);
+                            break self.init_as(key, commuted);
+                        }
                         (true, false) => {
                             let not_end = self.mk_compl(NodeId::END);
                             let restricted = self.mk_inter(tail, not_end);
@@ -4456,7 +4467,7 @@ impl RegexBuilder {
                 let strippedanchor = self.mk_concat(NodeId::TS, x);
                 return self.mk_lookahead_internal(strippedanchor, la_tail, rel);
             }
-            if bodyright == NodeId::END && rel == u32::MAX && (la_tail.is_missing() || !self.contains_anchors(la_tail)) {
+            if bodyright.is_end() && rel == u32::MAX {
                 return self.mk_lookahead_internal(NodeId::EPS, la_tail, rel);
             }
         }
@@ -4872,7 +4883,9 @@ impl RegexBuilder {
         if upper == 0 {
             return NodeId::EPS;
         }
-        if body_id.is_lookahead(self) && self.get_lookahead_tail(body_id) == NodeId::MISSING {
+        if (body_id.is_lookahead(self) && self.get_lookahead_tail(body_id) == NodeId::MISSING)
+            || matches!(self.get_kind(body_id), Kind::Begin | Kind::End)
+        {
             return if lower >= 1 { body_id } else { self.mk_opt(body_id) };
         }
         let opt = self.mk_opt(body_id);

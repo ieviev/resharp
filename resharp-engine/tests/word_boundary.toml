@@ -506,3 +506,23 @@ name = "js_numeric_literal_hex"
 pattern = '(?i)0x[0-9a-f]+(?:\_[0-9a-f]+)*\b'
 input = "0xff 0xA_B 0xg x0x1"
 matches = [[0, 4], [5, 10], [16, 19]]
+
+[[test]]
+name = "optional_lookbehind_begin_before_non_word_boundary"
+pattern = '(?<=\A)?\B'
+input = "1a2"
+matches = [[1, 1], [2, 2]]
+ascii = true
+
+[[test]]
+name = "doubly_negated_nullable_lookbehind_before_word_boundary"
+pattern = '(?<!(?!a*))\b'
+input = "1a2"
+matches = [[0, 0], [3, 3]]
+ascii = true
+
+[[test]]
+name = "begin_anchor_then_optional_word_boundary"
+pattern = '\A\b?'
+input = "1b"
+matches = [[0, 0]]

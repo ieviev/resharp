@@ -2715,7 +2715,14 @@ impl<'s> ResharpParser<'s> {
                 if hi >= 2 && (Self::ast_ambiguous_body(&r.ast) || self.ast_has_capture(&r.ast)) {
                     let node = self.ast_to_node_id(ast, translator, tb)?;
                     let child = self.ast_to_sk(&r.ast, translator, tb, out)?;
-                    out.push((SkNode::Repeat(child, Self::rep_lo(&r.op.kind), hi), node));
+                    let lo = Self::rep_lo(&r.op.kind);
+                    if lo >= 2 && hi != u32::MAX && self.ast_has_capture(&r.ast) {
+                        let body = out[child as usize].1;
+                        let dup = tb.mk_repeat(body, lo, hi);
+                        tb.reverse(dup)
+                            .map_err(|_| self.error(r.span, ast::ErrorKind::UnsupportedResharpRegex))?;
+                    }
+                    out.push((SkNode::Repeat(child, lo, hi), node));
                     return Ok(out.len() as u32 - 1);
                 }
                 self.sk_leaf(ast, translator, tb, out)

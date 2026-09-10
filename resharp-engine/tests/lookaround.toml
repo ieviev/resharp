@@ -1807,3 +1807,42 @@ pattern = '~(_*\z)\z'
 input = "abc"
 matches = []
 
+[[test]]
+name = "range_bounded_lookbehind_repeat_1"
+pattern = '(?<!(?<!.*)){2,3}${0,0}'
+input = "aab"
+matches = [[0, 0], [1, 1], [2, 2], [3, 3]]
+ascii = true
+
+[[test]]
+name = "range_bounded_lookbehind_repeat_2"
+pattern = '(?<!a){2,3}${0,0}'
+input = "aab"
+matches = [[0, 0], [3, 3]]
+ascii = true
+
+[[test]]
+name = "range_bounded_lookbehind_repeat_3"
+pattern = '(?<!(?<!.*)){2,3}'
+input = "aab"
+matches = [[0, 0], [1, 1], [2, 2], [3, 3]]
+ascii = true
+
+[[test]]
+name = "range_bounded_lookbehind_repeat_4"
+pattern = '(?<!a){2,3}'
+input = "aab"
+matches = [[0, 0], [3, 3]]
+ascii = true
+
+[[test]]
+name = "negative_lookahead_before_optional_newline_then_dollar"
+pattern = '(?!z)\n?$'
+input = "x\ny"
+matches = [[1, 1], [3, 3]]
+
+[[test]]
+name = "dollar_then_negative_lookbehind_of_end_text_then_begin_anchor"
+pattern = '$(?<!\z)\A'
+input = "\n"
+matches = [[0, 0]]

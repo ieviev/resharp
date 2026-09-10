@@ -1428,3 +1428,15 @@ name = "negated_double_nested_optional_anchor_lookahead_drops_match"
 pattern = '(?!\A?(?!\A))'
 input = "x"
 matches = [[0, 0]]
+
+[[test]]
+name = "union_of_dot_and_negative_lookahead_arm_then_begin_anchor"
+pattern = '(?:.|\n*(?!a))\A'
+input = "b"
+matches = [[0, 0]]
+
+[[test]]
+name = "union_of_dot_and_negative_lookahead_arm_then_bounded_begin_anchor_repeat"
+pattern = '(?:.|\n*(?!a))\A{2}'
+input = "b"
+matches = [[0, 0]]

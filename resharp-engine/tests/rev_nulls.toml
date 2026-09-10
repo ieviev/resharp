@@ -326,3 +326,9 @@ name = "neg_lookahead_inside_dot_lookahead_working_case"
 pattern = "(?=.(?!a))"
 input = "aa"
 rev_nulls = [1]
+
+[[test]]
+name = "dollar_then_neg_lookbehind_of_end_text_then_begin_anchor"
+pattern = '$(?<!\z)\A'
+input = "\n"
+rev_nulls = [0]

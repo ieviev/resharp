@@ -213,12 +213,6 @@ expect_error = true
 reason = "optional lookbehind before word boundary rejected"
 
 [[test]]
-name = "optional_lookbehind_begin_before_non_word_boundary"
-pattern = '(?<=\A)?\B'
-expect_error = true
-reason = "optional lookbehind before word boundary rejected"
-
-[[test]]
 name = "optional_lookbehind_begin_or_x_before_non_word_boundary"
 pattern = '(?<=\A|x)?\B'
 expect_error = true
@@ -322,64 +316,51 @@ expect_error = true
 reason = "UnsupportedPattern"
 
 [[test]]
-name = "doubly_negated_nullable_lookbehind_before_word_boundary"
-pattern = '(?<!(?!a*))\b'
-ascii = true
-expect_error = true
-reason = "UnsupportedPattern"
-
-[[test]]
 name = "exact_repeat_of_literal_or_lookbehind_alternation"
 pattern = '(?:b|(?<=(?:-|:))){2}c'
 ascii = true
 expect_error = true
-reason = "UnsupportedPattern: repeat unrolling duplicates a lookbehind-bearing alternation"
+reason = "UnsupportedPattern: repeat unrolling duplicates a lookbehind alternation"
 
 [[test]]
 name = "two_two_repeat_of_literal_or_lookbehind_alternation"
 pattern = '(?:b|(?<=(?:-|:))){2,2}c'
 ascii = true
 expect_error = true
-reason = "UnsupportedPattern: repeat unrolling duplicates a lookbehind-bearing alternation"
+reason = "UnsupportedPattern: repeat unrolling duplicates a lookbehind alternation"
 
 [[test]]
 name = "two_three_repeat_of_literal_or_lookbehind_alternation"
 pattern = '(?:b|(?<=(?:-|:))){2,3}c'
 ascii = true
 expect_error = true
-reason = "UnsupportedPattern: repeat unrolling duplicates a lookbehind-bearing alternation"
+reason = "UnsupportedPattern: repeat unrolling duplicates a lookbehind alternation"
 
 [[test]]
 name = "exact_repeat_of_literal_or_single_byte_lookbehind_alternation"
 pattern = '(?:b|(?<=-)){2}c'
 ascii = true
 expect_error = true
-reason = "UnsupportedPattern: repeat unrolling duplicates a lookbehind-bearing alternation"
+reason = "UnsupportedPattern: repeat unrolling duplicates a lookbehind alternation"
 
 [[test]]
-name = "range_bounded_lookbehind_repeat_fails_loud_1"
-pattern = '(?<!(?<!.*)){2,3}${0,0}'
+name = "exact_repeat_of_literal_or_captured_lookahead_alternation"
+pattern = '(?:y|(?P<g0>(?!a))){2}.'
 ascii = true
 expect_error = true
-reason = "UnsupportedPattern: range-bounded repeat of a lookbehind cannot be verified"
+reason = "UnsupportedPattern: repeat unrolling duplicates a captured lookahead alternation"
 
 [[test]]
-name = "range_bounded_lookbehind_repeat_fails_loud_2"
-pattern = '(?<!a){2,3}${0,0}'
+name = "bounded_repeat_of_literal_or_captured_lookahead_alternation"
+pattern = '(?:y|(?P<g0>(?!a))){2,3}.'
 ascii = true
 expect_error = true
-reason = "UnsupportedPattern: range-bounded repeat of a lookbehind cannot be verified"
+reason = "UnsupportedPattern: repeat unrolling duplicates a captured lookahead alternation"
 
 [[test]]
-name = "range_bounded_lookbehind_repeat_fails_loud_3"
-pattern = '(?<!(?<!.*)){2,3}'
+name = "repeat_of_captured_union_wrapping_literal_or_lookahead"
+pattern = '(?P<g0>(?:y|(?!a))){2}.'
 ascii = true
 expect_error = true
-reason = "UnsupportedPattern: range-bounded repeat of a lookbehind cannot be verified"
+reason = "UnsupportedPattern: repeat unrolling duplicates a captured lookahead alternation"
 
-[[test]]
-name = "range_bounded_lookbehind_repeat_fails_loud_4"
-pattern = '(?<!a){2,3}'
-ascii = true
-expect_error = true
-reason = "UnsupportedPattern: range-bounded repeat of a lookbehind cannot be verified"

@@ -9704,6 +9704,19 @@ fn union_never_picks_an_arm_every_tied_arm_contributes_its_captures() {
             "mode={mode:?}: an arm that never reaches an accepting state contributes nothing, even \
              though its prefix `ab` matched byte-for-byte. Dead-end parses are not runs."
         );
+        let order_a =
+            Regex::with_options(r"(?:..|(?<g0>(?!\A)))?", RegexOptions::default().unicode(mode)).unwrap();
+        let order_b =
+            Regex::with_options(r"(?:(?<g0>(?!\A))|..)?", RegexOptions::default().unicode(mode)).unwrap();
+        let want = [Some((0, 2)), None, Some((2, 4)), Some((2, 2)), Some((4, 4)), Some((4, 4))];
+        for re in [&order_a, &order_b] {
+            let caps = re.captures_all(b"aaaa").unwrap();
+            let got: Vec<_> = caps
+                .iter()
+                .flat_map(|c| [c.get(0).map(|m| (m.start, m.end)), c.name("g0").map(|m| (m.start, m.end))])
+                .collect();
+            assert_eq!(got, want, "mode={mode:?}: arm order must not change the losing arm's participation");
+        }
     }
 }
 

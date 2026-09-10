@@ -3050,3 +3050,10 @@ pattern = "a(?:(?P<g1>.?)){2}"
 input = "a"
 matches = [[0, 1]]
 groups = [[[1, 1]]]
+
+[[test]]
+name = "exact_count_repeat_of_literal_or_lookahead_alternation_capture_on_literal_arm"
+pattern = '(?:(?P<g0>y)|(?!a)){2}.'
+input = "xxx"
+matches = [[0, 1], [1, 2], [2, 3]]
+groups = [[[]], [[]], [[]]]
