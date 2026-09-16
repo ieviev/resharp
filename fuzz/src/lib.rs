@@ -1,9 +1,6 @@
-//! shared helpers for the resharp fuzz targets.
-//!
-//! kept deliberately small: an option sweep used by the `compile` and
-//! `match_invariants` targets, a restricted regex grammar used by the
-//! differential `diff_regex` target, and a couple of formatting helpers so
-//! crash messages carry a self-contained reproducer.
+//! shared helpers for the fuzz targets: an option sweep for `compile` and
+//! `match_invariants`, a restricted regex grammar for `diff_regex`, and reproducer
+//! formatting.
 
 use arbitrary::{Arbitrary, Result, Unstructured};
 use resharp::{RegexOptions, UnicodeMode};
@@ -36,12 +33,10 @@ pub fn hex(bytes: &[u8]) -> String {
     out
 }
 
-/// A regex from the subset where resharp and `regex` share `is_match`
-/// semantics: ascii literals, `.`, classes, alternation, concat, grouping,
-/// greedy quantifiers. Excludes anchors, `\b`, unicode-width-sensitive
-/// `\w`/`\d`/`\s`, backreferences, and resharp-only operators -- everywhere
-/// leftmost-longest vs leftmost-greedy can only change match length, so
-/// `is_match` must agree byte-for-byte.
+/// a regex from the subset where resharp and `regex` agree on `is_match`: ascii literals,
+/// `.`, classes, alternation, concat, grouping, greedy quantifiers. no anchors, `\b`,
+/// `\w`/`\d`/`\s`, backreferences or resharp-only operators. leftmost-longest vs
+/// leftmost-greedy can only change match length there, never existence.
 #[derive(Debug)]
 pub struct DiffPattern(pub String);
 

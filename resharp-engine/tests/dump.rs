@@ -109,6 +109,13 @@ fn case_insensitive() {
 }
 
 #[test]
+#[cfg(feature = "regex_set")]
+fn dump_rejects_a_regex_set_member() {
+    let set = resharp::RegexSet::new(["a", "b"]).unwrap();
+    assert!(matches!(set.regex().dump(), Err(resharp::Error::Serialize(_))));
+}
+
+#[test]
 fn disable_prefixes_dump_matches_prefix_accelerated() {
     let pat = r"age-secret-key-1[0-9a-z]{58}";
     let fast = Regex::new(pat).unwrap();

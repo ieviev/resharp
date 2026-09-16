@@ -2266,18 +2266,25 @@ impl<'s> ResharpParser<'s> {
                     ast::GroupKind::CaptureIndex(_) => self.parser().implicit_captures,
                     _ => false,
                 };
+                if captures && self.parser().lookaround_depth.get() > 0 {
+                    return Err(self.error(g.span, ast::ErrorKind::CaptureGroupInLookaround));
+                }
+                let saved_dot_all = self.dot_all.get();
+                let saved_multiline = self.multiline.get();
+                let mut scoped = translator.clone();
+                let body = self.ast_to_node_id(&g.ast, &mut scoped, tb);
+                self.dot_all.set(saved_dot_all);
+                self.multiline.set(saved_multiline);
+                let body = body?;
                 if captures {
-                    if self.parser().lookaround_depth.get() > 0 {
-                        return Err(self.error(g.span, ast::ErrorKind::CaptureGroupInLookaround));
-                    }
                     let index = g.capture_index_or_plain().unwrap();
-                    let body = self.ast_to_node_id(&g.ast, translator, tb)?;
                     let open = tb.mk_tag(2 * index);
                     let close = tb.mk_tag(2 * index + 1);
                     let wrapped = tb.mk_concat(open, body);
-                    return Ok(tb.mk_concat(wrapped, close));
+                    Ok(tb.mk_concat(wrapped, close))
+                } else {
+                    Ok(body)
                 }
-                self.ast_to_node_id(&g.ast, translator, tb)
             }
             Ast::Alternation(a) => {
                 let mut children = vec![];
@@ -2592,21 +2599,28 @@ impl<'s> ResharpParser<'s> {
                     ast::GroupKind::CaptureIndex(_) => self.parser().implicit_captures,
                     _ => false,
                 };
+                if captures && self.parser().lookaround_depth.get() > 0 {
+                    return Err(self.error(g.span, ast::ErrorKind::CaptureGroupInLookaround));
+                }
+                let saved_dot_all = self.dot_all.get();
+                let saved_multiline = self.multiline.get();
+                let mut scoped = translator.clone();
+                let child = self.ast_to_sk(&g.ast, &mut scoped, tb, out);
+                self.dot_all.set(saved_dot_all);
+                self.multiline.set(saved_multiline);
+                let child = child?;
                 if captures {
-                    if self.parser().lookaround_depth.get() > 0 {
-                        return Err(self.error(g.span, ast::ErrorKind::CaptureGroupInLookaround));
-                    }
                     let index = g.capture_index_or_plain().unwrap();
-                    let child = self.ast_to_sk(&g.ast, translator, tb, out)?;
                     let body = out[child as usize].1;
                     let open = tb.mk_tag(2 * index);
                     let close = tb.mk_tag(2 * index + 1);
                     let wrapped = tb.mk_concat(open, body);
                     let node = tb.mk_concat(wrapped, close);
                     out.push((SkNode::Group(index, child), node));
-                    return Ok(out.len() as u32 - 1);
+                    Ok(out.len() as u32 - 1)
+                } else {
+                    Ok(child)
                 }
-                self.ast_to_sk(&g.ast, translator, tb, out)
             }
             Ast::Alternation(a) => {
                 let mut children = Vec::with_capacity(a.asts.len());

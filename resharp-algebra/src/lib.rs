@@ -1650,7 +1650,7 @@ impl RegexBuilder {
                     }
                 }
 
-                // only split if mk_non_nullable_safe actually stripped something, else infinite recurse.
+                // split only if mk_non_nullable_safe stripped something, else infinite recursion
                 let la_split_applies = la_tail != NodeId::MISSING
                     && self.is_nullable(la_tail, mask)
                     && self.mk_non_nullable_safe(la_tail, mask) != la_tail;
@@ -1692,7 +1692,7 @@ impl RegexBuilder {
                     return self.der(new_union, mask);
                 }
 
-                // la_tail is an unresolved rel-countdown marker; fold its remaining debt into our own rel instead of der()'ing it directly.
+                // la_tail is an unresolved rel countdown, fold its remaining debt into our rel instead of der()'ing it
                 let ambiguous_tail_rel = if la_tail != NodeId::MISSING
                     && la_tail.is_lookahead(self)
                     && self.get_lookahead_tail(la_tail) == NodeId::MISSING
@@ -1728,7 +1728,7 @@ impl RegexBuilder {
                 } else {
                     self.mb.nb.add_rel(cur_rels, 1)
                 };
-                // only collapse to bare-rel form (unconditional) when the run is genuinely ALWAYS-masked, not just single-valued, else it silently drops a context restriction like mask=END.
+                // collapse to bare rel only when the run is always masked, a single-valued run can still carry a context restriction like mask=END
                 let single_rel = if let Some(r) = ambiguous_tail_rel {
                     Some(r + 1)
                 } else if new_rels.0 == u32::MAX {
@@ -1862,12 +1862,13 @@ impl RegexBuilder {
                 self.init_metadata(node_id, meta_id);
             }
             Kind::Tag => {
+                let nulls = self.mb.nb.tag_run(inst.extra);
                 let meta_id = self.mb.get_meta_id(Metadata {
                     flags: MetaFlags::with_nullability(
                         Nullability::ALWAYS,
                         MetaFlags::CONTAINS_TAGS,
                     ),
-                    nulls: NullsId::ALWAYS0,
+                    nulls,
                 });
                 self.init_metadata(node_id, meta_id);
             }
@@ -1931,7 +1932,7 @@ impl RegexBuilder {
                 let left_nullability = inst.left.nullability(self);
                 let nulls_left = self.get_nulls_id(inst.left);
                 let nulls_right_raw = self.get_nulls_id(inst.right);
-                // gate on nulls_left having an actual rel-0 entry, not just static-ALWAYS, which can diverge for a deferred lookahead.
+                // needs a rel-0 entry in nulls_left, static ALWAYS diverges for a deferred lookahead
                 let nulls_right = if nulls_left != NullsId::EMPTY && self.mb.nb.min_rel(nulls_left) == 0 {
                     nulls_right_raw
                 } else {
@@ -2035,7 +2036,7 @@ impl RegexBuilder {
                         self.mb.nb.nulls_entry_states(rels.0),
                         self.mb.nb.nulls_entry_states(shifted.0),
                     );
-                    // la_tail shares la_body's zero-width anchor point, so it must be pinned back by the same `rels` offset
+                    // la_tail shares la_body's anchor point, pin it back by the same `rels`
                     let nulls_right = self.get_nulls_id_w_mask(inst.right, left_nullability);
                     let nulls_right_shifted = self.mb.nb.union_shifted(nulls_right, rels);
                     self.mb.nb.or_id(shifted, nulls_right_shifted)
@@ -2491,6 +2492,25 @@ impl RegexBuilder {
                 }
             }
             Kind::Lookahead if self.get_lookahead_tail(node_id).is_missing() => Ok(node_id),
+            Kind::Lookahead => {
+                let tail = self.get_lookahead_tail(node_id);
+                let (lb, rest) = if tail.is_lookbehind(self) {
+                    (tail, NodeId::EPS)
+                } else if tail.is_concat(self) && tail.left(self).is_lookbehind(self) {
+                    (tail.left(self), tail.right(self))
+                } else {
+                    return Ok(node_id);
+                };
+                let prev = self.get_lookbehind_prev(lb);
+                if prev == NodeId::MISSING {
+                    return Ok(node_id);
+                }
+                let rest = self.strip_lb_inner(allowed, rest)?;
+                let la_body = self.get_lookahead_inner(node_id);
+                let bare_la = self.mk_lookahead(la_body, NodeId::MISSING, 0);
+                let new_tail = self.mk_concat(prev, rest);
+                Ok(self.mk_concat(bare_la, new_tail))
+            }
             _ => Ok(node_id),
         }
     }
@@ -2974,6 +2994,44 @@ impl RegexBuilder {
             extra: tag,
         };
         self.get_node_id(node)
+    }
+
+    pub fn push_tag_trailing(&mut self, node: NodeId, tag: u32) -> NodeId {
+        match self.get_kind(node) {
+            Kind::Concat => {
+                let r = self.push_tag_trailing(node.right(self), tag);
+                self.mk_concat(node.left(self), r)
+            }
+            Kind::Union => {
+                let l = self.push_tag_trailing(node.left(self), tag);
+                let r = self.push_tag_trailing(node.right(self), tag);
+                self.mk_union(l, r)
+            }
+            Kind::Lookahead => {
+                let body = self.get_lookahead_inner(node);
+                let tail = self.get_lookahead_tail(node);
+                let (body, tail) = if tail.is_missing() {
+                    let t = self.mk_tag(tag);
+                    (self.mk_concat(body, t), tail)
+                } else {
+                    (body, self.push_tag_trailing(tail, tag))
+                };
+                self.remake_lookahead(node, body, tail)
+            }
+            _ => {
+                let t = self.mk_tag(tag);
+                self.mk_concat(node, t)
+            }
+        }
+    }
+
+    fn remake_lookahead(&mut self, like: NodeId, body: NodeId, tail: NodeId) -> NodeId {
+        let extra = self.get_extra(like);
+        if extra == u32::MAX {
+            self.mk_lookahead_internal(body, tail, u32::MAX)
+        } else {
+            self.mk_lookahead_nid(body, tail, NullsId(extra))
+        }
     }
 
     pub fn mk_compl(&mut self, body: NodeId) -> NodeId {
@@ -4108,7 +4166,7 @@ impl RegexBuilder {
                 }
             }
 
-            // must distribute over the union rather than folding wholesale into lookbehind's `prev`, or an unconditionally-nullable arm masks the other arm's real positional requirement
+            // distribute over the union, folding wholesale into the lookbehind's `prev` lets an always-nullable arm mask the other arm's positional requirement
             if head.is_union(self) && tail.is_lookbehind(self) {
                 let (hl, hr) = (head.left(self), head.right(self));
                 let l = self.mk_concat(hl, tail);
@@ -4172,8 +4230,17 @@ impl RegexBuilder {
                             break self.init_as(key, result);
                         }
                         (false, false) => break NodeId::BOT,
-                        (true, false) if tail.is_begin() && head_prev.is_missing() => {
-                            let commuted = self.mk_concat(NodeId::BEGIN, head);
+                        (true, false)
+                            if head_prev.is_missing()
+                                && (tail.is_begin()
+                                    || (tail.is_concat(self) && tail.left(self).is_begin())) =>
+                        {
+                            let shifted = if tail.is_begin() {
+                                head
+                            } else {
+                                self.mk_concat(head, tail.right(self))
+                            };
+                            let commuted = self.mk_concat(NodeId::BEGIN, shifted);
                             break self.init_as(key, commuted);
                         }
                         (true, false) => {
@@ -5115,8 +5182,8 @@ impl RegexBuilder {
         std::mem::take(&mut self.hit_unsupported_lb_fusion)
     }
 
-    /// True if `node` came from `attempt_rw_union_2_inner`'s `head1 == head2`
-    /// factoring, so callers can't tell a genuine external predecessor from a
+    /// true if `node` came from `attempt_rw_union_2_inner`'s `head1 == head2`
+    /// factoring, so callers cannot tell an external predecessor from a
     /// coincidental hash-cons self-merge and should treat it conservatively.
     pub fn is_merged_optional_prefix_head(&self, node: NodeId) -> bool {
         self.merged_optional_prefix_heads.contains(&node)
@@ -6261,7 +6328,7 @@ impl RegexBuilder {
             return self.mk_union(nl, nr);
         }
         // Lookbehind: never touch `inner`, only recurse into `prev`.
-        // Concat: if left is a pure anchor chain nullable at mask, recurse into right alone rather than requiring the whole Concat to qualify.
+        // Concat: if left is an anchor chain nullable at mask, recurse into right alone
         if self.get_kind(node) == Kind::Concat {
             let l = node.left(self);
             let r = node.right(self);

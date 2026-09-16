@@ -37,14 +37,10 @@ fn resharp_regex(pat: &str) -> Regex {
     Regex::with_options(pat, opts).unwrap()
 }
 
-// PCRE2 defaults to interpreted (non-JIT) execution; `jit_if_available` is
-// what any perf-sensitive pcre2 user would enable, and skipping it makes
-// pcre2 look far slower than it is (measured 2-3x+ on this machine).
-//
-// `ucp`/`utf` are both off by default in PCRE2, which would make its
-// `\s`/`\w`/`\d` classes ASCII-only while resharp runs `UnicodeMode::Full`
-// above; enable both here so both engines match the same Unicode-aware
-// language on every pattern.
+// PCRE2 defaults to interpreted execution. `jit_if_available` is what perf-sensitive users
+// enable, skipping it makes pcre2 look 2-3x slower than it is. `ucp`/`utf` are off by
+// default too, which would make `\s`/`\w`/`\d` ASCII-only while resharp runs
+// `UnicodeMode::Full`, so both are on.
 #[cfg(feature = "pcre2-bench")]
 fn pcre2_regex(pat: &str) -> pcre2::bytes::Regex {
     pcre2::bytes::RegexBuilder::new()
@@ -105,11 +101,9 @@ const VALIDATE_PATTERNS: &[(&str, &str, &str)] = &[
     ("slug", r"^[a-zA-Z0-9_-]+$", "some-slug_name-123"),
 ];
 
-// `regex` has no lookaround support, so no "regex" column below.
+// `regex` has no lookaround support, so no "regex" column.
 // (name, pattern for fancy-regex/pcre2, pattern for resharp, sample)
-//
-// RE#'s bare `_` matches any byte, so `username-no-symbols-only`'s literal
-// underscores must be escaped as `\_`.
+// RE#'s bare `_` matches any byte, so literal underscores are `\_`.
 const LOOKAROUND_VALIDATE_PATTERNS: &[(&str, &str, &str, &str)] = &[
     (
         "password-strength",

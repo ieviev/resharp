@@ -27,6 +27,8 @@ precompile-tests = []
 convergence_prefix = []
 # unstable public API: Regex::captures_all / Captures / capture_names
 experimental_capture_groups = []
+# unstable public API: RegexSet / TaggedMatch
+regex_set = []
 serialize = ["dep:serde", "dep:bincode", "resharp-algebra/serialize"]
 pcre2-bench = ["dep:pcre2"]
 
@@ -40,7 +42,7 @@ pcre2 = { version = "0.2", optional = true }
 
 [dev-dependencies]
 serde = { version = "1", features = ["derive"] }
-resharp = { path = ".", features = ["diag", "experimental_capture_groups"] }
+resharp = { path = ".", features = ["diag", "experimental_capture_groups", "regex_set"] }
 resharp-algebra.workspace = true
 resharp-parser.workspace = true
 regex-syntax = "0.8.5"

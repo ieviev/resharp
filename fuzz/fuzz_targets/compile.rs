@@ -1,11 +1,7 @@
-// `Regex::with_options` must never panic/abort/hang on an arbitrary pattern
-// under one `option_sweep()` config; Err (parse/capacity/size) is fine, only a
-// crash is a finding. Primary target for the known defect class (intersection
-// over alternation/quantifier, nullability asserts), all surfacing at compile.
-//
-// One compile per unit, one config (first byte picks it): compiling all six
-// per unit multiplied a benign sub-second compile by six under ASAN, tripping
-// libFuzzer's `-timeout=10` on patterns that aren't actually slow.
+// `Regex::with_options` must not panic/abort/hang on any pattern under one
+// `option_sweep()` config. Err is fine, a crash is a finding. one compile per unit, the
+// first byte picks the config: compiling all six per unit tripped libFuzzer's
+// `-timeout=10` under ASAN on patterns that aren't slow.
 
 #![no_main]
 

@@ -43,13 +43,20 @@ impl Nullability {
 pub struct NullState {
     pub mask: Nullability,
     pub rel: u32,
+    pub tag: u32,
 }
+
+pub const NO_TAG: u32 = u32::MAX;
+
 impl NullState {
     pub fn new(mask: Nullability, rel: u32) -> NullState {
-        NullState { mask, rel }
+        NullState { mask, rel, tag: NO_TAG }
+    }
+    pub fn tagged(mask: Nullability, rel: u32, tag: u32) -> NullState {
+        NullState { mask, rel, tag }
     }
     pub fn new0(mask: Nullability) -> NullState {
-        NullState { mask, rel: 0 }
+        Self::new(mask, 0)
     }
 
     pub fn is_center_nullable(&self) -> bool {
@@ -68,6 +75,7 @@ impl Ord for NullState {
             .rel
             .cmp(&self.rel)
             .then_with(|| self.mask.cmp(&other.mask))
+            .then_with(|| self.tag.cmp(&other.tag))
     }
 }
 impl PartialOrd for NullState {
@@ -78,26 +86,56 @@ impl PartialOrd for NullState {
 
 impl Debug for NullState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_set().entry(&self.mask).entry(&self.rel).finish()
+        let mut d = f.debug_set();
+        d.entry(&self.mask).entry(&self.rel);
+        if self.tag != NO_TAG {
+            d.entry(&format_args!("tag={}", self.tag));
+        }
+        d.finish()
     }
 }
 
-/// A `NullsId`'s value: a sorted list of maximal, non-overlapping, same-mask `[lo, hi]` runs.
+/// The runs of a `NullsId`, sorted by `(lo, tag)`. Within one tag the runs are maximal,
+/// non-overlapping and same-mask. Runs of different tags may overlap.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 struct NullRun {
     mask: Nullability,
     lo: u32,
     hi: u32,
+    tag: u32,
 }
 impl NullRun {
     fn new(mask: Nullability, lo: u32, hi: u32) -> NullRun {
+        Self::tagged(mask, lo, hi, NO_TAG)
+    }
+    fn tagged(mask: Nullability, lo: u32, hi: u32, tag: u32) -> NullRun {
         debug_assert!(lo <= hi);
         debug_assert!(mask != Nullability::NEVER);
-        NullRun { mask, lo, hi }
+        NullRun { mask, lo, hi, tag }
     }
 }
 
 type Nulls = Vec<NullRun>;
+
+fn sort_runs(runs: &mut Nulls) {
+    runs.sort_unstable_by_key(|r| (r.lo, r.tag));
+}
+
+fn tags_of<'a>(runs: impl Iterator<Item = &'a NullRun>) -> Vec<u32> {
+    let mut tags: Vec<u32> = runs.map(|r| r.tag).collect();
+    tags.sort_unstable();
+    tags.dedup();
+    tags
+}
+
+fn with_tag(runs: &Nulls, tag: u32) -> Nulls {
+    runs.iter().filter(|r| r.tag == tag).copied().collect()
+}
+
+fn same_tag(a: &Nulls, b: &Nulls) -> Option<u32> {
+    let t = a.first().or(b.first())?.tag;
+    a.iter().chain(b.iter()).all(|r| r.tag == t).then_some(t)
+}
 
 /// Append-only arena of `RunList` nodes, addressed by index instead of `Rc`.
 #[derive(Default, Clone)]
@@ -149,16 +187,16 @@ impl RunList {
             }
             Some(h) => {
                 if self.ascending {
-                    if run.mask == h.mask && run.hi + 1 == h.lo {
-                        Some(self.replace_head(arena, NullRun::new(run.mask, run.lo, h.hi), run.lo, self.max))
+                    if run.mask == h.mask && run.tag == h.tag && run.hi + 1 == h.lo {
+                        Some(self.replace_head(arena, NullRun::tagged(run.mask, run.lo, h.hi, run.tag), run.lo, self.max))
                     } else if run.hi < h.lo {
                         let idx = arena.push(run, self.head);
                         Some(RunList { head: Some(idx), ascending: true, min: run.lo, max: self.max })
                     } else {
                         None
                     }
-                } else if run.mask == h.mask && run.lo == h.hi + 1 {
-                    Some(self.replace_head(arena, NullRun::new(run.mask, h.lo, run.hi), self.min, run.hi))
+                } else if run.mask == h.mask && run.tag == h.tag && run.lo == h.hi + 1 {
+                    Some(self.replace_head(arena, NullRun::tagged(run.mask, h.lo, run.hi, run.tag), self.min, run.hi))
                 } else if run.lo > h.hi {
                     let idx = arena.push(run, self.head);
                     Some(RunList { head: Some(idx), ascending: false, min: self.min, max: run.hi })
@@ -337,40 +375,53 @@ mod runlist_tests {
 }
 
 #[inline]
-fn push_coalesced(runs: &mut Nulls, mask: Nullability, lo: u32, hi: u32) {
+fn push_coalesced(runs: &mut Nulls, mask: Nullability, lo: u32, hi: u32, tag: u32) {
     if let Some(last) = runs.last_mut() {
         debug_assert!(last.hi < lo);
+        debug_assert!(last.tag == tag);
         if last.mask == mask && last.hi + 1 == lo {
             last.hi = hi;
             return;
         }
     }
-    runs.push(NullRun::new(mask, lo, hi));
+    runs.push(NullRun::tagged(mask, lo, hi, tag));
+}
+
+/// Sorts and coalesces runs per tag.
+fn canonical(mut runs: Nulls) -> Nulls {
+    runs.sort_unstable_by_key(|r| (r.tag, r.lo));
+    let mut out: Nulls = Vec::with_capacity(runs.len());
+    let mut cur: Nulls = Vec::new();
+    for r in runs {
+        if cur.last().is_some_and(|l| l.tag != r.tag) {
+            out.append(&mut cur);
+        }
+        push_coalesced(&mut cur, r.mask, r.lo, r.hi, r.tag);
+    }
+    out.append(&mut cur);
+    sort_runs(&mut out);
+    out
 }
 
 /// Merge arbitrary (possibly duplicate-`rel`, unsorted) `NullState`s into the canonical run
-/// form, OR-ing masks at the same `rel` (safe: every reader only tests mask bits present).
+/// form, OR-ing masks at the same `(rel, tag)`.
 fn normalize_from_states(raw: &std::collections::BTreeSet<NullState>) -> Nulls {
     if raw.is_empty() {
         return Vec::new();
     }
-    let mut merged: Vec<(u32, Nullability)> = raw.iter().map(|ns| (ns.rel, ns.mask)).collect();
-    merged.sort_unstable_by_key(|&(rel, _)| rel);
-    let mut by_rel: Vec<(u32, Nullability)> = Vec::with_capacity(merged.len());
-    for (rel, mask) in merged {
+    let mut merged: Vec<(u32, u32, Nullability)> = raw.iter().map(|ns| (ns.tag, ns.rel, ns.mask)).collect();
+    merged.sort_unstable_by_key(|&(tag, rel, _)| (tag, rel));
+    let mut by_rel: Vec<(u32, u32, Nullability)> = Vec::with_capacity(merged.len());
+    for (tag, rel, mask) in merged {
         if let Some(last) = by_rel.last_mut() {
-            if last.0 == rel {
-                last.1 = last.1.or(mask);
+            if last.0 == tag && last.1 == rel {
+                last.2 = last.2.or(mask);
                 continue;
             }
         }
-        by_rel.push((rel, mask));
+        by_rel.push((tag, rel, mask));
     }
-    let mut runs: Nulls = Vec::new();
-    for (rel, mask) in by_rel {
-        push_coalesced(&mut runs, mask, rel, rel);
-    }
-    runs
+    canonical(by_rel.into_iter().map(|(tag, rel, mask)| NullRun::tagged(mask, rel, rel, tag)).collect())
 }
 
 const MAX_EXPANDED_NULL_STATES: u64 = 1_000_000;
@@ -389,17 +440,36 @@ fn expand_to_states(runs: &Nulls) -> Vec<NullState> {
     let mut out = Vec::new();
     for r in runs.iter().rev() {
         if r.hi == u32::MAX {
-            out.push(NullState::new(r.mask.or(Nullability::TAIL), r.lo));
+            out.push(NullState::tagged(r.mask.or(Nullability::TAIL), r.lo, r.tag));
             continue;
         }
         for rel in (r.lo..=r.hi).rev() {
-            out.push(NullState::new(r.mask, rel));
+            out.push(NullState::tagged(r.mask, rel, r.tag));
         }
     }
+    out.sort();
     out
 }
 
 fn or_runs(a: &Nulls, b: &Nulls) -> Nulls {
+    if a.is_empty() {
+        return b.clone();
+    }
+    if b.is_empty() {
+        return a.clone();
+    }
+    if let Some(tag) = same_tag(a, b) {
+        return or_runs_tag(a, b, tag);
+    }
+    let mut out: Nulls = Vec::new();
+    for tag in tags_of(a.iter().chain(b.iter())) {
+        out.extend(or_runs_tag(&with_tag(a, tag), &with_tag(b, tag), tag));
+    }
+    sort_runs(&mut out);
+    out
+}
+
+fn or_runs_tag(a: &Nulls, b: &Nulls, tag: u32) -> Nulls {
     if a.is_empty() {
         return b.clone();
     }
@@ -427,16 +497,37 @@ fn or_runs(a: &Nulls, b: &Nulls) -> Nulls {
             }
         }
         if mask != Nullability::NEVER {
-            push_coalesced(&mut runs, mask, lo as u32, hi as u32);
+            push_coalesced(&mut runs, mask, lo as u32, hi as u32, tag);
         }
     }
     runs
 }
 
+/// Intersects masks of same-`rel` entries. The result carries both sides' tags.
 fn and_runs(a: &Nulls, b: &Nulls) -> Nulls {
     if a.is_empty() || b.is_empty() {
         return Vec::new();
     }
+    if let Some(tag) = same_tag(a, b) {
+        return and_runs_tag(a, b, tag);
+    }
+    let mut out: Nulls = Vec::new();
+    for ta in tags_of(a.iter()) {
+        let ra = with_tag(a, ta);
+        for tb in tags_of(b.iter()) {
+            let rb = with_tag(b, tb);
+            let both = and_runs_tag(&ra, &rb, ta);
+            if tb != ta {
+                let retagged = both.iter().map(|r| NullRun::tagged(r.mask, r.lo, r.hi, tb)).collect();
+                out = or_runs(&out, &retagged);
+            }
+            out = or_runs(&out, &both);
+        }
+    }
+    out
+}
+
+fn and_runs_tag(a: &Nulls, b: &Nulls, tag: u32) -> Nulls {
     let mut bounds: Vec<u64> = Vec::with_capacity((a.len() + b.len()) * 2);
     for r in a.iter().chain(b.iter()) {
         bounds.push(r.lo as u64);
@@ -456,7 +547,7 @@ fn and_runs(a: &Nulls, b: &Nulls) -> Nulls {
         if let (Some(ma), Some(mb)) = (ma, mb) {
             let mask = ma.and(mb);
             if mask != Nullability::NEVER {
-                push_coalesced(&mut runs, mask, lo as u32, hi as u32);
+                push_coalesced(&mut runs, mask, lo as u32, hi as u32, tag);
             }
         }
     }
@@ -464,18 +555,18 @@ fn and_runs(a: &Nulls, b: &Nulls) -> Nulls {
 }
 
 fn and_mask_runs(a: &Nulls, mask: Nullability) -> Nulls {
-    let mut runs: Nulls = Vec::new();
-    for r in a {
-        let m = r.mask.and(mask);
-        if m != Nullability::NEVER {
-            push_coalesced(&mut runs, m, r.lo, r.hi);
-        }
-    }
-    runs
+    canonical(
+        a.iter()
+            .filter_map(|r| {
+                let m = r.mask.and(mask);
+                (m != Nullability::NEVER).then(|| NullRun::tagged(m, r.lo, r.hi, r.tag))
+            })
+            .collect(),
+    )
 }
 
 fn add_rel_runs(a: &Nulls, rel: u32) -> Nulls {
-    a.iter().map(|r| NullRun::new(r.mask, r.lo + rel, r.hi + rel)).collect()
+    a.iter().map(|r| NullRun::tagged(r.mask, r.lo + rel, r.hi + rel, r.tag)).collect()
 }
 
 /// Merges sorted, same-mask, possibly-overlapping runs into non-overlapping ones, one linear pass.
@@ -501,7 +592,7 @@ fn union_shifted_runs(body: &Nulls, shifts: &Nulls) -> Nulls {
     for br in body {
         let shifted: Vec<NullRun> = shifts
             .iter()
-            .map(|sr| NullRun::new(br.mask, br.lo + sr.lo, br.hi + sr.hi))
+            .map(|sr| NullRun::tagged(br.mask, br.lo + sr.lo, br.hi + sr.hi, br.tag))
             .collect();
         let merged = merge_overlapping_same_mask(shifted);
         result = or_runs(&result, &merged);
@@ -809,7 +900,7 @@ impl NullsBuilder {
                 .map(|r| NullRun::new(r.mask, r.lo + offset, r.hi + offset));
         }
         match self.array[root.0 as usize].as_slice() {
-            [only] => Some(NullRun::new(only.mask, only.lo + offset, only.hi + offset)),
+            [only] => Some(NullRun::tagged(only.mask, only.lo + offset, only.hi + offset, only.tag)),
             _ => None,
         }
     }
@@ -849,12 +940,13 @@ impl NullsBuilder {
         if let Some(list) = &self.run_list_of[set_id.0 as usize] {
             return list.max;
         }
+        let max_hi = |runs: &Nulls| runs.iter().map(|r| r.hi).max().unwrap_or(0);
         match self.shift_of[set_id.0 as usize] {
             Some((root, offset)) => match &self.run_list_of[root.0 as usize] {
                 Some(list) => list.max + offset,
-                None => self.array[root.0 as usize].last().map_or(0, |r| r.hi) + offset,
+                None => max_hi(&self.array[root.0 as usize]) + offset,
             },
-            None => self.array[set_id.0 as usize].last().map_or(0, |r| r.hi),
+            None => max_hi(&self.array[set_id.0 as usize]),
         }
     }
 
@@ -889,6 +981,11 @@ impl NullsBuilder {
     /// Intern a single contiguous `[lo, hi]` run directly, O(1).
     pub fn single_run(&mut self, mask: Nullability, lo: u32, hi: u32) -> NullsId {
         self.get_runs_id(vec![NullRun::new(mask, lo, hi)])
+    }
+
+    /// The nulls of a `Kind::Tag` node, always nullable at rel 0 with label `tag`.
+    pub fn tag_run(&mut self, tag: u32) -> NullsId {
+        self.get_runs_id(vec![NullRun::tagged(Nullability::ALWAYS, 0, 0, tag)])
     }
 
     #[inline]
@@ -1015,13 +1112,14 @@ impl NullsBuilder {
             return self.or_id(NullsId::CENTER0, NullsId::BEGIN0);
         }
         let runs = self.get_set_ref(set_id).clone();
-        let mut result: Nulls = Vec::new();
-        for r in &runs {
-            let not_mask = Nullability::ALWAYS.and(r.mask.not());
-            if not_mask != Nullability::NEVER {
-                push_coalesced(&mut result, not_mask, r.lo, r.hi);
-            }
-        }
+        let result = canonical(
+            runs.iter()
+                .filter_map(|r| {
+                    let not_mask = Nullability::ALWAYS.and(r.mask.not());
+                    (not_mask != Nullability::NEVER).then(|| NullRun::tagged(not_mask, r.lo, r.hi, r.tag))
+                })
+                .collect(),
+        );
         self.get_runs_id(result)
     }
 

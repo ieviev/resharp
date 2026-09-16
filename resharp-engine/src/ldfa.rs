@@ -35,6 +35,18 @@ fn found(pos: usize) -> Option<usize> {
 }
 
 #[inline(always)]
+pub(crate) fn context_at(pos: usize, len: usize) -> Nullability {
+    if len == 0 {
+        Nullability::EMPTYSTRING
+    } else if pos == 0 {
+        Nullability::BEGIN
+    } else if pos == len {
+        Nullability::END
+    } else {
+        Nullability::CENTER
+    }
+}
+
 fn center_or_end(at_end: bool) -> Nullability {
     if at_end { Nullability::END } else { Nullability::CENTER }
 }
@@ -153,17 +165,7 @@ fn skip_is_profitable(bytes: &[u8]) -> bool {
         .iter()
         .map(|&b| crate::simd::BYTE_FREQ[b as usize] as u32)
         .sum();
-    if freq_sum < SKIP_FREQ_THRESHOLD {
-        return true;
-    }
-    if bytes.len() > 128 {
-        let complement_freq: u32 = (0u32..256)
-            .filter(|&b| !bytes.contains(&(b as u8)))
-            .map(|b| crate::simd::BYTE_FREQ[b as usize] as u32)
-            .sum();
-        return complement_freq < SKIP_FREQ_THRESHOLD;
-    }
-    false
+    freq_sum < SKIP_FREQ_THRESHOLD
 }
 #[cfg_attr(feature = "serialize", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serialize", allow(missing_docs))]
@@ -1174,16 +1176,7 @@ impl LDFA {
         debug_assert!(hi <= data.len());
         debug_assert!(pos_begin <= hi);
         let len = data.len();
-        let ctx = if len == 0 {
-            Nullability::EMPTYSTRING
-        } else if pos_begin == 0 {
-            Nullability::BEGIN
-        } else if pos_begin == len {
-            Nullability::END
-        } else {
-            Nullability::CENTER
-        };
-        self.collect_initial_nulls(pos_begin, ctx, out);
+        self.collect_initial_nulls(pos_begin, context_at(pos_begin, len), out);
         if pos_begin >= hi || pos_begin >= len {
             return Ok(());
         }

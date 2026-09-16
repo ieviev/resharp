@@ -171,6 +171,10 @@ impl Regex {
             );
 
         let inner = &mut *self.inner.lock().unwrap();
+        #[cfg(feature = "regex_set")]
+        if inner.set.is_some() {
+            return Err(Error::Serialize("a RegexSet member's tag state is not supported by dump/load".into()));
+        }
         if uses_fwd {
             precompile_ldfa(&mut inner.fwd, &mut inner.b)?;
         }
@@ -299,6 +303,8 @@ impl Regex {
                 bounded: dump.bounded,
                 fas: None,
                 lb_verify: dump.lb_verify,
+                #[cfg(feature = "regex_set")]
+                set: None,
                 capture_root: NodeId::MISSING,
                 skeleton: None,
                 capture_dfa: crate::pparse::PosixParser::new(0),

@@ -1,9 +1,6 @@
-// Differential `is_match` against `regex`, over the subset where the two
-// share semantics (see `DiffPattern`); a disagreement is a finding (almost
-// always in resharp -- `regex` is the more battle-tested oracle). Only
-// existence is compared, not offsets: resharp is leftmost-longest vs regex's
-// leftmost-greedy, so positions may differ while `is_match` must not. Both
-// run byte-oriented (`UnicodeMode::Ascii` / `.unicode(false)`).
+// differential `is_match` against `regex` over the shared-semantics subset (`DiffPattern`).
+// a disagreement is a finding, almost always in resharp. only existence is compared,
+// offsets differ between leftmost-longest and leftmost-greedy. both run byte-oriented.
 
 #![no_main]
 

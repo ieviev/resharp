@@ -59,6 +59,10 @@ pub(crate) mod fwd;
 pub(crate) mod ismatch;
 pub(crate) mod prefix;
 pub(crate) mod scan;
+#[cfg(feature = "regex_set")]
+pub(crate) mod set;
+#[cfg(feature = "regex_set")]
+pub use set::{RegexSet, TaggedMatch};
 
 #[cfg(feature = "stream")]
 pub(crate) mod stream;
@@ -128,6 +132,9 @@ pub enum Error {
     Serialize(String),
     /// internal invariant violated; indicates a bug in the engine.
     InternalError(&'static str),
+    /// the `RegexSet` member at this index is not usable inside a set.
+    #[cfg(feature = "regex_set")]
+    SetMember(usize, &'static str),
 }
 
 impl std::fmt::Display for Error {
@@ -139,6 +146,8 @@ impl std::fmt::Display for Error {
             Error::PatternTooLarge => write!(f, "pattern too large"),
             Error::Serialize(ref s) => write!(f, "serialization error: {}", s),
             Error::InternalError(msg) => write!(f, "internal error: {}", msg),
+            #[cfg(feature = "regex_set")]
+            Error::SetMember(i, msg) => write!(f, "set member {}: {}", i, msg),
         }
     }
 }
@@ -152,6 +161,8 @@ impl std::error::Error for Error {
             Error::PatternTooLarge => None,
             Error::Serialize(_) => None,
             Error::InternalError(_) => None,
+            #[cfg(feature = "regex_set")]
+            Error::SetMember(..) => None,
         }
     }
 }
@@ -185,10 +196,9 @@ pub enum UnicodeMode {
     Javascript,
 }
 
-/// Regex configuration, passed to [`Regex::with_options`].
+/// regex configuration, passed to [`Regex::with_options`].
 ///
-/// all options have sensible defaults via [`Default`]. use the builder
-/// methods to override:
+/// defaults via [`Default`], override with the builder methods:
 ///
 /// ```
 /// use resharp::{RegexOptions, UnicodeMode};
@@ -363,6 +373,8 @@ pub(crate) struct RegexInner {
     pub(crate) bounded: Option<bdfa::BDFA>,
     pub(crate) fas: Option<fas::FwdDFA>,
     pub(crate) lb_verify: Option<ldfa::LDFA>,
+    #[cfg(feature = "regex_set")]
+    pub(crate) set: Option<set::SetState>,
     #[cfg_attr(not(feature = "experimental_capture_groups"), allow(dead_code))]
     pub(crate) capture_root: NodeId,
     #[cfg_attr(not(feature = "experimental_capture_groups"), allow(dead_code))]
@@ -1200,13 +1212,52 @@ fn ensure_begin_leading(
     }
 }
 
+fn pattern_flags(opts: &RegexOptions) -> resharp_parser::PatternFlags {
+    resharp_parser::PatternFlags {
+        unicode: opts.unicode != UnicodeMode::Ascii,
+        full_unicode: opts.unicode == UnicodeMode::Full,
+        ascii_perl_classes: opts.unicode == UnicodeMode::Javascript,
+        case_insensitive: opts.case_insensitive,
+        dot_matches_new_line: opts.dot_matches_new_line,
+        multiline: opts.multiline,
+        ignore_whitespace: opts.ignore_whitespace,
+        #[cfg(feature = "experimental_capture_groups")]
+        implicit_captures: opts.implicit_captures,
+        #[cfg(not(feature = "experimental_capture_groups"))]
+        implicit_captures: false,
+        expanded_ast_limit: if opts.unbounded_size {
+            u64::MAX
+        } else {
+            resharp_parser::DEFAULT_EXPANDED_AST_LIMIT
+        },
+        max_list_len: if opts.unbounded_size {
+            usize::MAX
+        } else {
+            resharp_parser::DEFAULT_MAX_LIST_LEN
+        },
+        max_repeat: if opts.unbounded_size {
+            u32::MAX
+        } else {
+            resharp_parser::DEFAULT_MAX_REPEAT
+        },
+        max_depth: if opts.unbounded_size {
+            usize::MAX
+        } else {
+            resharp_parser::DEFAULT_MAX_DEPTH
+        },
+    }
+}
+
 fn ensure_supported(
     b: &mut RegexBuilder,
     node: NodeId,
     group_names: &[Option<String>],
+    set_tags: bool,
 ) -> Result<Option<Compatibility>, resharp_algebra::ResharpError> {
     ensure_begin_leading(b, node, true, &mut std::collections::HashSet::new())?;
-    captures::ensure_captures_supported(b, node, group_names)?;
+    if !set_tags {
+        captures::ensure_captures_supported(b, node, group_names)?;
+    }
     ensure_supported_rec(b, node, true, true, &mut std::collections::HashSet::new())
 }
 
@@ -1234,48 +1285,21 @@ impl Regex {
     pub fn with_options(pattern: &str, opts: RegexOptions) -> Result<Regex, Error> {
         let mut b = RegexBuilder::new();
         b.lookahead_context_max = opts.lookahead_context_max;
-        let pflags = resharp_parser::PatternFlags {
-            unicode: opts.unicode != UnicodeMode::Ascii,
-            full_unicode: opts.unicode == UnicodeMode::Full,
-            ascii_perl_classes: opts.unicode == UnicodeMode::Javascript,
-            case_insensitive: opts.case_insensitive,
-            dot_matches_new_line: opts.dot_matches_new_line,
-            multiline: opts.multiline,
-            ignore_whitespace: opts.ignore_whitespace,
-            #[cfg(feature = "experimental_capture_groups")]
-            implicit_captures: opts.implicit_captures,
-            #[cfg(not(feature = "experimental_capture_groups"))]
-            implicit_captures: false,
-            expanded_ast_limit: if opts.unbounded_size {
-                u64::MAX
-            } else {
-                resharp_parser::DEFAULT_EXPANDED_AST_LIMIT
-            },
-            max_list_len: if opts.unbounded_size {
-                usize::MAX
-            } else {
-                resharp_parser::DEFAULT_MAX_LIST_LEN
-            },
-            max_repeat: if opts.unbounded_size {
-                u32::MAX
-            } else {
-                resharp_parser::DEFAULT_MAX_REPEAT
-            },
-            max_depth: if opts.unbounded_size {
-                usize::MAX
-            } else {
-                resharp_parser::DEFAULT_MAX_DEPTH
-            },
-        };
+        let pflags = pattern_flags(&opts);
         let (node, group_names, skeleton) =
             resharp_parser::parse_ast_with_names_and_skeleton(&mut b, pattern, &pflags)?;
-        Self::from_node_inner(b, node, opts, pattern.len(), group_names, skeleton)
+        Self::from_node_inner(b, node, opts, pattern.len(), group_names, skeleton, false)
     }
 
     /// build from a pre-constructed AST node.
     #[doc(hidden)]
     pub fn from_node(b: RegexBuilder, node: NodeId, opts: RegexOptions) -> Result<Regex, Error> {
-        Self::from_node_inner(b, node, opts, 0, Vec::new(), None)
+        Self::from_node_inner(b, node, opts, 0, Vec::new(), None, false)
+    }
+
+    #[cfg(feature = "regex_set")]
+    pub(crate) fn from_set_node(b: RegexBuilder, node: NodeId, opts: RegexOptions) -> Result<Regex, Error> {
+        Self::from_node_inner(b, node, opts, 0, Vec::new(), None, true)
     }
 
     fn from_node_inner(
@@ -1285,6 +1309,7 @@ impl Regex {
         pattern_len: usize,
         group_names: Vec<Option<String>>,
         skeleton: Option<resharp_parser::Skeleton>,
+        set_tags: bool,
     ) -> Result<Regex, Error> {
         // sanity check
         let node_limit = if opts.unbounded_size {
@@ -1295,7 +1320,7 @@ impl Regex {
         if b.tree_size(node, node_limit) >= node_limit {
             return Err(Error::PatternTooLarge);
         }
-        let _compatibility = ensure_supported(&mut b, node, &group_names)?;
+        let _compatibility = ensure_supported(&mut b, node, &group_names, set_tags)?;
 
         let empty_nullable = b
             .nullability_emptystring(node)
@@ -1596,6 +1621,8 @@ impl Regex {
                 bounded,
                 fas,
                 lb_verify,
+                #[cfg(feature = "regex_set")]
+                set: None,
                 #[cfg(feature = "convergence_prefix")]
                 conv_b,
                 capture_root: node_fwd_simpl,
@@ -1654,6 +1681,97 @@ impl Regex {
     pub fn dfa_stats(&self) -> (usize, usize) {
         let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         (inner.fwd.state_nodes.len(), inner.rev_ts.state_nodes.len())
+    }
+
+    #[cfg(feature = "diag")]
+    #[allow(missing_docs)]
+    pub fn fwd_dot(&self) -> Result<String, Error> {
+        use crate::ldfa::{DFA_DEAD, DFA_INITIAL};
+        let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let RegexInner { ref mut b, ref mut fwd, .. } = *inner;
+        let num_mt = fwd.minterms.len();
+        let mut edges: Vec<(u16, u16, Vec<u8>)> = Vec::new();
+        let mut order = vec![DFA_INITIAL];
+        let mut i = 0;
+        while i < order.len() {
+            let s = order[i];
+            i += 1;
+            let mut by_target: Vec<(u16, Vec<u8>)> = Vec::new();
+            for byte in 0..=255u8 {
+                let mt = fwd.mt_lookup[byte as usize] as u32;
+                if mt as usize >= num_mt {
+                    continue;
+                }
+                let t = fwd.lazy_transition(b, s, mt)?;
+                if t == DFA_DEAD {
+                    continue;
+                }
+                match by_target.iter_mut().find(|(x, _)| *x == t) {
+                    Some((_, bs)) => bs.push(byte),
+                    None => by_target.push((t, vec![byte])),
+                }
+            }
+            for (t, bs) in by_target {
+                if !order.contains(&t) {
+                    order.push(t);
+                }
+                edges.push((s, t, bs));
+            }
+        }
+        let name = |s: u16| order.iter().position(|&x| x == s).unwrap();
+        let mut out = String::from("digraph G {\n  rankdir=LR;\n  node [shape=circle];\n");
+        for &s in &order {
+            let node = fwd.state_nodes[s as usize];
+            let shape = if b.nullability(node).0 != 0 { "doublecircle" } else { "circle" };
+            let tags: Vec<String> = fwd.effects[fwd.effects_id[s as usize] as usize]
+                .iter()
+                .filter(|n| n.tag != resharp_algebra::nulls::NO_TAG && n.rel == 0)
+                .map(|n| n.tag.to_string())
+                .collect();
+            let tags = if tags.is_empty() { String::new() } else { format!(", tags=\"{}\"", tags.join(",")) };
+            out += &format!("  {} [shape={shape}, label=\"{}\"{tags}];\n", name(s), b.pp(node).replace('"', "\\\""));
+        }
+        for (s, t, bs) in edges {
+            let label: String = if bs.len() > 200 {
+                "_".to_string()
+            } else {
+                let mut parts = Vec::new();
+                let mut j = 0;
+                while j < bs.len() {
+                    let mut k = j;
+                    while k + 1 < bs.len() && bs[k + 1] == bs[k] + 1 {
+                        k += 1;
+                    }
+                    let esc = |c: u8| if c.is_ascii_graphic() { (c as char).to_string() } else { format!("\\\\x{c:02x}") };
+                    parts.push(if k > j + 1 { format!("{}-{}", esc(bs[j]), esc(bs[k])) } else if k == j + 1 { format!("{}{}", esc(bs[j]), esc(bs[k])) } else { esc(bs[j]) });
+                    j = k + 1;
+                }
+                let s = parts.join("");
+                if parts.len() > 1 || s.contains('-') { format!("[{s}]") } else { s }
+            };
+            out += &format!("  {} -> {} [label=\"{label}\"];\n", name(s), name(t));
+        }
+        out += "}\n";
+        Ok(out)
+    }
+
+    #[cfg(feature = "diag")]
+    #[allow(missing_docs)]
+    pub fn rev_skippers_debug(&self) -> Vec<String> {
+        let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        inner
+            .rev_ts
+            .skip_searchers
+            .iter()
+            .map(|s| match s {
+                crate::accel::Skipper::State(crate::accel::MintermSearchValue::Exact(_)) => "Exact".to_string(),
+                crate::accel::Skipper::State(crate::accel::MintermSearchValue::Range(r)) => format!("Range{:?}", r.ranges()),
+                crate::accel::Skipper::State(crate::accel::MintermSearchValue::SeqOffset(_)) => "SeqOffset".to_string(),
+                crate::accel::Skipper::State(crate::accel::MintermSearchValue::All) => "All".to_string(),
+                crate::accel::Skipper::Prefix(_) => "Prefix".to_string(),
+                crate::accel::Skipper::Inner { .. } => "Inner".to_string(),
+            })
+            .collect()
     }
 
     #[cfg(feature = "diag")]
@@ -1809,7 +1927,7 @@ impl Regex {
         }
     }
 
-    /// Capture groups of every [`Regex::find_all`] match, in the same order.
+    /// capture groups of every [`Regex::find_all`] match, in the same order.
     ///
     /// ```
     /// let re = resharp::Regex::new(r"(?<user>[a-z]+)@(?<host>[a-z.]+)").unwrap();
@@ -1873,7 +1991,7 @@ impl Regex {
         pparse::extract_captures(b, capture_dfa, capture_root, skeleton.as_ref(), input, begin, end)
     }
 
-    /// Group names, indexed like [`Captures`]. `None` for entry 0 and for
+    /// group names, indexed like [`Captures`]. `None` for entry 0 and for
     /// unnamed captures.
     ///
     /// ```

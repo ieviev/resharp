@@ -454,6 +454,18 @@ input = "FOObaz BARbaz foobaz FOOBAZ"
 matches = [[0, 6], [7, 13], [14, 20]]
 
 [[test]]
+name = "inline_flag_set_in_noncapturing_group_does_not_leak_past_alternation"
+pattern = '(?:(?i)abc)|a'
+input = "A"
+matches = []
+
+[[test]]
+name = "inline_flag_set_in_capturing_group_does_not_leak_past_alternation"
+pattern = '((?i)abc)|a'
+input = "A"
+matches = []
+
+[[test]]
 name = "ci_scoped_class"
 pattern = '(?i:[a-f])+g'
 input = "ABCDEFg abcdefg ABCDEfG"
