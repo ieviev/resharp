@@ -9861,3 +9861,22 @@ fn convergence_prefix_is_match_no_quadratic() {
         "expected roughly linear scaling, got {ratio}x for 16x input (small={small_elapsed}s large={large_elapsed}s)"
     );
 }
+
+#[test]
+fn algebra_simplify_is_language_preserving_and_smaller() {
+    let cases: &[(&str, &str)] = &[
+        ("7[26]|8[048]|0[48]|4[048]|2[048]|1[26]|3[26]|9[26]|5[26]|6[048]", "(0[48]|[13579][26]|[2468][048])"),
+        ("[a-z]+|[a-z]{2}", "[a-z]+"),
+        ("(abc|abd)&_*b_*", "ab[cd]"),
+        ("x(ab|cb)|x(a|c)d", "x[ac][bd]"),
+    ];
+    for &(pat, want) in cases {
+        let mut b = resharp_algebra::RegexBuilder::new();
+        let node = resharp_parser::parse_ast(&mut b, pat).unwrap();
+        let simpl = b.simplify(node);
+        assert_eq!(b.pp(simpl), want, "pattern={pat}");
+        assert_eq!(b.subsumes(node, simpl), Some(true), "pattern={pat}");
+        assert_eq!(b.subsumes(simpl, node), Some(true), "pattern={pat}");
+        assert!(b.tree_size(simpl, 9999) < b.tree_size(node, 9999), "pattern={pat}");
+    }
+}

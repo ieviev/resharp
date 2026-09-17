@@ -22,6 +22,7 @@ pub mod solver;
 
 const IS_EMPTY_LANG_NODE_BUDGET: usize = 10_000;
 const IS_EMPTY_LANG_CREATION_BUDGET: u32 = 100_000;
+const SIMPLIFY_UNION_SUBSUME_MAX: usize = 4;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ResharpError {
@@ -6542,5 +6543,145 @@ impl RegexBuilder {
         let nota = self.mk_compl(larger_lang);
         let diff = self.mk_inter(smaller_lang, nota);
         self.is_empty_lang(diff)
+    }
+
+    /// `Some(true)` if `L(node)` === `L(_*)`, `None` when the check runs out of budget
+    pub fn is_full_lang(&mut self, node: NodeId) -> Option<bool> {
+        let compl = self.mk_compl(node);
+        self.is_empty_lang(compl)
+    }
+
+    /// node simplification preserving the language. expensive, but useful 
+    /// for crunching large patterns down to a more manageable size.
+    pub fn simplify(&mut self, node_id: NodeId) -> NodeId {
+        let mut memo: FxHashMap<NodeId, NodeId> = FxHashMap::default();
+        self.simplify_rec(node_id, &mut memo)
+    }
+
+    /// `aX|bX|Y` -> `(a|b)X|Y`
+    fn factor_union_tails(&mut self, union: NodeId, memo: &mut FxHashMap<NodeId, NodeId>) -> NodeId {
+        if !union.is_union(self) {
+            return union;
+        }
+        let mut arms: Vec<NodeId> = Vec::new();
+        self.iter_unions_b(union, &mut |_, arm| arms.push(arm));
+        let mut by_tail: FxHashMap<NodeId, Vec<NodeId>> = FxHashMap::default();
+        for &arm in &arms {
+            if arm.is_concat(self) {
+                by_tail.entry(arm.right(self)).or_default().push(arm.left(self));
+            }
+        }
+        if by_tail.values().all(|heads| heads.len() < 2) {
+            return union;
+        }
+        let mut out: Vec<NodeId> = Vec::new();
+        for &arm in &arms {
+            if arm.is_concat(self) {
+                let tail = arm.right(self);
+                let Some(heads) = by_tail.remove(&tail) else { continue };
+                if heads.len() == 1 {
+                    out.push(arm);
+                } else {
+                    let head = self.mk_unions(heads.into_iter());
+                    let head = self.simplify_rec(head, memo);
+                    out.push(self.mk_concat(head, tail));
+                }
+            } else {
+                out.push(arm);
+            }
+        }
+        let rw = self.mk_unions(out.into_iter());
+        self.simplify_rec(rw, memo)
+    }
+
+    fn simplify_rec(&mut self, node_id: NodeId, memo: &mut FxHashMap<NodeId, NodeId>) -> NodeId {
+        if let Some(&v) = memo.get(&node_id) {
+            return v;
+        }
+        let rw = match self.get_kind(node_id) {
+            Kind::Pred | Kind::Begin | Kind::End | Kind::Tag | Kind::Ordered => node_id,
+            Kind::Lookahead | Kind::Lookbehind => node_id,
+            Kind::Compl => {
+                let body = self.simplify_rec(node_id.left(self), memo);
+                self.mk_compl(body)
+            }
+            Kind::Concat => {
+                let head = self.simplify_rec(node_id.left(self), memo);
+                let tail = self.simplify_rec(node_id.right(self), memo);
+                self.mk_concat(head, tail)
+            }
+            Kind::Star => {
+                let body = self.simplify_rec(node_id.left(self), memo);
+                self.mk_star(body)
+            }
+            Kind::Union => {
+                let mut children: Vec<NodeId> = Vec::new();
+                self.iter_unions_b(node_id, &mut |_, child| children.push(child));
+                if children.len() > SIMPLIFY_UNION_SUBSUME_MAX {
+                    let mut cleaned = NodeId::BOT;
+                    for &child in &children {
+                        let c = self.simplify_rec(child, memo);
+                        cleaned = self.mk_union(cleaned, c);
+                    }
+                    self.factor_union_tails(cleaned, memo)
+                } else if self.subsumes(node_id.left(self), node_id.right(self)) == Some(true) {
+                    self.simplify_rec(node_id.left(self), memo)
+                } else if self.subsumes(node_id.right(self), node_id.left(self)) == Some(true) {
+                    self.simplify_rec(node_id.right(self), memo)
+                } else {
+                    let mut others: BTreeSet<NodeId> = children.iter().copied().collect();
+                    let mut cleaned = NodeId::BOT;
+                    for &child in &children {
+                        let c = self.simplify_rec(child, memo);
+                        if c == NodeId::BOT {
+                            others.remove(&child);
+                            continue;
+                        }
+                        others.remove(&child);
+                        let rest = self.mk_unions(others.iter().copied());
+                        if self.subsumes(rest, node_id) == Some(true) {
+                            continue;
+                        }
+                        others.insert(c);
+                        cleaned = self.mk_union(cleaned, c);
+                    }
+                    let cleaned = self.factor_union_tails(cleaned, memo);
+                    if self.is_full_lang(cleaned) == Some(true) {
+                        NodeId::TS
+                    } else {
+                        cleaned
+                    }
+                }
+            }
+            Kind::Inter => {
+                let left = node_id.left(self);
+                let right = node_id.right(self);
+                if self.subsumes(left, right) == Some(true) {
+                    self.simplify_rec(right, memo)
+                } else if self.subsumes(right, left) == Some(true) {
+                    self.simplify_rec(left, memo)
+                } else if self.is_empty_lang(node_id) == Some(true) {
+                    NodeId::BOT
+                } else {
+                    let mut children: Vec<NodeId> = Vec::new();
+                    node_id.iter_inter(self, &mut |_, child| children.push(child));
+                    let mut others: BTreeSet<NodeId> = children.iter().copied().collect();
+                    let mut cleaned = NodeId::TS;
+                    for &child in &children {
+                        others.remove(&child);
+                        let rest = self.mk_inters(others.iter().copied());
+                        if self.subsumes(child, rest) == Some(true) {
+                            continue;
+                        }
+                        let c = self.simplify_rec(child, memo);
+                        others.insert(c);
+                        cleaned = self.mk_inter(cleaned, c);
+                    }
+                    cleaned
+                }
+            }
+        };
+        memo.insert(node_id, rw);
+        rw
     }
 }
