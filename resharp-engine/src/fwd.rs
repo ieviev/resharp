@@ -49,15 +49,13 @@ fn fwd_prefix_impl(
     {
         let mt = fwd.mt_lookup[input[0] as usize];
         let state = fwd.begin_table[mt as usize] as u32;
-        if state != fwd.pruned as u32 {
-            if let Some(max_end) = fwd.scan_fwd_from(b, state, 1, input)? {
-                if max_end > 0 {
-                    matches.push(Match {
-                        start: 0,
-                        end: max_end,
-                    });
-                    search_start = max_end;
-                }
+        if let Some(max_end) = fwd.scan_fwd_from(b, state, 1, input)? {
+            if max_end > 0 {
+                matches.push(Match {
+                    start: 0,
+                    end: max_end,
+                });
+                search_start = max_end;
             }
         }
     }

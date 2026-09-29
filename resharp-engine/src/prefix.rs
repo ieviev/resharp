@@ -1522,7 +1522,8 @@ fn select_prefix_simd(
 
     if fwd_wins || no_fwd_prefix {
         if let Some(kind) = fwd_candidate {
-            return Ok((Some(kind), None, fwd_wins, fwd_cost, rev_stripped));
+            let skip = if hardened { try_rev(b).map(|(_, s)| s) } else { None };
+            return Ok((Some(kind), skip, fwd_wins, fwd_cost, rev_stripped));
         }
     }
     if let Some((kind, s)) = try_rev(b) {
@@ -1674,7 +1675,7 @@ fn try_build_fwd_lb(
     #[cfg(feature = "debug")]
     eprintln!("  [try_build_fwd_lb] node={:?}", b.pp(node));
     let body = strip_leading_lookbehind(b, node);
-    if body == node || node.right(b) != body {
+    if body == node || node.right(b) != body || body.contains_lookbehind(b) {
         return Ok(None);
     }
     let lb = node.left(b);

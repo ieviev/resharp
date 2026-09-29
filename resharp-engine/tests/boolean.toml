@@ -340,3 +340,21 @@ pattern = "x(?:a|b&c)y"
 ascii = true
 input = "xay"
 matches = [[0, 3]]
+
+[[test]]
+name = "case_insensitive_negated_class_excludes_whole_fold_class"
+pattern = '(?i)[^\u{17F}]'
+input = "sSſx"
+matches = [[4, 5]]
+
+[[test]]
+name = "case_insensitive_intersection_with_negated_fold_class_is_empty"
+pattern = '(?i)(?:s&[^\u{17F}])'
+input = "sSſ"
+matches = []
+
+[[test]]
+name = "case_insensitive_intersection_with_case_sensitive_negated_class"
+pattern = '(?i)(?:s&(?-i:[^\u{17F}]))'
+input = "sSſ"
+matches = [[0, 1], [1, 2]]

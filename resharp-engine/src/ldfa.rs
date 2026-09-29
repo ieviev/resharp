@@ -1034,17 +1034,9 @@ impl LDFA {
                 }
             }
             _ => {
+                let ctx = center_or_end(pos == len);
                 for n in &self.effects[eid as usize] {
                     let Some(e) = pos.checked_sub(n.rel as usize) else { continue };
-                    let ctx = if len == 0 {
-                        Nullability::EMPTYSTRING
-                    } else if e == 0 {
-                        Nullability::BEGIN
-                    } else if e == len {
-                        Nullability::END
-                    } else {
-                        Nullability::CENTER
-                    };
                     if n.mask.has(ctx) {
                         out.push(e);
                     }

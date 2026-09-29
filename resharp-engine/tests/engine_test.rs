@@ -326,6 +326,7 @@ fn is_match_and_find_anchored_agree_with_find_all() {
         "anchors.toml",
         "basic.toml",
         "boolean.toml",
+        "convergence.toml",
         "cross_feature.toml",
         "date_pattern.toml",
         "edge_cases.toml",
@@ -818,6 +819,22 @@ fn space_newline_space() {
             mbps
         );
     }
+}
+
+fn check_equiv(a: &str, b: &str) -> bool {
+    let mut bld = resharp_algebra::RegexBuilder::new();
+    let na = resharp_parser::parse_ast(&mut bld, a).unwrap();
+    let nb = resharp_parser::parse_ast(&mut bld, b).unwrap();
+    bld.is_equiv(na, nb).unwrap()
+}
+
+#[test]
+fn is_equiv_decides_language_equality() {
+    assert!(check_equiv("a(b|c)*d", "a(b|c)*d"));
+    assert!(check_equiv("(a|b)c", "ac|bc"));
+    assert!(check_equiv("(a|b)*", "a*(ba*)*"));
+    assert!(!check_equiv("ab*", "a*b"));
+    assert!(!check_equiv("a*", "aa*"));
 }
 
 fn extract_prefix(pattern: &str) -> Vec<u8> {
@@ -9528,6 +9545,7 @@ fn zero_width_assertion_in_nested_capture_agrees_with_its_tag_free_equivalent() 
         r"(?P<g2>(?P<g1>(?<!a))?)",
         r"(?P<g2>(?P<g1>(?<=ab))?)",
         r"(?P<g1>(?<=a))",
+        r"(?P<g2>(?P<g1>(?=a))?)$",
     ];
     let inputs: [&[u8]; 12] = [b"", b"a", b"b", b"ab", b"ba", b"aab", b"xay", b"abab", b"xaby", b":", b"xb:", b"-b:"];
     let modes = [UnicodeMode::Ascii, UnicodeMode::Default, UnicodeMode::Full, UnicodeMode::Javascript];
@@ -9554,18 +9572,6 @@ fn zero_width_assertion_in_nested_capture_agrees_with_its_tag_free_equivalent() 
         }
     }
     assert_eq!(checked, pats.len() * modes.len() * inputs.len());
-
-    for p in [r"(?P<g2>(?P<g1>(?=a))?)$"] {
-        for mode in modes {
-            let e = Regex::with_options(p, RegexOptions::default().unicode(mode))
-                .err()
-                .unwrap_or_else(|| panic!("{mode:?}: {p} now compiles; check it against its tag-free oracle and move it into the supported list above"));
-            assert!(
-                format!("{e:?}").contains("UnsupportedPattern"),
-                "{mode:?}: {p} rejected with the wrong error: {e:?}"
-            );
-        }
-    }
 }
 
 // mk_concat distributes `(A|B).T` into `A.T|B.T` when an arm is a fresh lookahead, since
@@ -9878,5 +9884,231 @@ fn algebra_simplify_is_language_preserving_and_smaller() {
         assert_eq!(b.subsumes(node, simpl), Some(true), "pattern={pat}");
         assert_eq!(b.subsumes(simpl, node), Some(true), "pattern={pat}");
         assert!(b.tree_size(simpl, 9999) < b.tree_size(node, 9999), "pattern={pat}");
+    }
+}
+
+struct XorShift(u64);
+
+impl XorShift {
+    fn next(&mut self) -> u64 {
+        self.0 ^= self.0 << 13;
+        self.0 ^= self.0 >> 7;
+        self.0 ^= self.0 << 17;
+        self.0
+    }
+    fn below(&mut self, n: usize) -> usize {
+        (self.next() % n as u64) as usize
+    }
+}
+
+fn random_pattern(r: &mut XorShift, depth: usize, bounded: bool) -> String {
+    const ATOMS: &[&str] = &[
+        "a", "b", "c", ".", "_", "[ab]", "[^a]", "\\n", "\\w", "\\W", "^", "$", "\\b", "\\B",
+    ];
+    if depth == 0 {
+        return ATOMS[r.below(ATOMS.len())].to_string();
+    }
+    let d = depth - 1;
+    match r.below(14) {
+        0 | 1 => format!("{}{}", random_pattern(r, d, bounded), random_pattern(r, d, bounded)),
+        2 | 3 => format!("(?:{}|{})", random_pattern(r, d, bounded), random_pattern(r, d, bounded)),
+        4 => format!("(?:{})*", random_pattern(r, d, bounded)),
+        5 => format!("(?:{})+", random_pattern(r, d, bounded)),
+        6 => format!("(?:{})?", random_pattern(r, d, bounded)),
+        7 if bounded => format!("(?:{}){{{},{}}}", random_pattern(r, d, bounded), r.below(2), 1 + r.below(3)),
+        7 => format!("(?:{})*{}", random_pattern(r, d, bounded), random_pattern(r, d, bounded)),
+        8 => format!("(?={})", random_pattern(r, d, bounded)),
+        9 => format!("(?!{})", random_pattern(r, d, bounded)),
+        10 => format!("(?<={})", random_pattern(r, d, bounded)),
+        11 => format!("(?:{}&{})", random_pattern(r, d, bounded), random_pattern(r, d, bounded)),
+        12 => format!("~(?:{})", random_pattern(r, d, bounded)),
+        _ => random_pattern(r, 0, bounded),
+    }
+}
+
+fn forced_divergences(pat: &str, opts: impl Fn() -> RegexOptions, inputs: &[&[u8]], out: &mut Vec<String>) {
+    let mut noprefix = opts();
+    noprefix.disable_prefixes = true;
+    let (Ok(dflt), Ok(forced), Ok(np)) = (
+        Regex::with_options(pat, opts()),
+        Regex::with_options(pat, opts().force_linear(true)),
+        Regex::with_options(pat, noprefix),
+    ) else {
+        return;
+    };
+    for inp in inputs {
+        let d = format!("{:?}", dflt.find_all(inp));
+        let f = format!("{:?}", forced.find_all(inp));
+        if d != f && format!("{:?}", np.find_all(inp)) == d {
+            out.push(format!("pat={pat:?} inp={:?} default={d} forced={f}", String::from_utf8_lossy(inp)));
+        }
+    }
+}
+
+#[test]
+#[ignore = "slow: forced linear vs default paths"]
+fn forced_linear_vs_default() {
+    let mut out = Vec::new();
+    for f in [
+        "basic.toml", "anchors.toml", "lookaround.toml", "edge_cases.toml", "word_boundary.toml",
+        "cross_feature.toml", "semantics.toml", "boolean.toml", "paragraph.toml",
+        "convergence.toml", "literal_alt.toml", "date_pattern.toml",
+    ] {
+        for tc in &load_tests(f) {
+            if tc.ignore || tc.expect_error || tc.anchored {
+                continue;
+            }
+            forced_divergences(&tc.pattern, || case_options(tc), &[tc.input.as_bytes()], &mut out);
+        }
+    }
+    let mut r = XorShift(0x2545_f491_4f6c_dd1d);
+    for _ in 0..20000 {
+        let depth = 1 + r.below(4);
+        let bounded = r.below(2) == 0;
+        let pat = random_pattern(&mut r, depth, bounded);
+        let inputs: Vec<Vec<u8>> = (0..4)
+            .map(|_| {
+                let n = r.below(40);
+                (0..n).map(|_| b"abc\n ab"[r.below(7)]).collect()
+            })
+            .collect();
+        let refs: Vec<&[u8]> = inputs.iter().map(|v| v.as_slice()).collect();
+        forced_divergences(&pat, RegexOptions::default, &refs, &mut out);
+    }
+    assert!(out.is_empty(), "{} divergences:\n{}", out.len(), out[..out.len().min(15)].join("\n"));
+}
+
+#[test]
+fn rev_lookahead_past_end_under_intersection() {
+    let cases: &[(&str, &str, &[(usize, usize)])] = &[
+        ("(?=ab)a+&_", "ab", &[(0, 1)]),
+        ("(?=ab)a+&a", "aab", &[(1, 2)]),
+        ("(?=ab)a+&[ab]", "ab", &[(0, 1)]),
+        ("(?=ab)a+&__", "ab", &[]),
+        ("(?=ab)a+&_{3}", "baba", &[]),
+        ("(?=ab)a+&__b?", "ab", &[]),
+        ("(?:.c)+&.*$b*", "ac\nac", &[(0, 2), (3, 5)]),
+        ("(?:.c)+&.*$b*", "acb", &[]),
+        ("(?:.c)+&.*$b*", "acac", &[(0, 4)]),
+        ("(?:.c)+&.*$b*", "bac\nxc", &[(1, 3), (4, 6)]),
+    ];
+    for &(pat, inp, want) in cases {
+        for noprefix in [false, true] {
+            let mut o = RegexOptions::default();
+            o.disable_prefixes = noprefix;
+            let got: Vec<(usize, usize)> = Regex::with_options(pat, o)
+                .unwrap()
+                .find_all(inp.as_bytes())
+                .unwrap()
+                .iter()
+                .map(|m| (m.start, m.end))
+                .collect();
+            assert_eq!(got, want, "pat={pat:?} inp={inp:?} noprefix={noprefix}");
+        }
+    }
+}
+
+fn wb_oracle(x: &Regex, y: Option<&Regex>, negated: bool, d: &str) -> Vec<(usize, usize, usize)> {
+    let w = |c: char| c.is_alphanumeric() || c == '_';
+    let boundary =
+        |i: usize| d[..i].chars().last().is_some_and(w) != d[i..].chars().next().is_some_and(w);
+    let full = |r: &Regex, a: usize, b: usize| r.is_match(&d.as_bytes()[a..b]).unwrap();
+    let mut out = Vec::new();
+    let mut s = 0;
+    while s <= d.len() {
+        let mut best: Option<(usize, usize)> = None;
+        if d.is_char_boundary(s) {
+            for m in (s..=d.len()).filter(|&m| d.is_char_boundary(m)) {
+                if boundary(m) == negated || !full(x, s, m) {
+                    continue;
+                }
+                for e in (m..=d.len()).filter(|&e| d.is_char_boundary(e)) {
+                    let ok = match y {
+                        None => e == m,
+                        Some(y) => full(y, m, e),
+                    };
+                    if ok && best.map_or(true, |bm| (e, m) > bm) {
+                        best = Some((e, m));
+                    }
+                }
+            }
+        }
+        match best {
+            Some((e, m)) => {
+                out.push((s, e, m));
+                s = if e > s { e } else { s + 1 };
+            }
+            None => s += 1,
+        }
+    }
+    out
+}
+
+#[test]
+fn word_boundary_after_mixed_class_matches_oracle() {
+    let cases: [(&str, Option<&str>, bool); 8] = [
+        ("[^a]+", None, false),
+        ("\\S+", Some("\\w"), false),
+        ("[^,]+", Some(","), false),
+        ("[^,]{2,3}", Some("[a,]+"), true),
+        ("x[^a]*", None, false),
+        ("[^,][^a]*", Some("[a,]+"), true),
+        ("[^a]+", Some("[a,]+"), false),
+        ("[a,é¡]+", None, false),
+    ];
+    let alphabet = ["a", "b", ",", "x", "_", " ", "1", "é", "¡"];
+    let mut rng = XorShift(0x9E3779B97F4A7C15);
+    for (x, y, negated) in cases {
+        let xr = Regex::new(&format!("\\A(?:{x})\\z")).unwrap();
+        let yr = y.map(|y| Regex::new(&format!("\\A(?:{y})\\z")).unwrap());
+        let wb = if negated { "\\B" } else { "\\b" };
+        let pat = format!("{x}{wb}{}", y.unwrap_or(""));
+        let cap_pat = format!("(?P<g>{x}){wb}{}", y.unwrap_or(""));
+        let rc = Regex::new(&cap_pat).unwrap_or_else(|e| panic!("compile {cap_pat:?}: {e}"));
+        for hardened in [false, true] {
+            let r = Regex::with_options(&pat, RegexOptions::default().hardened(hardened))
+                .unwrap_or_else(|e| panic!("compile {pat:?}: {e}"));
+            for _ in 0..100 {
+                let d: String = (0..rng.below(8)).map(|_| alphabet[rng.below(alphabet.len())]).collect();
+                let want = wb_oracle(&xr, yr.as_ref(), negated, &d);
+                let spans: Vec<(usize, usize)> = want.iter().map(|&(s, e, _)| (s, e)).collect();
+                for re in [&r, &rc] {
+                    let got: Vec<(usize, usize)> = re
+                        .find_all(d.as_bytes())
+                        .unwrap()
+                        .iter()
+                        .map(|m| (m.start, m.end))
+                        .collect();
+                    assert_eq!(got, spans, "pat={pat:?} inp={d:?}");
+                }
+                #[cfg(feature = "experimental_capture_groups")]
+                {
+                    let got: Vec<Option<(usize, usize)>> = rc
+                        .captures_all(d.as_bytes())
+                        .unwrap()
+                        .iter()
+                        .map(|c| c.spans()[1])
+                        .collect();
+                    let groups: Vec<Option<(usize, usize)>> =
+                        want.iter().map(|&(s, _, m)| Some((s, m))).collect();
+                    assert_eq!(got, groups, "pat={cap_pat:?} inp={d:?}");
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn repeat_of_lookahead_suffixed_atom_matches_its_right_nested_unrolling() {
+    for (rep, unrolled) in [
+        (r"(?:c(?=ba)){0,2}", r"(?:c(?=ba)(?:c(?=ba))?)?"),
+        (r"(?:c(?!b)){1,3}", r"c(?!b)(?:c(?!b)(?:c(?!b))?)?"),
+        (r"(?:a(?!c))?(?:a(?!c))?", r"(?:a(?!c)(?:a(?!c))?)?"),
+    ] {
+        let a = Regex::new(rep).unwrap();
+        let b = Regex::new(unrolled).unwrap();
+        for s in [&b"cca"[..], b"cbacba", b"ccc", b"ccb", b"aac", b"aaa", b"aca"] {
+            assert_eq!(a.find_all(s).unwrap(), b.find_all(s).unwrap(), "{rep} {s:?}");
+        }
     }
 }

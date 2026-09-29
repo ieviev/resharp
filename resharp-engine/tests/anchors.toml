@@ -1440,3 +1440,21 @@ name = "union_of_dot_and_negative_lookahead_arm_then_bounded_begin_anchor_repeat
 pattern = '(?:.|\n*(?!a))\A{2}'
 input = "b"
 matches = [[0, 0]]
+
+[[test]]
+name = "begin_anchored_union_arm_wins_leftmost_start"
+pattern = '\Acb|b'
+input = "cb"
+matches = [[0, 2]]
+
+[[test]]
+name = "optional_begin_anchored_prefix_wins_leftmost_start"
+pattern = '(?:\Ac)?b'
+input = "cb"
+matches = [[0, 2]]
+
+[[test]]
+name = "begin_anchored_or_empty_prefix_wins_leftmost_start"
+pattern = '(?:\Ac|)b'
+input = "cb"
+matches = [[0, 2]]

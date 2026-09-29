@@ -53,7 +53,7 @@ pub(crate) mod captures;
 pub(crate) mod ldfa;
 #[cfg_attr(not(feature = "experimental_capture_groups"), allow(dead_code))]
 pub(crate) mod pparse;
-pub(crate) mod fas;
+pub(crate) mod linear;
 pub(crate) mod minterms;
 pub(crate) mod fwd;
 pub(crate) mod ismatch;
@@ -241,6 +241,8 @@ pub struct RegexOptions {
     /// but can be useful for sanity checks and serialization
     #[doc(hidden)]
     pub disable_prefixes: bool,
+    #[doc(hidden)]
+    pub force_linear: bool,
 }
 
 impl Default for RegexOptions {
@@ -259,6 +261,7 @@ impl Default for RegexOptions {
             unbounded_size: false,
             force_convergence: false,
             disable_prefixes: false,
+            force_linear: false,
         }
     }
 }
@@ -298,6 +301,11 @@ impl RegexOptions {
     /// enable hardened mode for untrusted patterns: uses only O(N·S) forward scan, slower.
     pub fn hardened(mut self, yes: bool) -> Self {
         self.hardened = yes;
+        self
+    }
+    #[doc(hidden)]
+    pub fn force_linear(mut self, yes: bool) -> Self {
+        self.force_linear = yes;
         self
     }
     #[doc(hidden)]
@@ -371,7 +379,7 @@ pub(crate) struct RegexInner {
     pub(crate) nulls: StartPositions,
     pub(crate) matches: Vec<Match>,
     pub(crate) bounded: Option<bdfa::BDFA>,
-    pub(crate) fas: Option<fas::FwdDFA>,
+    pub(crate) lin: Option<linear::Linear>,
     pub(crate) lb_verify: Option<ldfa::LDFA>,
     #[cfg(feature = "regex_set")]
     pub(crate) set: Option<set::SetState>,
@@ -1056,6 +1064,9 @@ fn ensure_supported_rec(
         Kind::Concat => {
             let left = node.left(b);
             let right = node.right(b);
+            if right != NodeId::TS && left.is_union(b) && b.union_has_center_nullable_lookahead_tail(left) {
+                return Err(resharp_algebra::ResharpError::UnsupportedPattern);
+            }
             let (_, left_max) = b.get_min_max_length(left);
             if left_max > 0 && right.is_union(b) && right.contains_lookbehind(b) {
                 return Err(resharp_algebra::ResharpError::UnsupportedPattern);
@@ -1376,7 +1387,7 @@ impl Regex {
                 min_len,
                 max_cap,
                 ah.no_fwd_prefix,
-                opts.hardened,
+                opts.hardened || opts.force_linear,
                 opts.force_convergence,
             )?
         };
@@ -1577,21 +1588,13 @@ impl Regex {
         let need_nn_cycle = (opts.hardened && !has_bounded && fixed_length.is_none() && max_cap >= 64)
             || initial_nullability == Nullability::ALWAYS;
         let nn_cycle = need_nn_cycle && fwd.has_nonnullable_cycle(&mut b, 256);
-        let hardened = opts.hardened && !has_bounded && fixed_length.is_none() && max_cap >= 64 && nn_cycle;
+        let hardened = opts.force_linear
+            || (opts.hardened && !has_bounded && fixed_length.is_none() && max_cap >= 64 && nn_cycle);
         let star_loop =
             initial_nullability == Nullability::ALWAYS && !has_lb && !nn_cycle;
 
-        let fas = if hardened || initial_nullability == Nullability::ALWAYS {
-            let ksm = if hardened {
-                fwd_start.contains_lookahead(&b) || initial_nullability != Nullability::ALWAYS
-            } else {
-                true
-            };
-            let ksm = ksm || initial_nullability == Nullability::ALWAYS;
-            Some(fas::FwdDFA::new(&fwd, ksm))
-        } else {
-            None
-        };
+        let needs_all = hardened || initial_nullability == Nullability::ALWAYS;
+        let lin = needs_all.then(|| linear::Linear::new(&fwd));
 
         if b.take_unsupported_lb_fusion() {
             return Err(Error::Algebra(resharp_algebra::ResharpError::UnsupportedPattern));
@@ -1619,7 +1622,7 @@ impl Regex {
                 nulls: StartPositions::new(),
                 matches: Vec::new(),
                 bounded,
-                fas,
+                lin,
                 lb_verify,
                 #[cfg(feature = "regex_set")]
                 set: None,
@@ -2586,8 +2589,8 @@ impl Regex {
         inner.nulls.clear();
         inner.matches.clear();
 
-        if self.always_nullable && !self.hardened {
-            if self.star_loop {
+        if self.always_nullable {
+            if self.star_loop && !self.hardened {
                 let RegexInner {
                     ref mut b,
                     ref mut fwd,
@@ -2615,11 +2618,11 @@ impl Regex {
                 ref mut b,
                 ref mut fwd,
                 ref mut matches,
-                ref mut fas,
+                ref mut lin,
                 ..
             } = *inner;
-            let fas = fas.as_mut().expect("fas initialized for always_nullable");
-            fwd.scan_fwd_active_set::<true>(b, fas, input, &StartPositions::new(), matches)?;
+            let lin = lin.as_mut().expect("all-matches scanner initialized for always_nullable");
+            fwd.scan_fwd_linear::<true>(b, lin, input, &StartPositions::new(), matches)?;
             push_end_zero_width(matches, input.len());
             return Ok(matches.clone());
         }
@@ -2652,17 +2655,12 @@ impl Regex {
                 ref mut b,
                 ref mut fwd,
                 ref mut matches,
-                ref mut fas,
+                ref mut lin,
                 ref nulls,
                 ..
             } = *inner;
-            let fas = fas.as_mut().unwrap();
-            if self.always_nullable {
-                fwd.scan_fwd_active_set::<true>(b, fas, input, nulls, matches)?;
-                push_end_zero_width(matches, input.len());
-            } else {
-                fwd.scan_fwd_active_set::<false>(b, fas, input, nulls, matches)?;
-            }
+            let lin = lin.as_mut().expect("all-matches scanner initialized for hardened");
+            fwd.scan_fwd_linear::<false>(b, lin, input, nulls, matches)?;
             return Ok(matches.clone());
         }
 

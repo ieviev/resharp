@@ -377,7 +377,7 @@ impl PosixParser {
                         let mut pos = i;
                         let mut acc = unset();
                         let mut copies = 0u32;
-                        while copies < hi && (pos < end || copies < lo) {
+                        while copies < hi && (pos < end || copies < lo || copies == 0) {
                             let lo_rem = lo.saturating_sub(copies + 1);
                             let hi_rem =
                                 if hi == u32::MAX { u32::MAX } else { hi - copies - 1 };

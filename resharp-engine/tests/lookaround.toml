@@ -1846,3 +1846,195 @@ name = "dollar_then_negative_lookbehind_of_end_text_then_begin_anchor"
 pattern = '$(?<!\z)\A'
 input = "\n"
 matches = [[0, 0]]
+
+[[test]]
+name = "fwd_lb_prefix_body_lookbehind_zero_width"
+pattern = '(?<=[ab])(?:(?<=a)&b?)'
+input = "aa"
+matches = [[1, 1], [2, 2]]
+
+[[test]]
+name = "fwd_lb_prefix_body_lookbehind_zero_width_alternating"
+pattern = '(?<=[ab])(?:(?<=a)&b?)'
+input = "abab"
+matches = [[1, 1], [3, 3]]
+
+[[test]]
+name = "fwd_lb_prefix_nested_lookbehind_zero_width"
+pattern = '(?<=(?<=[ab]))(?:(?<=a)&(?:\n)?)'
+input = "ca\ncabab"
+matches = [[2, 2], [5, 5], [7, 7]]
+
+[[test]]
+name = "fwd_intersect_lookahead_with_optional_tail"
+pattern = '\A(?:(?:ac)+&_*(?=\n)b?)'
+input = "ac\n"
+matches = [[0, 2]]
+
+[[test]]
+name = "fwd_intersect_lookahead_with_star_tail"
+pattern = '\A(?:(?:ac)+&.*(?=\n)b*)'
+input = "ac\n"
+matches = [[0, 2]]
+
+[[test]]
+name = "fwd_intersect_dollar_with_star_tail"
+pattern = '\A(?:(?:.c)+&.*$b*)'
+input = "ac\nac"
+matches = [[0, 2]]
+
+[[test]]
+name = "fwd_intersect_lookahead_without_tail"
+pattern = '\A(?:(?:ac)+&.*(?=\n))'
+input = "ac\n"
+matches = [[0, 2]]
+
+[[test]]
+name = "fwd_intersect_lookahead_with_mandatory_tail"
+pattern = '\A(?:(?:ac)+&_*(?=\n)b)'
+input = "acb\n"
+matches = []
+
+[[test]]
+name = "zero_width_after_tied_merge_with_neg_lookahead"
+pattern = 'x+|x+(?!b)|(?=a)'
+input = "xxa"
+matches = [[0, 2], [2, 2]]
+
+[[test]]
+name = "zero_width_after_tied_merge_newline_with_neg_lookahead"
+pattern = '\n+|[^a]+(?!b)|(?=a)'
+input = "\n\na"
+matches = [[0, 2], [2, 2]]
+
+[[test]]
+name = "optional_lookahead_before_nullable_tail_rejected"
+pattern = '\A(?:a(?=b)?(?:bc)?)\z'
+expect_error = true
+
+[[test]]
+name = "optional_lookahead_union_arm_before_nullable_tail_rejected"
+pattern = '\A(?:a(?:(?=b)|x)(?:bc)?)\z'
+expect_error = true
+
+[[test]]
+name = "optional_neg_lookahead_before_nullable_tail_rejected"
+pattern = '\A(?:a(?!b)?(?:bc)?)\z'
+expect_error = true
+
+[[test]]
+name = "neg_lookahead_or_empty_before_nullable_tail_rejected"
+pattern = '\A(?:a(?:(?!c)|)(?:bc)?)\z'
+expect_error = true
+
+[[test]]
+name = "lookahead_with_nullable_tail_union_before_end_rejected"
+pattern = '(?:(?=b)(?:|bc)|x)\z'
+expect_error = true
+
+[[test]]
+name = "optional_lookahead_before_optional_literal_and_end_no_false_match"
+pattern = 'a(?=b)?c?\z'
+input = "ab"
+matches = []
+
+[[test]]
+name = "union_arm_ending_in_lookahead_fuses_with_begin_anchored_continuation"
+pattern = '(?:(?:\A|(?=a)|b)(?=a))(?:\Aa|(?=c))'
+input = "bac"
+matches = []
+
+[[test]]
+name = "nested_union_arm_ending_in_lookahead_fuses_with_begin_anchored_continuation"
+pattern = '(?:(?:(?:(?:\A|(?=a))|(?:(?=b)b))(?=a))(?:(?:\A(?:\Aa))|(?=c)))'
+input = "bac"
+matches = []
+
+[[test]]
+name = "union_arm_ending_in_lookahead_fuses_with_consuming_continuation"
+pattern = '(?:(?:\A|(?=a)|b)(?=a))(?:a|(?=c))'
+input = "ba"
+matches = [[0, 2]]
+
+[[test]]
+name = "union_arm_ending_in_lookahead_fuses_with_consuming_continuation_trailing_byte"
+pattern = '(?:(?:\A|(?=a)|b)(?=a))(?:a|(?=c))'
+input = "bac"
+matches = [[0, 2]]
+
+[[test]]
+name = "fused_lookahead_rel_does_not_double_count_shared_steps"
+pattern = '(?:a|(?=a))(?!b)?(?=ab)?'
+input = "ab"
+matches = [[0, 1]]
+
+[[test]]
+name = "fused_lookahead_rel_does_not_double_count_shared_steps_repeated"
+pattern = '(?:a|(?=a))(?!b)?(?=ab)?'
+input = "aab"
+matches = [[0, 1], [1, 2]]
+
+[[test]]
+name = "fused_lookahead_rel_does_not_double_count_doubled_neg_lookahead"
+pattern = '(?:(?:a|(?=a))?)(?:(?:(?!b)(?!b))?(?:(?=ab))?)'
+input = "ab"
+matches = [[0, 1], [1, 1], [2, 2]]
+
+[[test]]
+name = "lookahead_then_any_star_then_literal"
+pattern = '(?:(?=c)_*)c'
+input = "c"
+matches = [[0, 1]]
+
+[[test]]
+name = "optional_lookahead_then_any_star_then_literal"
+pattern = '(?:(?:(?=c)_*)c)?'
+input = "c"
+matches = [[0, 1], [1, 1]]
+
+[[test]]
+name = "lookahead_literal_any_star_then_literal"
+pattern = '(?:(?=ab)a_*)b'
+input = "ab"
+matches = [[0, 2]]
+
+[[test]]
+name = "lookahead_then_trailing_any_star"
+pattern = '(?=c)_*'
+input = "abc"
+matches = [[2, 3]]
+
+[[test]]
+name = "lookahead_literal_optional_any_star_then_end_anchored_literal"
+pattern = '(?:(?=ab)(?:a(?:_*)?))(?:b\z)'
+input = "ab"
+matches = [[0, 2]]
+
+[[test]]
+name = "bounded_repeat_of_lookahead_any_star_rejected"
+pattern = '(?:(?:(?=ca)_*)(?:ab)){2,4}'
+expect_error = true
+
+[[test]]
+name = "inter_followed_by_any_star_keeps_star"
+pattern = '_*(?=c)_*b'
+input = "acb"
+matches = [[0, 3]]
+
+[[test]]
+name = "inter_followed_by_any_star_keeps_star_longer_prefix"
+pattern = '_*(?=c)_*b'
+input = "aacb"
+matches = [[0, 4]]
+
+[[test]]
+name = "inter_followed_by_any_star_or_lookahead_union"
+pattern = '(?:(?:(?:_*(?=c))(?:_*|(?=b)))b)'
+input = "acb"
+matches = [[0, 3]]
+
+[[test]]
+name = "bounded_repeat_of_any_star_lookahead"
+pattern = '(?:_*(?=bc)){2,3}'
+input = "abc"
+matches = [[0, 1], [1, 1]]

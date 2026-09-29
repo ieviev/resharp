@@ -95,3 +95,52 @@ pattern = '(?-u)(?<=<row Id=")\d+(?=")'
 input = '  <row Id="42" Foo="bar"/>  <row Id="99" />'
 matches = [[11, 13], [37, 39]]
 vs_find_all = true
+
+[[test]]
+name = "begin_anchored_union_arm_wins_leftmost_start"
+pattern = '\Acb|b'
+input = "cb"
+matches = [[0, 2]]
+vs_find_all = true
+
+[[test]]
+name = "optional_begin_anchored_prefix_wins_leftmost_start"
+pattern = '(?:\Ac)?b'
+input = "cb"
+matches = [[0, 2]]
+vs_find_all = true
+
+[[test]]
+name = "begin_anchored_or_empty_prefix_wins_leftmost_start"
+pattern = '(?:\Ac|)b'
+input = "cb"
+matches = [[0, 2]]
+vs_find_all = true
+
+[[test]]
+name = "lookahead_effect_at_end_keeps_empty_match_at_start"
+pattern = '(?:(?!cc)|b)'
+input = "c"
+matches = [[0, 0], [1, 1]]
+vs_find_all = true
+
+[[test]]
+name = "lookahead_effect_at_end_literal_or_neg_lookahead"
+pattern = '(?:a|(?!ca))'
+input = "c"
+matches = [[0, 0], [1, 1]]
+vs_find_all = true
+
+[[test]]
+name = "lookahead_effect_at_end_neg_lookahead_or_end_anchor"
+pattern = '(?:(?!ab)|\z)'
+input = "a"
+matches = [[0, 0], [1, 1]]
+vs_find_all = true
+
+[[test]]
+name = "lookahead_effect_at_end_keeps_empty_matches_mid_input"
+pattern = '(?:(?!cc)|b)'
+input = "ac"
+matches = [[0, 0], [1, 1], [2, 2]]
+vs_find_all = true

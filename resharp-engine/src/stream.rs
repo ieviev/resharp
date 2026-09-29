@@ -26,9 +26,9 @@ fn collect_valid_ends(dfa: &ldfa::LDFA, state: u32, pos: usize, len: usize, out:
             }
         }
         _ => {
+            let ctx = if pos == len { Nullability::END } else { Nullability::CENTER };
             for n in &dfa.effects[eid as usize] {
                 let Some(e) = pos.checked_sub(n.rel as usize) else { continue };
-                let ctx = if e == len { Nullability::END } else { Nullability::CENTER };
                 if n.mask.has(ctx) {
                     out.push(e);
                 }
@@ -43,7 +43,7 @@ fn begin_search_start(re: &Regex, input: &[u8]) -> Result<usize, Error> {
     let inner = &mut *re.inner.lock().unwrap();
     let mt = inner.fwd.mt_lookup[input[0] as usize];
     let st0 = inner.fwd.begin_table[mt as usize] as u32;
-    if st0 == inner.fwd.pruned as u32 || st0 <= ldfa::DFA_DEAD as u32 {
+    if st0 <= ldfa::DFA_DEAD as u32 {
         return Ok(0);
     }
     let end = input.len();
@@ -643,10 +643,11 @@ impl Regex {
                 .copied()
                 .unwrap_or(0);
             if sid != 0 {
-                let accel::Skipper::State(s) = &inner.rev_ts.skip_searchers[sid as usize - 1] else { unreachable!() };
-                match s.find_rev(&input[..pos]) {
-                    Some(idx) => pos = idx + 1,
-                    None => return Ok(None),
+                if let accel::Skipper::State(s) = &inner.rev_ts.skip_searchers[sid as usize - 1] {
+                    match s.find_rev(&input[..pos]) {
+                        Some(idx) => pos = idx + 1,
+                        None => return Ok(None),
+                    }
                 }
             }
             pos -= 1;

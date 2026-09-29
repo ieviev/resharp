@@ -130,3 +130,11 @@ fn disable_prefixes_dump_matches_prefix_accelerated() {
         fast.find_all(hay.as_bytes()).unwrap()
     );
 }
+
+#[test]
+fn always_nullable_cycle_roundtrip() {
+    let inputs = ["abab,x,", "", "a,b,,cc,d", "x y\n,z,", "\"a,b\",c,\"d\"\n"];
+    for p in [r"(?:\w+,)*", r"(?:ab)*", r"(?:[A-Za-z]+ )*", r"(?:a|bc)*"] {
+        roundtrip(p, &inputs);
+    }
+}

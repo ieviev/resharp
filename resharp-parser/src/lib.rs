@@ -22,6 +22,7 @@ use regex_syntax::{
 use resharp_algebra::{Kind, NodeId};
 
 type TB<'s> = resharp_algebra::RegexBuilder;
+type WbBranches = Vec<(NodeId, Option<NodeId>)>;
 
 /// global pattern-level flags, set from `RegexOptions`.
 pub struct PatternFlags {
@@ -1873,6 +1874,132 @@ impl<'s> ResharpParser<'s> {
         }
     }
 
+    fn ensure_word_class(&mut self, tb: &mut TB<'s>) -> NodeId {
+        if self.global_full_unicode {
+            self.unicode_classes.ensure_word_full(tb);
+        } else if self.global_unicode && !self.global_ascii_perl {
+            self.unicode_classes.ensure_word(tb);
+        } else {
+            self.unicode_classes.ensure_word_ascii(tb);
+        }
+        self.unicode_classes.word
+    }
+
+    fn absorb_word_boundary_into_left(
+        &mut self,
+        asts: &[Ast],
+        idx: usize,
+        left_node: NodeId,
+        translator: &mut Option<Translator>,
+        tb: &mut TB<'s>,
+        negated: bool,
+    ) -> Result<Option<WbBranches>> {
+        use WordCharKind::*;
+        if tb.contains_look(left_node) || tb.contains_anchors(left_node) {
+            return Ok(None);
+        }
+        let word_id = self.ensure_word_class(tb);
+        if self.resolve_word_kind(asts, idx, -1, translator, tb)? != Unknown {
+            return Ok(None);
+        }
+        let cont = tb.mk_range_u8(0x80, 0xBF);
+        let cont_plus = tb.mk_plus(cont);
+        let inside_codepoint = tb.mk_inter(left_node, cont_plus);
+        if tb.is_empty_lang(inside_codepoint) != Some(true) {
+            return Ok(None);
+        }
+        let right = self.resolve_word_kind(asts, idx, 1, translator, tb)?;
+        let ends_word = tb.mk_concat(NodeId::TS, word_id);
+        let not_ends_word = tb.mk_compl(ends_word);
+        let (word_side, non_word_side) = if negated {
+            (ends_word, not_ends_word)
+        } else {
+            (not_ends_word, ends_word)
+        };
+        let branches = match right {
+            Word => vec![(word_side, None)],
+            NonWord => vec![(non_word_side, None)],
+            _ => {
+                let word_ts = tb.mk_concat(word_id, NodeId::TS);
+                let next_word = tb.mk_lookahead(word_ts, NodeId::MISSING, 0);
+                let next_non_word = tb.mk_neg_lookahead(word_id, 0);
+                vec![
+                    (word_side, Some(next_word)),
+                    (non_word_side, Some(next_non_word)),
+                ]
+            }
+        };
+        Ok(Some(branches))
+    }
+
+    fn non_nullable_suffix(tb: &mut TB<'s>, nodes: &[NodeId]) -> Option<(usize, NodeId)> {
+        let mut acc = NodeId::EPS;
+        for k in (0..nodes.len()).rev() {
+            acc = tb.mk_concat(nodes[k], acc);
+            if tb.nullability(acc) == resharp_algebra::nulls::Nullability::NEVER {
+                return Some((k, acc));
+            }
+        }
+        None
+    }
+
+    fn absorbed_node(
+        tb: &mut TB<'s>,
+        left: NodeId,
+        branches: &[(NodeId, Option<NodeId>)],
+    ) -> NodeId {
+        let arms: Vec<NodeId> = branches
+            .iter()
+            .map(|&(cond, la)| {
+                let restricted = tb.mk_inter(left, cond);
+                match la {
+                    Some(la) => tb.mk_concat(restricted, la),
+                    None => restricted,
+                }
+            })
+            .collect();
+        tb.mk_unions(arms.into_iter())
+    }
+
+    fn absorbed_sk(
+        tb: &mut TB<'s>,
+        out: &mut Vec<(SkNode, NodeId)>,
+        suffix: &[u32],
+        left: NodeId,
+        branches: &[(NodeId, Option<NodeId>)],
+    ) -> u32 {
+        let push = |out: &mut Vec<(SkNode, NodeId)>, sk: SkNode, n: NodeId| {
+            out.push((sk, n));
+            out.len() as u32 - 1
+        };
+        let left_sk = match suffix {
+            [only] => *only,
+            _ => push(out, SkNode::Concat(suffix.to_vec()), left),
+        };
+        let mut arms = Vec::new();
+        let mut arm_nodes = Vec::new();
+        for &(cond, la) in branches {
+            let cond_sk = push(out, SkNode::Leaf, cond);
+            let restricted = tb.mk_inter(left, cond);
+            let mut arm = push(out, SkNode::Inter(vec![left_sk, cond_sk]), restricted);
+            let mut node = restricted;
+            if let Some(la) = la {
+                let la_sk = push(out, SkNode::Leaf, la);
+                node = tb.mk_concat(restricted, la);
+                arm = push(out, SkNode::Concat(vec![arm, la_sk]), node);
+            }
+            arms.push(arm);
+            arm_nodes.push(node);
+        }
+        match arms[..] {
+            [only] => only,
+            _ => {
+                let n = tb.mk_unions(arm_nodes.into_iter());
+                push(out, SkNode::Union(arms), n)
+            }
+        }
+    }
+
     fn rewrite_word_boundary_in_concat(
         &mut self,
         asts: &[Ast],
@@ -1882,14 +2009,7 @@ impl<'s> ResharpParser<'s> {
         negated: bool,
     ) -> Result<(NodeId, usize)> {
         use WordCharKind::*;
-        if self.global_full_unicode {
-            self.unicode_classes.ensure_word_full(tb);
-        } else if self.global_unicode && !self.global_ascii_perl {
-            self.unicode_classes.ensure_word(tb);
-        } else {
-            self.unicode_classes.ensure_word_ascii(tb);
-        }
-        let word_id = self.unicode_classes.word;
+        let word_id = self.ensure_word_class(tb);
         let left = self.resolve_word_kind(asts, idx, -1, translator, tb)?;
         let right = self.resolve_word_kind(asts, idx, 1, translator, tb)?;
         let boundary_match = !negated;
@@ -2333,6 +2453,18 @@ impl<'s> ResharpParser<'s> {
                                 || a.kind == ast::AssertionKind::NotWordBoundary =>
                         {
                             let negated = a.kind == ast::AssertionKind::NotWordBoundary;
+                            if prev_boundary_child.is_none() {
+                                if let Some((k, left)) = Self::non_nullable_suffix(tb, &children) {
+                                    if let Some(br) = self.absorb_word_boundary_into_left(
+                                        &c.asts, i, left, translator, tb, negated,
+                                    )? {
+                                        children.truncate(k);
+                                        children.push(Self::absorbed_node(tb, left, &br));
+                                        i += 1;
+                                        continue;
+                                    }
+                                }
+                            }
                             let node = self.rewrite_word_boundary_in_concat(
                                 &c.asts, i, translator, tb, negated,
                             )?;
@@ -2546,6 +2678,21 @@ impl<'s> ResharpParser<'s> {
         }
     }
 
+    fn ast_has_zero_width_lookaround_arm(&self, ast: &Ast) -> bool {
+        match ast {
+            Ast::Alternation(a) => a
+                .asts
+                .iter()
+                .any(|x| self.ast_contains_lookaround(x) && !ast_may_consume(x)),
+            Ast::Group(g) => self.ast_has_zero_width_lookaround_arm(&g.ast),
+            Ast::Concat(c) => c.asts.iter().any(|x| self.ast_has_zero_width_lookaround_arm(x)),
+            Ast::Intersection(x) => x.asts.iter().any(|a| self.ast_has_zero_width_lookaround_arm(a)),
+            Ast::Complement(x) => self.ast_has_zero_width_lookaround_arm(&x.ast),
+            Ast::Repetition(r) => self.ast_has_zero_width_lookaround_arm(&r.ast),
+            _ => false,
+        }
+    }
+
     fn sk_leaf(
         &mut self,
         ast: &Ast,
@@ -2684,6 +2831,19 @@ impl<'s> ResharpParser<'s> {
                                 || a.kind == ast::AssertionKind::NotWordBoundary =>
                         {
                             let negated = a.kind == ast::AssertionKind::NotWordBoundary;
+                            let nodes: Vec<NodeId> =
+                                children.iter().map(|&c| out[c as usize].1).collect();
+                            if let Some((k, left)) = Self::non_nullable_suffix(tb, &nodes) {
+                                if let Some(br) = self.absorb_word_boundary_into_left(
+                                    &c.asts, i, left, translator, tb, negated,
+                                )? {
+                                    let sk = Self::absorbed_sk(tb, out, &children[k..], left, &br);
+                                    children.truncate(k);
+                                    children.push(sk);
+                                    i += 1;
+                                    continue;
+                                }
+                            }
                             let (node, next) = self.rewrite_word_boundary_in_concat(
                                 &c.asts, i, translator, tb, negated,
                             )?;
@@ -2732,6 +2892,9 @@ impl<'s> ResharpParser<'s> {
                     let lo = Self::rep_lo(&r.op.kind);
                     if lo >= 2 && hi != u32::MAX && self.ast_has_capture(&r.ast) {
                         let body = out[child as usize].1;
+                        if self.ast_has_zero_width_lookaround_arm(&r.ast) {
+                            return Err(self.error(r.span, ast::ErrorKind::UnsupportedResharpRegex));
+                        }
                         let dup = tb.mk_repeat(body, lo, hi);
                         tb.reverse(dup)
                             .map_err(|_| self.error(r.span, ast::ErrorKind::UnsupportedResharpRegex))?;

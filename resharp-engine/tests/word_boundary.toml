@@ -526,3 +526,9 @@ name = "begin_anchor_then_optional_word_boundary"
 pattern = '\A\b?'
 input = "1b"
 matches = [[0, 0]]
+
+[[test]]
+name = "word_boundary_after_mixed_class_in_union_with_lookahead"
+pattern = '\n+|[^a]+\b|(?=a)'
+input = "\n\nb a"
+matches = [[0, 4], [4, 4]]

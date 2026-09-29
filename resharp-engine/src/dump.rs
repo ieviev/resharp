@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::bdfa::BDFA;
 use crate::captures::CaptureDispatch;
-use crate::ldfa::{DFA_DEAD, LDFA};
+use crate::ldfa::{DFA_DEAD, DFA_INITIAL, LDFA};
 use crate::prefix::PrefixKind;
 #[cfg(feature = "stream")]
 use crate::stream::{StreamCache, StreamInit};
@@ -75,7 +75,7 @@ pub struct RegexDump {
 
 fn precompile_ldfa(ldfa: &mut LDFA, b: &mut RegexBuilder) -> Result<(), Error> {
     let mut visited: HashSet<u16> = HashSet::new();
-    let mut work: Vec<u16> = Vec::new();
+    let mut work: Vec<u16> = vec![DFA_INITIAL];
     if ldfa.pruned > DFA_DEAD {
         work.push(ldfa.pruned);
     }
@@ -283,10 +283,13 @@ impl Regex {
             .deserialize(bytes)
             .map_err(|e| Error::Serialize(format!("bincode: {e}")))?;
 
+        let fwd = dump.fwd.unwrap_or_else(empty_ldfa);
+        let lin =
+            (dump.always_nullable && !dump.star_loop).then(|| crate::linear::Linear::new(&fwd));
         Ok(Regex {
             inner: Mutex::new(RegexInner {
                 b: RegexBuilder::new(),
-                fwd: dump.fwd.unwrap_or_else(empty_ldfa),
+                fwd,
                 fwd_ts: empty_ldfa(),
                 rev: None,
                 rev_ts: dump.rev_ts.unwrap_or_else(empty_ldfa),
@@ -301,7 +304,7 @@ impl Regex {
                 nulls: StartPositions::new(),
                 matches: Vec::<Match>::new(),
                 bounded: dump.bounded,
-                fas: None,
+                lin,
                 lb_verify: dump.lb_verify,
                 #[cfg(feature = "regex_set")]
                 set: None,

@@ -3054,6 +3054,113 @@ groups = [[[1, 1]]]
 [[test]]
 name = "exact_count_repeat_of_literal_or_lookahead_alternation_capture_on_literal_arm"
 pattern = '(?:(?P<g0>y)|(?!a)){2}.'
-input = "xxx"
-matches = [[0, 1], [1, 2], [2, 3]]
-groups = [[[]], [[]], [[]]]
+expect_error = true
+
+[[test]]
+name = "exact_count_repeat_of_capture_with_lookahead_only_arm_rejected"
+pattern = '(?P<g0>(?:y|(?!a))){2}.'
+expect_error = true
+
+[[test]]
+name = "exact_count_repeat_of_capture_with_lookahead_then_literal_arm_compiles"
+pattern = '(?P<g0>(?:y|(?!a)x)){2}'
+compile_only = true
+
+[[test]]
+name = "exact_count_repeat_of_capture_with_lookahead_literal_arm_compiles"
+pattern = '(?:(?P<g0>x)(?:y|(?=z)z)){2}'
+compile_only = true
+
+[[test]]
+name = "bounded_repeat_of_capture_with_lookahead_digit_arm_compiles"
+pattern = '(?P<g0>(?:\w+|(?=\d)\d)){2,3}'
+compile_only = true
+
+[[test]]
+name = "exact_count_repeat_of_capture_with_lookbehind_literal_arm_compiles"
+pattern = '(?P<g0>(?:y|(?<=y)x)){2}'
+compile_only = true
+
+[[test]]
+name = "optional_captured_neg_lookahead_participates"
+pattern = '(?P<g0>(?!a))?.'
+input = "b"
+matches = [[0, 1]]
+groups = [[[0, 0]]]
+
+[[test]]
+name = "zero_to_one_repeat_of_captured_neg_lookahead_participates"
+pattern = '(?P<g0>(?!a)){0,1}.'
+input = "b"
+matches = [[0, 1]]
+groups = [[[0, 0]]]
+
+[[test]]
+name = "zero_to_two_repeat_of_captured_neg_lookahead_participates"
+pattern = '(?P<g0>(?!a)){0,2}.'
+input = "b"
+matches = [[0, 1]]
+groups = [[[0, 0]]]
+
+[[test]]
+name = "zero_to_three_repeat_of_captured_neg_lookahead_participates"
+pattern = '(?P<g0>(?!a)){0,3}.'
+input = "b"
+matches = [[0, 1]]
+groups = [[[0, 0]]]
+
+[[test]]
+name = "zero_to_two_repeat_of_captured_literal_or_neg_lookahead_participates"
+pattern = '(?P<g0>(?:y|(?!a))){0,2}.'
+input = "b"
+matches = [[0, 1]]
+groups = [[[0, 0]]]
+
+[[test]]
+name = "one_to_two_repeat_of_captured_literal_or_neg_lookahead_zero_width_iteration"
+pattern = '(?P<g0>(?:y|(?!a))){1,2}.'
+input = "b"
+matches = [[0, 1]]
+groups = [[[0, 0]]]
+
+[[test]]
+name = "lookahead_effect_at_end_keeps_empty_match_at_start"
+pattern = '(?P<g0>(?:(?!cc)|b))'
+input = "c"
+matches = [[0, 0], [1, 1]]
+groups = [[[0, 0]], [[1, 1]]]
+
+[[test]]
+name = "lookahead_effect_at_end_keeps_empty_matches_mid_input"
+pattern = '(?P<g0>(?:(?!cc)|b))'
+input = "ac"
+matches = [[0, 0], [1, 1], [2, 2]]
+groups = [[[0, 0]], [[1, 1]], [[2, 2]]]
+
+[[test]]
+name = "lookahead_effect_at_end_literal_or_neg_lookahead"
+pattern = '(?P<g0>(?:a|(?!ca)))'
+input = "c"
+matches = [[0, 0], [1, 1]]
+groups = [[[0, 0]], [[1, 1]]]
+
+[[test]]
+name = "lookahead_effect_at_end_neg_lookahead_or_end_anchor"
+pattern = '(?:(?P<g0>(?!ab))|\z)'
+input = "a"
+matches = [[0, 0], [1, 1]]
+groups = [[[0, 0]], [[1, 1]]]
+
+[[test]]
+name = "lookahead_effect_at_end_failed_lookahead_arm_declines"
+pattern = '(?:(?!ac)|(?P<g0>(?=b)))'
+input = "a"
+matches = [[0, 0], [1, 1]]
+groups = [[[]], [[]]]
+
+[[test]]
+name = "nested_optional_captured_lookahead_before_end_anchor"
+pattern = '(?P<g2>(?P<g1>(?=a))?)$'
+input = "ba"
+matches = [[2, 2]]
+groups = [[[2, 2], []]]
