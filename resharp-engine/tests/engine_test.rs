@@ -119,16 +119,19 @@ fn length_one_lookbehind_alternation_supported() {
 }
 
 #[test]
-fn bounded_repeat_mixed_lookaround_union_reject_is_fast() {
+fn bounded_repeat_mixed_lookaround_union_compiles_fast() {
     let pat = r"(?:x|(?<!x)|(?=x)){0,28}";
     let t = std::time::Instant::now();
-    let re = Regex::new(pat);
+    let re = Regex::new(pat).unwrap();
     assert!(
         t.elapsed() < std::time::Duration::from_secs(1),
-        "reject of bounded-repeat-of-mixed-lookaround-union took {:?}, expected sub-second",
+        "compile of bounded-repeat-of-mixed-lookaround-union took {:?}, expected sub-second",
         t.elapsed()
     );
-    assert!(re.is_err(), "expected UnsupportedPattern for {pat}");
+    let plain = Regex::new(r"x{0,28}").unwrap();
+    for s in [&b""[..], b"xxx", b"axxxa", b"xaxx"] {
+        assert_eq!(re.find_all(s).unwrap(), plain.find_all(s).unwrap(), "{s:?}");
+    }
 }
 
 #[test]

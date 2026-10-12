@@ -3479,6 +3479,14 @@ impl RegexBuilder {
         None
     }
 
+    fn is_zero_width_lookaround(&self, node: NodeId) -> bool {
+        let bare_la = node.is_lookahead(self)
+            && self.get_lookahead_tail(node).is_missing()
+            && self.get_lookahead_rel(node) == 0;
+        let bare_lb = node.is_lookbehind(self) && self.get_lookbehind_prev(node).is_missing();
+        (bare_la || bare_lb) && !node.contains_tags(self)
+    }
+
     fn attempt_rw_union_2(&mut self, left: NodeId, right: NodeId) -> Option<NodeId> {
         self.attempt_rw_2_guarded(Kind::Union, "|", left, right, Self::attempt_rw_union_2_inner)
     }
@@ -3507,6 +3515,13 @@ impl RegexBuilder {
             let psi = solver.or_id(l, r);
             let rewrite = self.mk_pred(psi);
             return Some(rewrite);
+        }
+
+        if left == NodeId::EPS && self.is_zero_width_lookaround(right) {
+            return Some(left);
+        }
+        if right == NodeId::EPS && self.is_zero_width_lookaround(left) {
+            return Some(right);
         }
 
         if left == NodeId::EPS && self.nullability(right) == Nullability::ALWAYS {

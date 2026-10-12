@@ -3164,3 +3164,10 @@ pattern = '(?P<g2>(?P<g1>(?=a))?)$'
 input = "ba"
 matches = [[2, 2]]
 groups = [[[2, 2], []]]
+
+[[test]]
+name = "optional_captured_lookahead_is_not_collapsed_to_epsilon"
+pattern = '(?P<g>(?=b))?'
+input = "ba"
+matches = [[0, 0], [1, 1], [2, 2]]
+groups = [[[0, 0]], [[]], [[]]]

@@ -1908,9 +1908,10 @@ input = "\n\na"
 matches = [[0, 2], [2, 2]]
 
 [[test]]
-name = "optional_lookahead_before_nullable_tail_rejected"
+name = "optional_lookahead_collapses_to_epsilon_before_nullable_tail"
 pattern = '\A(?:a(?=b)?(?:bc)?)\z'
-expect_error = true
+input = "ab"
+matches = []
 
 [[test]]
 name = "optional_lookahead_union_arm_before_nullable_tail_rejected"
@@ -1918,14 +1919,16 @@ pattern = '\A(?:a(?:(?=b)|x)(?:bc)?)\z'
 expect_error = true
 
 [[test]]
-name = "optional_neg_lookahead_before_nullable_tail_rejected"
+name = "optional_neg_lookahead_collapses_to_epsilon_before_nullable_tail"
 pattern = '\A(?:a(?!b)?(?:bc)?)\z'
-expect_error = true
+input = "abc"
+matches = [[0, 3]]
 
 [[test]]
-name = "neg_lookahead_or_empty_before_nullable_tail_rejected"
+name = "neg_lookahead_or_empty_collapses_to_epsilon_before_nullable_tail"
 pattern = '\A(?:a(?:(?!c)|)(?:bc)?)\z'
-expect_error = true
+input = "a"
+matches = [[0, 1]]
 
 [[test]]
 name = "lookahead_with_nullable_tail_union_before_end_rejected"
@@ -2038,3 +2041,9 @@ name = "bounded_repeat_of_any_star_lookahead"
 pattern = '(?:_*(?=bc)){2,3}'
 input = "abc"
 matches = [[0, 1], [1, 1]]
+
+[[test]]
+name = "two_optional_neg_lookbehinds_collapse_before_lookahead"
+pattern = '((?<!c))?((?<!c))?(?=a)'
+input = "aca"
+matches = [[0, 0], [2, 2]]

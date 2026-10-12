@@ -1,27 +1,26 @@
 [workspace]
-members = ["resharp-algebra", "resharp-parser", "resharp-engine", "resharp-ffi"]
 resolver = "2"
+members = ["resharp-algebra", "resharp-engine", "resharp-ffi", "resharp-parser"]
 
 [workspace.package]
-version = "0.7.5"
-edition = "2021"
-license = "MIT"
-repository = "https://github.com/ieviev/resharp"
+version = "0.7.6"
 authors = ["Ian Erik Varatalu"]
+edition = "2021"
 rust-version = "1.70"
+repository = "https://github.com/ieviev/resharp"
+license = "MIT"
 
 [workspace.dependencies]
-resharp-algebra = { version = "0.7.5", path = "resharp-algebra" }
-resharp-parser  = { version = "0.7.5", path = "resharp-parser" }
-resharp         = { version = "0.7.5", path = "resharp-engine" }
-
-[profile.release]
-lto = true
-codegen-units = 1
-opt-level = 3
+resharp = { path = "resharp-engine", version = "0.7.6" }
+resharp-algebra = { path = "resharp-algebra", version = "0.7.6" }
+resharp-parser = { path = "resharp-parser", version = "0.7.6" }
 
 [profile.bench]
+opt-level = 3
 lto = true
 codegen-units = 1
-opt-level = 3
 
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1

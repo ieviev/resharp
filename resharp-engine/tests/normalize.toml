@@ -194,3 +194,32 @@ name = 'lookbehind_start_anchor_complement'
 pattern = '(?<=^)~(0+)'
 pp = '(?<=_*(\A|\n))~(0+)'
 
+[[test]]
+name = 'optional_lookahead_is_epsilon'
+pattern = '(?=b)?'
+pp = ''
+
+[[test]]
+name = 'optional_neg_lookahead_is_epsilon'
+pattern = '(?!b)?'
+pp = ''
+
+[[test]]
+name = 'optional_lookbehind_is_epsilon'
+pattern = '(?<=b)?'
+pp = ''
+
+[[test]]
+name = 'optional_lookahead_inside_concat_is_dropped'
+pattern = 'a(?=b)?'
+pp = 'a'
+
+[[test]]
+name = 'optional_lookahead_or_literal_keeps_literal'
+pattern = '(?:(?=b)|x)?'
+pp = '(|x)'
+
+[[test]]
+name = 'optional_captured_lookahead_is_kept'
+pattern = '(?P<g>(?=b))?'
+pp = '(|\2(?=b_*)❮\3❯)'
