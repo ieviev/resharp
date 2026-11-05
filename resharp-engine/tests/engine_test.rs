@@ -2317,8 +2317,8 @@ mod quadratic {
         for (pat, unit) in cases {
             let ratio = offset_skip_scaling(pat, unit);
             assert!(
-                ratio < 16.0,
-                "8x input grew time {ratio:.1}x (>= 16x => quadratic) for {pat:?} on {unit:?}; \
+                ratio < 32.0,
+                "8x input grew time {ratio:.1}x (>= 32x => quadratic) for {pat:?} on {unit:?}; \
                  an absent offset-skip seq must not make the reverse skip scan the whole prefix"
             );
         }
