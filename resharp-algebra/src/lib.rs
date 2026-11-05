@@ -264,7 +264,12 @@ impl MetadataBuilder {
         let left = &self.array[left_id.0 as usize].flags;
         let null = left.nullability().not().and(Nullability::ALWAYS);
         let contains = self.get_contains(*left);
-        MetaFlags::with_nullability(null, contains.or(MetaFlags::INFINITE_LENGTH))
+        MetaFlags::with_nullability(
+            null,
+            contains
+                .or(MetaFlags::CONTAINS_INTER)
+                .or(MetaFlags::INFINITE_LENGTH),
+        )
     }
 
     fn flags_concat(&self, left_id: MetadataId, right_id: MetadataId) -> MetaFlags {
@@ -5596,7 +5601,7 @@ impl RegexBuilder {
                 let left = node_id.left(self);
                 let leftkind = self.get_kind(left);
                 match leftkind {
-                    Kind::Concat | Kind::Star | Kind::Compl => {
+                    Kind::Concat | Kind::Star => {
                         write!(s, "(")?;
                         self.ppw(s, left)?;
                         write!(s, ")")?;

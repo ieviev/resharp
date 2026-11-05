@@ -1485,6 +1485,16 @@ fn run_file_internal(filename: &str) {
                 filename, tc.name, tc.pattern, e
             )
         });
+        if let Some(expected_empty) = tc.empty {
+            assert_eq!(
+                b.is_empty_lang(node),
+                Some(expected_empty),
+                "empty mismatch: file={}, name={:?}, pattern={:?}",
+                filename,
+                tc.name,
+                tc.pattern
+            );
+        }
         let node = b.simplify_fwd_initial(node);
         let got = b.pp(node);
         if let Some(expected_pp) = &tc.pp {
@@ -10113,5 +10123,14 @@ fn repeat_of_lookahead_suffixed_atom_matches_its_right_nested_unrolling() {
         for s in [&b"cca"[..], b"cbacba", b"ccc", b"ccb", b"aac", b"aaa", b"aca"] {
             assert_eq!(a.find_all(s).unwrap(), b.find_all(s).unwrap(), "{rep} {s:?}");
         }
+    }
+}
+
+#[test]
+fn pp_star_and_plus_over_complement_are_consistent() {
+    for (pat, expected) in [("~(cab)*", "~(cab)*"), ("~(cab)+", "~(cab)+")] {
+        let mut b = resharp_algebra::RegexBuilder::new();
+        let n = resharp_parser::parse_ast(&mut b, pat).unwrap();
+        assert_eq!(b.pp(n), expected);
     }
 }

@@ -7,3 +7,38 @@ pp = "[Mm]([Ii][Nn]|[Aa][Xx])"
 name = "ci_flag_grouped_alternation"
 pattern = "(?i)(min|max)"
 pp = "[Mm]([Ii][Nn]|[Aa][Xx])"
+
+[[test]]
+name = "compl_of_star_of_compl_ab_is_empty"
+pattern = "~((~(ab))*)"
+empty = true
+
+[[test]]
+name = "compl_of_star_of_compl_cab_is_empty"
+pattern = "~((~(cab))*)"
+empty = true
+
+[[test]]
+name = "compl_of_compl_cab_star_is_empty"
+pattern = "~(~(cab)*)"
+empty = true
+
+[[test]]
+name = "compl_of_star_of_compl_a_is_nonempty"
+pattern = "~((~(a))*)"
+empty = false
+
+[[test]]
+name = "compl_of_any_star_is_empty"
+pattern = "~(_*)"
+empty = true
+
+[[test]]
+name = "compl_of_star_of_compl_cab_inter_any_is_empty"
+pattern = "~((~(cab))*)&_"
+empty = true
+
+[[test]]
+name = "any_star_inter_compl_of_star_of_compl_cab_is_empty"
+pattern = '_*&~((~(cab))*)'
+empty = true

@@ -28,6 +28,12 @@
         "pattern"
       ],
       "properties": {
+        "empty": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
         "name": {
           "default": "",
           "type": "string"

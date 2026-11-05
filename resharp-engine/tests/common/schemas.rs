@@ -97,6 +97,7 @@ pub struct InternalCase {
     pub pattern: String,
     pub pp: Option<String>,
     pub ts_rev: Option<String>,
+    pub empty: Option<bool>,
 }
 
 #[derive(Deserialize, JsonSchema)]
