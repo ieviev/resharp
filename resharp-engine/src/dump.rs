@@ -110,6 +110,9 @@ fn precompile_bdfa(bdfa: &mut BDFA, b: &mut RegexBuilder) -> Result<(), Error> {
         if !visited.insert(sid) {
             continue;
         }
+        if bdfa.match_rel[sid as usize] > 0 {
+            continue;
+        }
         for mt in 0..n_mt {
             let entry = bdfa.transition(b, sid, mt)?;
             let next = (entry & 0xFFFF) as u16;

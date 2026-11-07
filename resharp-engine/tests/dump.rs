@@ -138,3 +138,35 @@ fn always_nullable_cycle_roundtrip() {
         roundtrip(p, &inputs);
     }
 }
+
+#[test]
+fn dump_of_single_class_stays_small() {
+    use resharp::{RegexOptions, UnicodeMode};
+    let o = RegexOptions::default().unicode(UnicodeMode::Ascii).multiline(false);
+    let re = Regex::with_options("[B-DFGILOS-VZchiqsv-xz]", o).unwrap();
+    let t = std::time::Instant::now();
+    let d = re.dump().unwrap();
+    assert!(d.len() < 100_000, "dump {} bytes in {:?}", d.len(), t.elapsed());
+}
+
+#[test]
+fn dump_of_single_class_roundtrips() {
+    roundtrip("[B-DFGILOS-VZchiqsv-xz]", &["abcdefg BCD xyz", "", "aaa", "zzzBB"]);
+}
+
+#[test]
+fn dump_is_deterministic_across_builds() {
+    use resharp::{RegexOptions, UnicodeMode};
+    let o = || RegexOptions::default().unicode(UnicodeMode::Ascii).multiline(false);
+    for pat in [
+        r"\\([^0-9A-Fa-f]|[0-9A-Fa-f]{1,6})",
+        "[$().^-]",
+        "[1-9A-HJ-NP-Za-km-z]{87,88}",
+    ] {
+        let dump = || Regex::with_options(pat, o()).unwrap().dump().unwrap();
+        let first = dump();
+        for _ in 0..8 {
+            assert_eq!(first, dump(), "{pat}");
+        }
+    }
+}

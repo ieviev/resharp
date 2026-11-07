@@ -66,6 +66,8 @@ impl PartitionTree {
 
     pub fn generate_minterms(sets: HashSet<TSetId>, solver: &mut Solver) -> Vec<TSetId> {
         let mut pt = PartitionTree::new(TSetId::FULL);
+        let mut sets: Vec<TSetId> = sets.into_iter().collect();
+        sets.sort();
         for set in sets {
             pt.refine(0, set, solver);
         }

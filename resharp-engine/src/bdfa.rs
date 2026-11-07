@@ -30,6 +30,7 @@ pub struct BDFA {
     pub match_rel: Vec<u32>,
     /// match end offset per state: step - best (distance from pos to match end).
     pub match_end_off: Vec<u32>,
+    pub end_cands: Vec<Vec<(u32, u32)>>,
     /// log2 of minterm stride.
     pub mt_log: u32,
     #[cfg_attr(feature = "serialize", serde(skip))]
@@ -65,6 +66,7 @@ impl BDFA {
             table: vec![0u32; stride * 2],
             match_rel: vec![0, 0],
             match_end_off: vec![0, 0],
+            end_cands: vec![Vec::new(), Vec::new()],
             mt_log,
             minterms,
             minterms_lookup,
@@ -281,6 +283,18 @@ impl BDFA {
                 match_best,
             );
         }
+        let mut cands = Vec::new();
+        if node != NodeId::MISSING {
+            let mut cur = node;
+            while cur.0 > NodeId::BOT.0 {
+                let packed = b.get_extra(cur);
+                if packed >> 16 > 0 {
+                    cands.push((packed & 0xFFFF, packed >> 16));
+                }
+                cur = cur.right(b);
+            }
+        }
+        self.end_cands.push(cands);
         self.states.push(node);
         self.state_map.insert(node, sid);
         self.match_rel.push(match_step);
@@ -645,22 +659,18 @@ pub(crate) fn bdfa_scan<const PREFIX: u8, const ISMATCH: bool>(
     }
 
     if state != initial {
-        let node = bounded.states[state as usize];
-        if node != NodeId::MISSING {
-            let mut cands: Vec<(usize, usize)> = Vec::new();
-            let mut cur = node;
-            while cur.0 > NodeId::BOT.0 {
-                let packed = b.get_extra(cur);
-                let best = (packed >> 16) as usize;
-                if best > 0 {
-                    if ISMATCH {
-                        return Ok(true);
-                    }
-                    let start = len - (packed & 0xFFFF) as usize;
-                    cands.push((start, start + best));
-                }
-                cur = cur.right(b);
+        let pending = &bounded.end_cands[state as usize];
+        if !pending.is_empty() {
+            if ISMATCH {
+                return Ok(true);
             }
+            let mut cands: Vec<(usize, usize)> = pending
+                .iter()
+                .map(|&(step, best)| {
+                    let start = len - step as usize;
+                    (start, start + best as usize)
+                })
+                .collect();
             cands.sort_by(|a, c| a.0.cmp(&c.0).then(c.1.cmp(&a.1)));
             let mut last_end = matches.last().map_or(0, |m| m.end);
             for (start, end) in cands {
