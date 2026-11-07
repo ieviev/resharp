@@ -42,3 +42,28 @@ empty = true
 name = "any_star_inter_compl_of_star_of_compl_cab_is_empty"
 pattern = '_*&~((~(cab))*)'
 empty = true
+
+[[test]]
+name = "inter_common_fixed_suffix_disjoint_is_empty"
+pattern = '_*a_{10}&_*b_{10}'
+empty = true
+
+[[test]]
+name = "inter_common_fixed_suffix_overlap_is_nonempty"
+pattern = '_*a_{10}&_*[ab]_{10}'
+empty = false
+
+[[test]]
+name = "inter_common_suffix_concats_disjoint_is_empty"
+pattern = 'ab&cb'
+empty = true
+
+[[test]]
+name = "inter_common_suffix_unequal_prefix_lengths_is_nonempty"
+pattern = '_*ab&_*b'
+empty = false
+
+[[test]]
+name = "inter_common_suffix_nonfixed_tail_is_nonempty"
+pattern = '_*a_*&_*b_*'
+empty = false

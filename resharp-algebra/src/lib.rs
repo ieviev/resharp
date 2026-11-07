@@ -3768,6 +3768,47 @@ impl RegexBuilder {
         r
     }
 
+    fn concat_elems(&self, node: NodeId) -> Vec<NodeId> {
+        let mut elems = Vec::new();
+        let mut cur = node;
+        while self.get_kind(cur) == Kind::Concat {
+            elems.push(cur.left(self));
+            cur = cur.right(self);
+        }
+        elems.push(cur);
+        elems
+    }
+
+    fn factor_common_fixed_suffix(&mut self, left: NodeId, right: NodeId) -> Option<NodeId> {
+        if !left.is_concat(self) || !right.is_concat(self) {
+            return None;
+        }
+        if left.contains_lookaround(self)
+            || right.contains_lookaround(self)
+            || left.contains_tags(self)
+            || right.contains_tags(self)
+        {
+            return None;
+        }
+        let (ls, rs) = (self.concat_elems(left), self.concat_elems(right));
+        let max = ls.len().min(rs.len());
+        let mut k = 0;
+        while k < max
+            && ls[ls.len() - 1 - k] == rs[rs.len() - 1 - k]
+            && self.get_fixed_length(ls[ls.len() - 1 - k]).is_some()
+        {
+            k += 1;
+        }
+        if k == 0 {
+            return None;
+        }
+        let head_l = self.mk_concats(ls[..ls.len() - k].iter().copied());
+        let head_r = self.mk_concats(rs[..rs.len() - k].iter().copied());
+        let tail = self.mk_concats(ls[ls.len() - k..].iter().copied());
+        let heads = self.mk_inter(head_l, head_r);
+        Some(self.mk_concat(heads, tail))
+    }
+
     fn attempt_rw_inter_2_inner(&mut self, left: NodeId, right: NodeId) -> Option<NodeId> {
         if cfg!(feature = "norewrite") {
             return None;
@@ -3831,6 +3872,10 @@ impl RegexBuilder {
                     return Some(self.mk_concat(left.left(self), new_right));
                 }
             }
+        }
+
+        if let Some(rw) = self.factor_common_fixed_suffix(left, right) {
+            return Some(rw);
         }
 
         if right.is_compl(self) && right.left(self) == left {
