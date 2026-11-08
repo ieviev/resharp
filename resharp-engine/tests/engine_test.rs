@@ -10127,6 +10127,18 @@ fn repeat_of_lookahead_suffixed_atom_matches_its_right_nested_unrolling() {
 }
 
 #[test]
+fn reverse_long_concat_is_linear() {
+    let pat: String = (0..3000)
+        .map(|i| format!("({}.)", (b'a' + (i % 26) as u8) as char))
+        .collect();
+    let mut b = resharp_algebra::RegexBuilder::new();
+    let n = resharp_parser::parse_ast(&mut b, &pat).unwrap();
+    let before = b.num_nodes();
+    b.reverse(n).unwrap();
+    assert!(b.num_nodes() - before < 100_000, "{}", b.num_nodes() - before);
+}
+
+#[test]
 fn pp_star_and_plus_over_complement_are_consistent() {
     for (pat, expected) in [("~(cab)*", "~(cab)*"), ("~(cab)+", "~(cab)+")] {
         let mut b = resharp_algebra::RegexBuilder::new();

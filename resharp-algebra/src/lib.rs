@@ -2906,12 +2906,20 @@ impl RegexBuilder {
                 spine.push(bottom);
                 bottom = bottom.right(self);
             }
-            let mut acc = self.reverse(bottom)?;
+            let mut pending = vec![self.reverse(bottom)?];
             for &n in spine.iter().rev() {
                 let new_right = self.reverse(n.left(self))?;
-                acc = self.reverse_concat(n, new_right, acc)?;
-                self.cache_reversed(n, acc);
+                if new_right.is_union(self) || n.right(self).is_union(self) {
+                    let acc = self.mk_concats(pending.drain(..));
+                    let acc = self.reverse_concat(n, new_right, acc)?;
+                    self.cache_reversed(n, acc);
+                    pending.push(acc);
+                } else {
+                    pending.push(new_right);
+                }
             }
+            let acc = self.mk_concats(pending.drain(..));
+            self.cache_reversed(node_id, acc);
             return Ok(acc);
         }
         let rw = match self.get_kind(node_id) {
