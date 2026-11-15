@@ -906,7 +906,7 @@ pub(crate) fn build_rev_prefix_search(
     sets: &[TSetId],
     memchr_max: u64,
 ) -> Option<crate::accel::RevTeddySearch> {
-    if sets.len() < 1 {
+    if sets.is_empty() {
         return None;
     }
     let byte_sets_raw: Vec<Vec<u8>> = sets

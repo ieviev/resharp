@@ -1261,7 +1261,7 @@ impl LDFA {
                 l_max_end = new_max;
                 if cache_miss {
                     let (flush_state, flush_pos) = if new_pos >= data_end {
-                        (state as u32, new_pos)
+                        (state, new_pos)
                     } else {
                         let mt = self.mt_lookup[data[new_pos] as usize] as u32;
                         let new_state = self.lazy_transition(b, as_sid(state)?, mt)? as u32;
@@ -1276,7 +1276,7 @@ impl LDFA {
                         fwd_update::<true>(
                             self.effects_id.as_ptr(),
                             self.effects.as_ptr(),
-                            flush_state as u32,
+                            flush_state,
                             flush_pos,
                             l_max_end,
                         )

@@ -1,3 +1,4 @@
+#[allow(clippy::let_and_return)]
 mod classes;
 
 use crate::{NodeId, RegexBuilder};

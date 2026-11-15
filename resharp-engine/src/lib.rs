@@ -1536,7 +1536,7 @@ impl Regex {
             && !has_look
             && !b.contains_anchors(node_fwd_simpl)
             && !matches!(selected, Some(prefix::PrefixKind::AnchoredFwd(_)))
-            && is_match_prefix.as_ref().is_none_or(|p| p.len() < 2)
+            && is_match_prefix.as_ref().map_or(true, |p| p.len() < 2)
         {
             if let Some(fp) = prefix::build_fwd_prefix(&mut b, node_fwd_simpl)? {
                 is_match_extra.push(fp);
@@ -2951,10 +2951,10 @@ mod hardening_tests {
         for _ in 0..500 {
             let n = 1 + next(12);
             let mut edges: Vec<Vec<Edge>> = (0..n).map(|_| Vec::new()).collect();
-            for u in 0..n {
+            for u_edges in edges.iter_mut() {
                 for _ in 0..next(4) {
                     let dst = next(n);
-                    edges[u].push(Edge {
+                    u_edges.push(Edge {
                         dst,
                         set: TSetId::EMPTY,
                     });

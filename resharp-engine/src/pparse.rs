@@ -520,12 +520,12 @@ fn build_parent_group(sk: &Skeleton, num_tags: u32) -> Vec<Option<usize>> {
 
 fn merge_repeat_iter(acc: &[usize], v: &[usize], parent_group: &[Option<usize>]) -> TagVec {
     let mut out = acc.to_vec();
-    for g in 1..parent_group.len() {
+    for (g, &parent) in parent_group.iter().enumerate().skip(1) {
         let (open, close) = (2 * g, 2 * g + 1);
         if close >= v.len() {
             continue;
         }
-        let forced = match parent_group[g] {
+        let forced = match parent {
             Some(p) => v[2 * p] != UNSET,
             None => false,
         };

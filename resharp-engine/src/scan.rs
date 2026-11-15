@@ -64,10 +64,10 @@ fn collect_max<const REV: bool>(
     best: &mut usize,
 ) {
     let eid = effects_id[state as usize] as u32;
-    if eid == EID_NONE as u32 {
+    if eid == EID_NONE {
         return;
     }
-    if eid == EID_CENTER0 as u32 {
+    if eid == EID_CENTER0 {
         if mask.has(Nullability::ALWAYS) {
             if REV {
                 *best = (*best).min(pos);
@@ -683,9 +683,7 @@ pub(crate) fn register_state(
     }
     let sid = state_nodes.len() as Sid;
     state_nodes.push(node);
-    if !node_to_state.contains_key(&node) {
-        node_to_state.insert(node, sid);
-    }
+    node_to_state.entry(node).or_insert(sid);
     let eff_id = b.get_nulls_id(node);
     let eid = b.center_nulls_id(eff_id);
     #[cfg(feature = "debug")]

@@ -297,7 +297,7 @@ fn rewrite_ascii_perl_set(set: &regex_syntax::ast::ClassSet) -> regex_syntax::as
         ClassSet::Item(item) => ClassSet::Item(rewrite_ascii_perl_item(item)),
         ClassSet::BinaryOp(op) => ClassSet::BinaryOp(ClassSetBinaryOp {
             span: op.span,
-            kind: op.kind.clone(),
+            kind: op.kind,
             lhs: Box::new(rewrite_ascii_perl_set(&op.lhs)),
             rhs: Box::new(rewrite_ascii_perl_set(&op.rhs)),
         }),
@@ -538,11 +538,7 @@ pub fn is_escapeable_character(c: char) -> bool {
     if !c.is_ascii() {
         return false;
     }
-    match c {
-        '0'..='9' | 'A'..='Z' | 'a'..='z' => false,
-        '<' | '>' => false,
-        _ => true,
-    }
+    !matches!(c, '0'..='9' | 'A'..='Z' | 'a'..='z' | '<' | '>')
 }
 
 fn is_hex(c: char) -> bool {
@@ -2439,9 +2435,9 @@ impl<'s> ResharpParser<'s> {
             Ast::Alternation(a) => {
                 let mut children = vec![];
                 for ast in &a.asts {
-                    match self.ast_to_node_id(ast, translator, tb) {
-                        Ok(node_id) => children.push(node_id),
-                        Err(err) => return Err(err),
+                    {
+                        let node_id = self.ast_to_node_id(ast, translator, tb)?;
+                        children.push(node_id)
                     }
                 }
                 Ok(tb.mk_unions(children.iter().copied()))
@@ -2511,23 +2507,19 @@ impl<'s> ResharpParser<'s> {
                         _ => {}
                     }
                     match concat_translator {
-                        Some(_) => match self.ast_to_node_id(ast, &mut concat_translator, tb) {
-                            Ok(node_id) => {
-                                if node_id != resharp_algebra::NodeId::EPS {
-                                    prev_boundary_child = None;
-                                    children.push(node_id);
-                                }
+                        Some(_) => {
+                            let node_id = self.ast_to_node_id(ast, &mut concat_translator, tb)?;
+                            if node_id != resharp_algebra::NodeId::EPS {
+                                prev_boundary_child = None;
+                                children.push(node_id);
                             }
-                            Err(err) => return Err(err),
                         },
-                        None => match self.ast_to_node_id(ast, translator, tb) {
-                            Ok(node_id) => {
-                                if node_id != resharp_algebra::NodeId::EPS {
-                                    prev_boundary_child = None;
-                                    children.push(node_id);
-                                }
+                        None => {
+                            let node_id = self.ast_to_node_id(ast, translator, tb)?;
+                            if node_id != resharp_algebra::NodeId::EPS {
+                                prev_boundary_child = None;
+                                children.push(node_id);
                             }
-                            Err(err) => return Err(err),
                         },
                     }
                     i += 1;
@@ -2538,9 +2530,9 @@ impl<'s> ResharpParser<'s> {
             Ast::Intersection(intersection) => {
                 let mut children = vec![];
                 for ast in &intersection.asts {
-                    match self.ast_to_node_id(ast, translator, tb) {
-                        Ok(node_id) => children.push(node_id),
-                        Err(err) => return Err(err),
+                    {
+                        let node_id = self.ast_to_node_id(ast, translator, tb)?;
+                        children.push(node_id)
                     }
                 }
                 Ok(tb.mk_inters(children.into_iter()))
@@ -3987,8 +3979,8 @@ fn is_universal_perl_pair(item: &regex_syntax::ast::ClassSetItem) -> bool {
     }
     match (&items[0], &items[1]) {
         (ClassSetItem::Perl(a), ClassSetItem::Perl(b)) => {
-            let is_all = a.kind == b.kind && a.negated != b.negated;
-            is_all
+            
+            a.kind == b.kind && a.negated != b.negated
         }
         _ => false,
     }

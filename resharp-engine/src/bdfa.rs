@@ -412,7 +412,7 @@ impl BDFA {
 const MATCH_BIT: u32 = 1 << 31;
 
 #[inline(always)]
-fn entry_state(entry: u32, mt_log: u32) -> u16 {
+pub(crate) fn entry_state(entry: u32, mt_log: u32) -> u16 {
     ((entry & !MATCH_BIT) >> mt_log) as u16
 }
 

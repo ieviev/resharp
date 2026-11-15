@@ -4,9 +4,8 @@ mod common;
 fn double_nested_negative_lookbehind_is_match_stays_bounded() {
     let re = Regex::new(r"(?<!(?<!-).):").unwrap();
     for n in [1usize, 100, 803, 5000, 50_000] {
-        assert_eq!(
+        assert!(
             re.is_match(&vec![b':'; n]).unwrap(),
-            true,
             "is_match on {n} colons"
         );
     }
@@ -115,7 +114,7 @@ fn length_one_lookbehind_alternation_supported() {
         vec![resharp::Match { start: 2, end: 3 }]
     );
     let re = Regex::new(r"\ba{0}\b").unwrap();
-    assert_eq!(re.is_match(b"").unwrap(), false);
+    assert!(!re.is_match(b"").unwrap());
 }
 
 #[test]
@@ -184,7 +183,7 @@ fn load_tests(filename: &str) -> Vec<EngineCase> {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests")
         .join(filename);
-    let content = std::fs::read_to_string(&path).expect(&format!("not found {}", filename));
+    let content = std::fs::read_to_string(&path).unwrap_or_else(|_| panic!("not found {}", filename));
     let file: EngineFile = toml::from_str(&content).unwrap();
     assert_unique_names(filename, file.test.iter().map(|tc| tc.name.as_str()));
     file.test
@@ -465,7 +464,7 @@ fn convergence_regressions() {
 }
 
 fn check_vs_regex(pattern: &str, input: &[u8]) {
-    let re = Regex::new(pattern).expect(&format!("failed compile {}", pattern));
+    let re = Regex::new(pattern).unwrap_or_else(|_| panic!("failed compile {}", pattern));
     let matches = re.find_all(input).unwrap();
     let result: Vec<(usize, usize)> = matches.iter().map(|m| (m.start, m.end)).collect();
 
@@ -1827,9 +1826,9 @@ fn empty_language_short_circuits() {
     let re = Regex::new(p).unwrap();
     let big = vec![b'x'; 1 << 20];
     assert_eq!(re.find_all(&big).unwrap(), vec![]);
-    assert_eq!(re.is_match(&big).unwrap(), false);
+    assert!(!re.is_match(&big).unwrap());
     assert_eq!(re.find_all(b"").unwrap(), vec![]);
-    assert_eq!(re.is_match(b"").unwrap(), false);
+    assert!(!re.is_match(b"").unwrap());
 }
 
 #[test]
@@ -2205,11 +2204,9 @@ mod auto_harden {
         let content = std::fs::read_to_string(&path).unwrap();
         let file: AutoHardenFile = toml::from_str(&content).unwrap();
         for tc in file.test {
-            let re = Regex::new(&tc.pattern).expect(&format!(
-                "file={},  pattern={:?}: compile failed",
+            let re = Regex::new(&tc.pattern).unwrap_or_else(|_| panic!("file={},  pattern={:?}: compile failed",
                 path.display(),
-                tc.pattern
-            ));
+                tc.pattern));
             assert_eq!(
                 re.is_hardened(),
                 tc.hardened,
@@ -2655,10 +2652,7 @@ fn suffix_anchored_is_match() {
 
 #[test]
 fn grouped_boundary_contradiction() {
-    match Regex::new(r"(\b)(\B)") {
-        Ok(re) => assert!(re.find_all(b"ab").unwrap().is_empty()),
-        Err(_) => {}
-    }
+    if let Ok(re) = Regex::new(r"(\b)(\B)") { assert!(re.find_all(b"ab").unwrap().is_empty()) }
 }
 
 #[test]
@@ -2727,9 +2721,8 @@ fn wb_after_mixed_word_nonword_class_not_silently_wrong() {
 fn end_anchor_word_boundary_rejected_not_wrong() {
     let p = r"\b(?:af|il)\z\b";
     if let Ok(re) = Regex::new(p) {
-        assert_eq!(
+        assert!(
             re.is_match(b"il").unwrap(),
-            true,
             "{p:?} compiled but silently mis-matches"
         );
     }
@@ -3959,9 +3952,8 @@ fn is_match_findall_agree_complement_end_anchor() {
         );
     }
     let re = resharp::Regex::with_options(r"a~(\z)", resharp::RegexOptions::default()).unwrap();
-    assert_eq!(
-        re.is_match(b"a").unwrap(),
-        false,
+    assert!(
+        !re.is_match(b"a").unwrap(),
         "a~(\\z) on a: end is in z, complement empty"
     );
     assert_eq!(re.find_all(b"a").unwrap().len(), 0);
@@ -4134,15 +4126,13 @@ fn quantified_word_boundary_equals_plain_word_boundary() {
 #[test]
 fn word_boundary_nullable_composition() {
     let re = resharp::Regex::new(r"\ba{0}\b").unwrap();
-    assert_eq!(
-        re.is_match(b"").unwrap(),
-        false,
+    assert!(
+        !re.is_match(b"").unwrap(),
         r"\ba{{0}}\b on empty: expected false"
     );
     let re = resharp::Regex::new(r"\Ba{0}\z").unwrap();
-    assert_eq!(
+    assert!(
         re.is_match(b"").unwrap(),
-        true,
         r"\Ba{{0}}\z on empty: expected true"
     );
 }
@@ -4150,8 +4140,8 @@ fn word_boundary_nullable_composition() {
 #[test]
 fn is_match_fwd_prefix_not_quadratic() {
     let re = Regex::new(r"(a+)+b").unwrap();
-    assert_eq!(re.is_match(b"aaab").unwrap(), true);
-    assert_eq!(re.is_match(b"ba").unwrap(), false);
+    assert!(re.is_match(b"aaab").unwrap());
+    assert!(!re.is_match(b"ba").unwrap());
     let hay = vec![b'a'; 65536];
     let t = std::time::Instant::now();
     let _ = re.is_match(&hay).unwrap();
@@ -4359,14 +4349,12 @@ fn find_anchored_respects_leading_assertion_at_begin() {
 #[test]
 fn end_before_begin_anchor_matches_empty_string() {
     let re = Regex::new(r"\z\A").unwrap();
-    assert_eq!(
+    assert!(
         re.is_match(b"").unwrap(),
-        true,
         "\\z\\A must match empty string"
     );
-    assert_eq!(
-        re.is_match(b"x").unwrap(),
-        false,
+    assert!(
+        !re.is_match(b"x").unwrap(),
         "\\z\\A must not match non-empty"
     );
     assert_eq!(
@@ -4374,14 +4362,12 @@ fn end_before_begin_anchor_matches_empty_string() {
         vec![resharp::Match { start: 0, end: 0 }]
     );
     let re2 = Regex::new(r"\za*\A").unwrap();
-    assert_eq!(
+    assert!(
         re2.is_match(b"").unwrap(),
-        true,
         "\\za*\\A must match empty string"
     );
-    assert_eq!(
-        re2.is_match(b"a").unwrap(),
-        false,
+    assert!(
+        !re2.is_match(b"a").unwrap(),
         "\\za*\\A must not match non-empty"
     );
 }
@@ -10050,13 +10036,10 @@ fn tail_distributes_into_a_lookahead_arm_at_any_union_depth() {
 // a fused lookbehind into both arms resolves each `prev` independently and makes it match.
 #[test]
 fn zero_width_left_factor_may_not_contain_a_lookaround() {
-    match Regex::new(r"(\b)(\B)") {
-        Ok(re) => assert!(
-            re.find_all(b"ab").unwrap().is_empty(),
-            "(\\b)(\\B) is a contradiction and must match nothing"
-        ),
-        Err(_) => {}
-    }
+    if let Ok(re) = Regex::new(r"(\b)(\B)") { assert!(
+        re.find_all(b"ab").unwrap().is_empty(),
+        "(\\b)(\\B) is a contradiction and must match nothing"
+    ) }
 }
 
 // a capture whose body is a lookbehind used to be `UnsupportedPattern`. the cause was
@@ -10423,8 +10406,7 @@ fn rev_lookahead_past_end_under_intersection() {
     ];
     for &(pat, inp, want) in cases {
         for noprefix in [false, true] {
-            let mut o = RegexOptions::default();
-            o.disable_prefixes = noprefix;
+            let o = RegexOptions { disable_prefixes: noprefix, ..Default::default() };
             let got: Vec<(usize, usize)> = Regex::with_options(pat, o)
                 .unwrap()
                 .find_all(inp.as_bytes())
@@ -10726,8 +10708,7 @@ fn wide_union_derivative_matches_every_alternative() {
 
 #[test]
 fn nested_lookahead_budget_still_enforced_after_analysis() {
-    let mut opts = RegexOptions::default();
-    opts.lookahead_context_max = 0;
+    let opts = RegexOptions { lookahead_context_max: 0, ..Default::default() };
     let re = Regex::with_options(r"a(?=b(?!c))", opts).expect("compile");
     let err = re
         .is_match(b"xxabxx")

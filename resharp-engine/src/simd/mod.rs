@@ -1375,8 +1375,8 @@ impl FwdRangeSearch {
                 let bit = mask.trailing_zeros() as usize;
                 let candidate = pos + bit;
                 let mut ok = true;
-                for i in 0..self.len {
-                    if !self.sets[i].contains_byte(*ptr.add(candidate + i)) {
+                for (i, set) in self.sets.iter().enumerate().take(self.len) {
+                    if !set.contains_byte(*ptr.add(candidate + i)) {
                         ok = false;
                         break;
                     }
@@ -1481,8 +1481,8 @@ impl FwdRangeSearch {
                 let bit = mask.trailing_zeros() as usize;
                 let candidate = pos + bit;
                 let mut ok = true;
-                for i in 0..self.len {
-                    if !self.sets[i].contains_byte(*ptr.add(candidate + i)) {
+                for (i, set) in self.sets.iter().enumerate().take(self.len) {
+                    if !set.contains_byte(*ptr.add(candidate + i)) {
                         ok = false;
                         break;
                     }

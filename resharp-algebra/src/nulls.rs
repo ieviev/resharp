@@ -243,145 +243,6 @@ impl RunList {
     }
 }
 
-#[cfg(test)]
-mod runlist_tests {
-    use super::*;
-
-    fn r(mask: Nullability, lo: u32, hi: u32) -> NullRun {
-        NullRun::new(mask, lo, hi)
-    }
-
-    #[test]
-    fn empty_list_flattens_to_empty() {
-        let a = RunArena::default();
-        assert_eq!(RunList::empty(true).to_vec(&a), Vec::<NullRun>::new());
-        assert_eq!(RunList::empty(false).to_vec(&a), Vec::<NullRun>::new());
-    }
-
-    #[test]
-    fn ascending_prepend_builds_correct_order() {
-        let mut a = RunArena::default();
-        let l = RunList::empty(true);
-        let l = l.try_insert_extreme(&mut a, r(Nullability::ALWAYS, 5, 5)).unwrap();
-        let l = l.try_insert_extreme(&mut a, r(Nullability::ALWAYS, 3, 3)).unwrap();
-        let l = l.try_insert_extreme(&mut a, r(Nullability::ALWAYS, 0, 1)).unwrap();
-        assert_eq!(
-            l.to_vec(&a),
-            vec![r(Nullability::ALWAYS, 0, 1), r(Nullability::ALWAYS, 3, 3), r(Nullability::ALWAYS, 5, 5)]
-        );
-    }
-
-    #[test]
-    fn descending_prepend_builds_correct_order() {
-        let mut a = RunArena::default();
-        let l = RunList::empty(false);
-        let l = l.try_insert_extreme(&mut a, r(Nullability::END, 0, 0)).unwrap();
-        let l = l.try_insert_extreme(&mut a, r(Nullability::END, 2, 2)).unwrap();
-        let l = l.try_insert_extreme(&mut a, r(Nullability::END, 10, 12)).unwrap();
-        assert_eq!(
-            l.to_vec(&a),
-            vec![r(Nullability::END, 0, 0), r(Nullability::END, 2, 2), r(Nullability::END, 10, 12)]
-        );
-    }
-
-    #[test]
-    fn touching_same_mask_coalesces_at_head_only() {
-        let mut a = RunArena::default();
-        let l = RunList::empty(true);
-        let l = l.try_insert_extreme(&mut a, r(Nullability::ALWAYS, 5, 5)).unwrap();
-        let l = l.try_insert_extreme(&mut a, r(Nullability::ALWAYS, 4, 4)).unwrap();
-        assert_eq!(l.to_vec(&a), vec![r(Nullability::ALWAYS, 4, 5)]);
-    }
-
-    #[test]
-    fn touching_different_mask_does_not_coalesce() {
-        let mut a = RunArena::default();
-        let l = RunList::empty(true);
-        let l = l.try_insert_extreme(&mut a, r(Nullability::ALWAYS, 5, 5)).unwrap();
-        let l = l.try_insert_extreme(&mut a, r(Nullability::END, 4, 4)).unwrap();
-        assert_eq!(l.to_vec(&a), vec![r(Nullability::END, 4, 4), r(Nullability::ALWAYS, 5, 5)]);
-    }
-
-    #[test]
-    fn overlapping_extreme_is_rejected() {
-        let mut a = RunArena::default();
-        let l = RunList::empty(true);
-        let l = l.try_insert_extreme(&mut a, r(Nullability::ALWAYS, 5, 7)).unwrap();
-        assert!(l.try_insert_extreme(&mut a, r(Nullability::ALWAYS, 6, 6)).is_none());
-        assert!(l.try_insert_extreme(&mut a, r(Nullability::ALWAYS, 3, 4)).is_some());
-    }
-
-    #[test]
-    fn min_max_track_correctly_in_both_directions() {
-        let mut a = RunArena::default();
-        let l = RunList::empty(true);
-        let l = l.try_insert_extreme(&mut a, r(Nullability::ALWAYS, 10, 10)).unwrap();
-        assert_eq!((l.min, l.max), (10, 10));
-        let l = l.try_insert_extreme(&mut a, r(Nullability::ALWAYS, 5, 5)).unwrap();
-        assert_eq!((l.min, l.max), (5, 10));
-        let l = l.try_insert_extreme(&mut a, r(Nullability::ALWAYS, 4, 4)).unwrap();
-        assert_eq!((l.min, l.max), (4, 10));
-
-        let d = RunList::empty(false);
-        let d = d.try_insert_extreme(&mut a, r(Nullability::END, 0, 0)).unwrap();
-        assert_eq!((d.min, d.max), (0, 0));
-        let d = d.try_insert_extreme(&mut a, r(Nullability::END, 5, 5)).unwrap();
-        assert_eq!((d.min, d.max), (0, 5));
-        let d = d.try_insert_extreme(&mut a, r(Nullability::END, 6, 6)).unwrap();
-        assert_eq!((d.min, d.max), (0, 6));
-    }
-
-    #[test]
-    fn wrong_direction_is_rejected() {
-        let mut a = RunArena::default();
-        let l = RunList::empty(true);
-        let l = l.try_insert_extreme(&mut a, r(Nullability::ALWAYS, 5, 5)).unwrap();
-        assert!(l.try_insert_extreme(&mut a, r(Nullability::ALWAYS, 10, 10)).is_none());
-    }
-
-    #[test]
-    fn matches_or_runs_for_random_extreme_sequences() {
-        let mut state: u64 = 0x9E3779B97F4A7C15;
-        let mut next = move || {
-            state ^= state << 13;
-            state ^= state >> 7;
-            state ^= state << 17;
-            state
-        };
-        let masks = [Nullability::ALWAYS, Nullability::END, Nullability::BEGIN, Nullability::CENTER];
-        for _ in 0..200 {
-            let mut arena = RunArena::default();
-            let ascending = next() % 2 == 0;
-            let mut list = RunList::empty(ascending);
-            let mut eager: Nulls = Vec::new();
-            let mut boundary: i64 = if ascending { 1_000_000 } else { -1 };
-            for _ in 0..30 {
-                let mask = masks[(next() % masks.len() as u64) as usize];
-                let width = (next() % 4) as i64;
-                let gap = 1 + (next() % 5) as i64;
-                let (lo, hi) = if ascending {
-                    let hi = boundary - gap;
-                    let lo = hi - width;
-                    boundary = lo;
-                    (lo, hi)
-                } else {
-                    let lo = boundary + gap;
-                    let hi = lo + width;
-                    boundary = hi;
-                    (lo, hi)
-                };
-                if lo < 0 {
-                    break;
-                }
-                let run = r(mask, lo as u32, hi as u32);
-                list = list.try_insert_extreme(&mut arena, run).expect("strictly-extreme by construction");
-                eager = or_runs(&eager, &vec![run]);
-            }
-            assert_eq!(list.to_vec(&arena), eager, "ascending={ascending}");
-        }
-    }
-}
-
 #[inline]
 fn push_coalesced(runs: &mut Nulls, mask: Nullability, lo: u32, hi: u32, tag: u32) {
     if let Some(last) = runs.last_mut() {
@@ -1172,5 +1033,144 @@ impl NullsBuilder {
         let (b, s) = self.materialized_pair(body, shifts);
         let result = union_shifted_runs(&b, &s);
         self.get_runs_id(result)
+    }
+}
+
+#[cfg(test)]
+mod runlist_tests {
+    use super::*;
+
+    fn r(mask: Nullability, lo: u32, hi: u32) -> NullRun {
+        NullRun::new(mask, lo, hi)
+    }
+
+    #[test]
+    fn empty_list_flattens_to_empty() {
+        let a = RunArena::default();
+        assert_eq!(RunList::empty(true).to_vec(&a), Vec::<NullRun>::new());
+        assert_eq!(RunList::empty(false).to_vec(&a), Vec::<NullRun>::new());
+    }
+
+    #[test]
+    fn ascending_prepend_builds_correct_order() {
+        let mut a = RunArena::default();
+        let l = RunList::empty(true);
+        let l = l.try_insert_extreme(&mut a, r(Nullability::ALWAYS, 5, 5)).unwrap();
+        let l = l.try_insert_extreme(&mut a, r(Nullability::ALWAYS, 3, 3)).unwrap();
+        let l = l.try_insert_extreme(&mut a, r(Nullability::ALWAYS, 0, 1)).unwrap();
+        assert_eq!(
+            l.to_vec(&a),
+            vec![r(Nullability::ALWAYS, 0, 1), r(Nullability::ALWAYS, 3, 3), r(Nullability::ALWAYS, 5, 5)]
+        );
+    }
+
+    #[test]
+    fn descending_prepend_builds_correct_order() {
+        let mut a = RunArena::default();
+        let l = RunList::empty(false);
+        let l = l.try_insert_extreme(&mut a, r(Nullability::END, 0, 0)).unwrap();
+        let l = l.try_insert_extreme(&mut a, r(Nullability::END, 2, 2)).unwrap();
+        let l = l.try_insert_extreme(&mut a, r(Nullability::END, 10, 12)).unwrap();
+        assert_eq!(
+            l.to_vec(&a),
+            vec![r(Nullability::END, 0, 0), r(Nullability::END, 2, 2), r(Nullability::END, 10, 12)]
+        );
+    }
+
+    #[test]
+    fn touching_same_mask_coalesces_at_head_only() {
+        let mut a = RunArena::default();
+        let l = RunList::empty(true);
+        let l = l.try_insert_extreme(&mut a, r(Nullability::ALWAYS, 5, 5)).unwrap();
+        let l = l.try_insert_extreme(&mut a, r(Nullability::ALWAYS, 4, 4)).unwrap();
+        assert_eq!(l.to_vec(&a), vec![r(Nullability::ALWAYS, 4, 5)]);
+    }
+
+    #[test]
+    fn touching_different_mask_does_not_coalesce() {
+        let mut a = RunArena::default();
+        let l = RunList::empty(true);
+        let l = l.try_insert_extreme(&mut a, r(Nullability::ALWAYS, 5, 5)).unwrap();
+        let l = l.try_insert_extreme(&mut a, r(Nullability::END, 4, 4)).unwrap();
+        assert_eq!(l.to_vec(&a), vec![r(Nullability::END, 4, 4), r(Nullability::ALWAYS, 5, 5)]);
+    }
+
+    #[test]
+    fn overlapping_extreme_is_rejected() {
+        let mut a = RunArena::default();
+        let l = RunList::empty(true);
+        let l = l.try_insert_extreme(&mut a, r(Nullability::ALWAYS, 5, 7)).unwrap();
+        assert!(l.try_insert_extreme(&mut a, r(Nullability::ALWAYS, 6, 6)).is_none());
+        assert!(l.try_insert_extreme(&mut a, r(Nullability::ALWAYS, 3, 4)).is_some());
+    }
+
+    #[test]
+    fn min_max_track_correctly_in_both_directions() {
+        let mut a = RunArena::default();
+        let l = RunList::empty(true);
+        let l = l.try_insert_extreme(&mut a, r(Nullability::ALWAYS, 10, 10)).unwrap();
+        assert_eq!((l.min, l.max), (10, 10));
+        let l = l.try_insert_extreme(&mut a, r(Nullability::ALWAYS, 5, 5)).unwrap();
+        assert_eq!((l.min, l.max), (5, 10));
+        let l = l.try_insert_extreme(&mut a, r(Nullability::ALWAYS, 4, 4)).unwrap();
+        assert_eq!((l.min, l.max), (4, 10));
+
+        let d = RunList::empty(false);
+        let d = d.try_insert_extreme(&mut a, r(Nullability::END, 0, 0)).unwrap();
+        assert_eq!((d.min, d.max), (0, 0));
+        let d = d.try_insert_extreme(&mut a, r(Nullability::END, 5, 5)).unwrap();
+        assert_eq!((d.min, d.max), (0, 5));
+        let d = d.try_insert_extreme(&mut a, r(Nullability::END, 6, 6)).unwrap();
+        assert_eq!((d.min, d.max), (0, 6));
+    }
+
+    #[test]
+    fn wrong_direction_is_rejected() {
+        let mut a = RunArena::default();
+        let l = RunList::empty(true);
+        let l = l.try_insert_extreme(&mut a, r(Nullability::ALWAYS, 5, 5)).unwrap();
+        assert!(l.try_insert_extreme(&mut a, r(Nullability::ALWAYS, 10, 10)).is_none());
+    }
+
+    #[test]
+    fn matches_or_runs_for_random_extreme_sequences() {
+        let mut state: u64 = 0x9E3779B97F4A7C15;
+        let mut next = move || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+        let masks = [Nullability::ALWAYS, Nullability::END, Nullability::BEGIN, Nullability::CENTER];
+        for _ in 0..200 {
+            let mut arena = RunArena::default();
+            let ascending = next() % 2 == 0;
+            let mut list = RunList::empty(ascending);
+            let mut eager: Nulls = Vec::new();
+            let mut boundary: i64 = if ascending { 1_000_000 } else { -1 };
+            for _ in 0..30 {
+                let mask = masks[(next() % masks.len() as u64) as usize];
+                let width = (next() % 4) as i64;
+                let gap = 1 + (next() % 5) as i64;
+                let (lo, hi) = if ascending {
+                    let hi = boundary - gap;
+                    let lo = hi - width;
+                    boundary = lo;
+                    (lo, hi)
+                } else {
+                    let lo = boundary + gap;
+                    let hi = lo + width;
+                    boundary = hi;
+                    (lo, hi)
+                };
+                if lo < 0 {
+                    break;
+                }
+                let run = r(mask, lo as u32, hi as u32);
+                list = list.try_insert_extreme(&mut arena, run).expect("strictly-extreme by construction");
+                eager = or_runs(&eager, &vec![run]);
+            }
+            assert_eq!(list.to_vec(&arena), eager, "ascending={ascending}");
+        }
     }
 }

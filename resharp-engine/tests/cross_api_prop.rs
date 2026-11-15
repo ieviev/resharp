@@ -166,8 +166,7 @@ fn empty_anchor_newline_seed() {
 
 #[test]
 fn is_match_does_not_exhaust_forward_dfa_for_absent_suffix() {
-    let mut opts = RegexOptions::default();
-    opts.max_dfa_capacity = 128;
+    let opts = RegexOptions { max_dfa_capacity: 128, ..Default::default() };
     let re = Regex::with_options(r"[ab]*a[ab]{12}z", opts).unwrap();
     let mut seed = 1u32;
     let input: Vec<u8> = (0..4096)

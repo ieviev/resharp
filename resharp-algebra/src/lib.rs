@@ -934,14 +934,15 @@ impl RegexBuilder {
         let mut terms: Vec<TRegexId> = terms
             .into_iter()
             .map(|mut t| {
-                while beta != TSetId::FULL {
-                    let TRegex::ITE(c, a, b) = self.tr_array[t.0 as usize] else { break };
-                    if self.mb.solver.unsat_id(beta, c) {
-                        t = b;
-                    } else if self.mb.solver.contains_id(c, beta) {
-                        t = a;
-                    } else {
-                        break;
+                if beta != TSetId::FULL {
+                    while let TRegex::ITE(c, a, b) = self.tr_array[t.0 as usize] {
+                        if self.mb.solver.unsat_id(beta, c) {
+                            t = b;
+                        } else if self.mb.solver.contains_id(c, beta) {
+                            t = a;
+                        } else {
+                            break;
+                        }
                     }
                 }
                 t
@@ -2052,7 +2053,7 @@ impl RegexBuilder {
                 self.reversed[node_id.0 as usize] = reversed_id;
             }
         }
-        return reversed_id;
+        reversed_id
     }
 
     fn init(&mut self, inst: NodeKey) -> NodeId {
@@ -3276,12 +3277,12 @@ impl RegexBuilder {
     }
 
     pub fn prefix_ts(&mut self, node_id: NodeId) -> NodeId {
-        let with_ts = if node_id.is_concat(self) && node_id.left(self) == NodeId::BEGIN {
+        
+        if node_id.is_concat(self) && node_id.left(self) == NodeId::BEGIN {
             node_id
         } else {
             self.mk_concat(NodeId::TS, node_id)
-        };
-        with_ts
+        }
     }
 
     pub fn strip_trailing_redundant_lookahead(&mut self, node_id: NodeId) -> Option<NodeId> {
@@ -3829,11 +3830,10 @@ impl RegexBuilder {
             if tail == self.mk_opt(head) {
                 return Some(head);
             }
-            if tail == NodeId::BEGIN {
-                if self.get_min_max_length(head) == (0, 0) {
+            if tail == NodeId::BEGIN
+                && self.get_min_max_length(head) == (0, 0) {
                     return Some(self.mk_concat(NodeId::BEGIN, head));
                 }
-            }
             let la_tail = self.get_lookahead_tail(head);
             let new_la_tail = self.mk_concat(la_tail.missing_to_eps(), tail);
             let la_body = self.get_lookahead_inner(head);
@@ -4352,14 +4352,12 @@ impl RegexBuilder {
             }
         }
 
-        if left.is_concat(self) && right.is_concat(self) {
-            if left.left(self) == right.left(self) {
-                if left.left(self).is_pred(self) {
+        if left.is_concat(self) && right.is_concat(self)
+            && left.left(self) == right.left(self)
+                && left.left(self).is_pred(self) {
                     let new_right = self.mk_inter(left.right(self), right.right(self));
                     return Some(self.mk_concat(left.left(self), new_right));
                 }
-            }
-        }
 
         if let Some(rw) = self.factor_common_fixed_suffix(left, right) {
             return Some(rw);
@@ -5214,17 +5212,11 @@ impl RegexBuilder {
                 return la_tail.missing_to_eps();
             }
 
-            if la_tail != NodeId::MISSING {
-                match self.get_kind(la_tail) {
-                    _ => {
-                        if la_body.is_compl_plus_end(self) {
-                            let minlen = self.get_min_length_only(la_tail);
-                            if minlen >= 1 {
-                                return NodeId::BOT;
-                            }
-                        }
-                    }
-                }
+            if la_tail != NodeId::MISSING
+                && la_body.is_compl_plus_end(self)
+                && self.get_min_length_only(la_tail) >= 1
+            {
+                return NodeId::BOT;
             }
         }
 
@@ -6368,19 +6360,14 @@ impl RegexBuilder {
 
     pub fn simplify_fwd_initial(&mut self, node_id: NodeId) -> NodeId {
         let mut memo: FxHashMap<NodeId, NodeId> = FxHashMap::default();
-        match self.get_kind(node_id) {
-            Kind::Concat => {
-                let l = self.simplify_fwd_initial_rec(node_id.left(self), &mut memo);
-                let r = self.simplify_fwd_initial_rec(node_id.right(self), &mut memo);
-                if r.is_concat(self) {
-                    if r.left(self).is_ts() && !r.right(self).is_lookahead(self) {
-                        if l.is_begin_nullable(self) && !l.contains_tags(self) {
-                            return r;
-                        }
+        if self.get_kind(node_id) == Kind::Concat {
+            let l = self.simplify_fwd_initial_rec(node_id.left(self), &mut memo);
+            let r = self.simplify_fwd_initial_rec(node_id.right(self), &mut memo);
+            if r.is_concat(self)
+                && r.left(self).is_ts() && !r.right(self).is_lookahead(self)
+                    && l.is_begin_nullable(self) && !l.contains_tags(self) {
+                        return r;
                     }
-                }
-            }
-            _ => {}
         }
 
         self.simplify_fwd_initial_rec(node_id, &mut memo)
@@ -6903,14 +6890,8 @@ impl RegexBuilder {
                 None => return,
                 Some((curr, curr_set)) => match *self.get_tregex(curr) {
                     TRegex::Leaf(n) => {
-                        let mut curr = n;
-                        while curr != NodeId::BOT {
-                            match self.get_kind(curr) {
-                                _ => {
-                                    f(self, n, curr_set);
-                                    curr = NodeId::BOT;
-                                }
-                            }
+                        if n != NodeId::BOT {
+                            f(self, n, curr_set);
                         }
                     }
                     TRegex::ITE(cnd, then_id, else_id) => {

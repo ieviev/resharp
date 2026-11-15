@@ -35,8 +35,7 @@ impl PartitionTree {
         if minterms.len() <= 1 {
             return lookup;
         }
-        let mut mt_index = 1u8;
-        for m in minterms.iter().skip(1) {
+        for (mt_index, m) in (1u8..).zip(minterms.iter().skip(1)) {
             for i in 0..4 {
                 for j in 0..64 {
                     let nthbit = 1u64 << j;
@@ -46,7 +45,6 @@ impl PartitionTree {
                     }
                 }
             }
-            mt_index += 1;
         }
         lookup
     }

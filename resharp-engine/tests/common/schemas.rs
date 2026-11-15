@@ -168,17 +168,12 @@ pub struct QuadraticFile {
     pub test: Vec<QuadraticCase>,
 }
 
-#[derive(Deserialize, JsonSchema, Clone, Copy, PartialEq, Eq)]
+#[derive(Deserialize, JsonSchema, Clone, Copy, PartialEq, Eq, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum QuadKind {
+    #[default]
     Fwd,
     Dfa,
-}
-
-impl Default for QuadKind {
-    fn default() -> Self {
-        QuadKind::Fwd
-    }
 }
 
 #[derive(Deserialize, JsonSchema)]

@@ -235,11 +235,10 @@ fn fwd_lb_prefix_impl<const FIRST: bool>(
                 end: max_end,
             });
             let mut emitted_zw = false;
-            if max_end > body_start && body_nullable {
-                if try_emit_zero_width(fwd, lb_verify, b, lb_len, fwd_prefix, input, max_end, matches)? {
+            if max_end > body_start && body_nullable
+                && try_emit_zero_width(fwd, lb_verify, b, lb_len, fwd_prefix, input, max_end, matches)? {
                     emitted_zw = true;
                 }
-            }
             // back up lb_len so it can be re-checked for next match
             search_start = if emitted_zw {
                 (max_end + 1).saturating_sub(lb_len)
@@ -277,11 +276,10 @@ fn fwd_lb_prefix_impl<const FIRST: bool>(
                 end: max_end,
             });
             let mut emitted_zw = false;
-            if max_end > body_start && body_nullable {
-                if try_emit_zero_width(fwd, lb_verify, b, lb_len, fwd_prefix, input, max_end, matches)? {
+            if max_end > body_start && body_nullable
+                && try_emit_zero_width(fwd, lb_verify, b, lb_len, fwd_prefix, input, max_end, matches)? {
                     emitted_zw = true;
                 }
-            }
             search_start = if max_end > body_start {
                 if emitted_zw {
                     (max_end + 1).saturating_sub(lb_len)

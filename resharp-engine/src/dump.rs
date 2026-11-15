@@ -122,7 +122,7 @@ fn precompile_bdfa(bdfa: &mut BDFA, b: &mut RegexBuilder) -> Result<(), Error> {
         }
         for mt in 0..n_mt {
             let entry = bdfa.transition(b, sid, mt)?;
-            let next = (entry & 0xFFFF) as u16;
+            let next = crate::bdfa::entry_state(entry, bdfa.mt_log);
             if next != 0 && !visited.contains(&next) {
                 work.push(next);
             }
