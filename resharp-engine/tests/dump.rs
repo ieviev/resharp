@@ -10,6 +10,61 @@ fn roundtrip(pattern: &str, inputs: &[&str]) {
         let a = re.find_all(s.as_bytes()).unwrap();
         let b = re2.find_all(s.as_bytes()).unwrap();
         assert_eq!(a, b, "pattern {pattern:?} input {s:?}");
+        assert_eq!(
+            re.is_match(s.as_bytes()).unwrap(),
+            re2.is_match(s.as_bytes()).unwrap(),
+            "is_match pattern {pattern:?} input {s:?}"
+        );
+    }
+}
+
+#[test]
+fn missing_contains_dfa_is_rejected() {
+    use bincode::Options;
+    let re = Regex::new(r"[^:]//+").unwrap();
+    assert_eq!(re.find_all_kind_name(), "Dfa");
+    let config = bincode::DefaultOptions::new().with_fixint_encoding().with_little_endian();
+    let bytes = re.dump().unwrap();
+    let mut dump: resharp::dump::RegexDump = config.deserialize(&bytes).unwrap();
+    assert!(dump.is_match_dfa.take().is_some());
+    let loaded = Regex::load(&config.serialize(&dump).unwrap()).unwrap();
+    assert!(matches!(loaded.is_match(b"text // comment"), Err(resharp::Error::InternalError("missing is_match DFA"))));
+}
+
+#[test]
+fn minimum_match_length_roundtrip() {
+    roundtrip(r"[0-9a-f]{64}\.json", &["fff.json", &format!("{}.json", "f".repeat(64))]);
+}
+
+#[test]
+fn reverse_contains_dfa_roundtrip() {
+    roundtrip(r"[^:]//+", &["text // comment", "https://example", "no comment", "//"]);
+}
+
+#[test]
+fn begin_anchored_arm_split_roundtrip() {
+    let re = Regex::with_options(r"[ \t]+$|^[ \t]+", resharp::RegexOptions::default().unicode(resharp::UnicodeMode::Ascii).multiline(false)).unwrap();
+    let loaded = Regex::load(&re.dump().unwrap()).unwrap();
+    for input in ["", "x", " x", "x ", "x y", "\t", "xx  "] {
+        assert_eq!(re.is_match(input.as_bytes()).unwrap(), loaded.is_match(input.as_bytes()).unwrap(), "{input:?}");
+    }
+}
+
+#[test]
+fn forward_is_match_direction_roundtrip() {
+    let re = Regex::with_options(r"(className|data-[0-9A-Z_a-z]+|style)[ \t]*=[ \t]*\{[^}]{0,3}\{[^}]{0,3}\}[^}]{0,3}\}", resharp::RegexOptions::default().unicode(resharp::UnicodeMode::Ascii).multiline(false)).unwrap();
+    let loaded = Regex::load(&re.dump().unwrap()).unwrap();
+    for input in ["", "x", "className={a{b}c}", "style = { {x} y }", "data-id={{}}", "style={a}"] {
+        assert_eq!(re.is_match(input.as_bytes()).unwrap(), loaded.is_match(input.as_bytes()).unwrap(), "{input:?}");
+    }
+}
+
+#[test]
+fn word_boundary_literal_contains_roundtrip() {
+    let re = Regex::with_options(r"\bxml\b", resharp::RegexOptions::default().unicode(resharp::UnicodeMode::Ascii).multiline(false)).unwrap();
+    let loaded = Regex::load(&re.dump().unwrap()).unwrap();
+    for input in ["", "none", "xml", "!xml!", "axml", "xml2", "éxmlé"] {
+        assert_eq!(re.is_match(input.as_bytes()).unwrap(), loaded.is_match(input.as_bytes()).unwrap(), "{input:?}");
     }
 }
 
@@ -168,5 +223,32 @@ fn dump_is_deterministic_across_builds() {
         for _ in 0..8 {
             assert_eq!(first, dump(), "{pat}");
         }
+    }
+}
+
+#[test]
+fn anchored_is_match() {
+    roundtrip(r"^[^\r]{0,10}(?:foo|bar)", &["xx foo", "bar", "aaaaaaaaaaaaaaaaaaaaaaa foo", "", "zzz"]);
+}
+
+#[test]
+fn is_match_survives_roundtrip() {
+    let inputs = ["", "a", "ab", "abc\n", "foo bar", "xx\nab", "b", "aab b", "\n"];
+    for p in [
+        r"\Aab",
+        r"ab\z",
+        r"\bfoo\b",
+        r"(?<=a)b",
+        r"a(?=b)",
+        r"(?<!x)a(?!b)",
+        r"foo.*bar",
+        r"\d+|[a-c]{2,3}",
+        r"(?:a|b)+c&~(.*bb.*)",
+        r"^ab$",
+        r"\Afoo bar",
+        r"x*(?:(?!a)\A|c)&(?:|y)",
+        r"(?<=\n)&(?:\A(?!a)\A){2}",
+    ] {
+        roundtrip(p, &inputs);
     }
 }

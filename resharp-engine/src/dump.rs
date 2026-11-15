@@ -11,7 +11,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::bdfa::BDFA;
 use crate::captures::CaptureDispatch;
-use crate::ldfa::{DFA_DEAD, DFA_INITIAL, LDFA};
+use crate::ismatch::IsMatchDfa;
+use crate::ldfa::{DFA_DEAD, DFA_INITIAL, LDFA, Sid};
 use crate::prefix::PrefixKind;
 #[cfg(feature = "stream")]
 use crate::stream::{StreamCache, StreamInit};
@@ -37,6 +38,7 @@ pub(crate) mod array256 {
 #[allow(missing_docs)]
 pub struct RegexDump {
     pub fixed_length: Option<u32>,
+    pub min_length: u32,
     pub empty_nullable: bool,
     pub always_nullable: bool,
     pub star_loop: bool,
@@ -48,8 +50,10 @@ pub struct RegexDump {
     pub fwd_lb_stripped: bool,
     pub rev_end_anchored: bool,
     pub has_bounded: bool,
-    pub bounded_safe_find_all: bool,
     pub fwd_lb_body_nullable: bool,
+    pub is_match_prefix: Option<crate::accel::FwdPrefixSearch>,
+    pub is_match_extra: Vec<crate::accel::FwdPrefixSearch>,
+    pub is_match_fwd: Option<crate::accel::FwdPrefixSearch>,
     pub has_lb: bool,
     pub has_la: bool,
     pub neg_lb: Option<crate::prefix::NegLb>,
@@ -65,6 +69,9 @@ pub struct RegexDump {
     pub lb_verify: Option<LDFA>,
     pub rev_ts: Option<LDFA>,
     pub bounded: Option<BDFA>,
+    pub rev_anchored: Option<LDFA>,
+    pub is_match_dfa: Option<LDFA>,
+    pub is_match_begin_dfa: Option<LDFA>,
     #[cfg(feature = "convergence_prefix")]
     pub conv_prefix: bool,
     #[cfg(feature = "convergence_prefix")]
@@ -74,8 +81,8 @@ pub struct RegexDump {
 }
 
 fn precompile_ldfa(ldfa: &mut LDFA, b: &mut RegexBuilder) -> Result<(), Error> {
-    let mut visited: HashSet<u16> = HashSet::new();
-    let mut work: Vec<u16> = vec![DFA_INITIAL];
+    let mut visited: HashSet<Sid> = HashSet::new();
+    let mut work: Vec<Sid> = vec![DFA_INITIAL];
     if ldfa.pruned > DFA_DEAD {
         work.push(ldfa.pruned);
     }
@@ -155,7 +162,8 @@ fn bincode_cfg() -> impl bincode::Options {
 }
 
 impl Regex {
-    /// fully precompile and serialize the regex, may fail if the regex has unsupported features
+    /// fully precompile and serialize the regex, may fail if the regex has unsupported features.
+    /// hardened regexes are unsupported, and `HardeningMode::Auto` can select hardened mode.
     pub fn dump(&self) -> Result<Vec<u8>, Error> {
         use bincode::Options;
         if self.hardened {
@@ -164,16 +172,11 @@ impl Regex {
         if matches!(self.captures_dispatch, CaptureDispatch::Dfa) {
             return Err(Error::Serialize("capture groups requiring the general tag-tracking DFA are not supported".into()));
         }
-        let uses_fwd = !self.has_bounded;
+        let bounded_only = self.has_bounded && !matches!(self.find_all, FindAll::Dfa);
+        let uses_fwd = !bounded_only;
         let uses_lb_verify = matches!(&self.prefix, Some(PrefixKind::AnchoredFwdLb(_)));
-        let uses_rev_ts = !self.fwd_begin_anchored
-            && !self.has_bounded
-            && !matches!(
-                &self.prefix,
-                Some(PrefixKind::AnchoredFwd(_) | PrefixKind::AnchoredFwdLb(_))
-            );
-
         let inner = &mut *self.inner.lock().unwrap();
+        self.prepare_is_match_for_dump(inner)?;
         #[cfg(feature = "regex_set")]
         if inner.set.is_some() {
             return Err(Error::Serialize("a RegexSet member's tag state is not supported by dump/load".into()));
@@ -184,8 +187,20 @@ impl Regex {
         if uses_lb_verify {
             precompile_ldfa(inner.lb_verify.as_mut().unwrap(), &mut inner.b)?;
         }
-        if uses_rev_ts {
-            precompile_ldfa(&mut inner.rev_ts, &mut inner.b)?;
+        if let Some(rev_ts) = inner.rev_ts.as_mut() {
+            precompile_ldfa(rev_ts, &mut inner.b)?;
+        }
+        let uses_rev_anchored = matches!(self.find_all, FindAll::EndAnchored);
+        if uses_rev_anchored {
+            precompile_ldfa(inner.rev.as_mut().unwrap(), &mut inner.b)?;
+        }
+        match &mut inner.is_match_dfa {
+            IsMatchDfa::Fwd(dfa) | IsMatchDfa::Rev(dfa) => precompile_ldfa(dfa, &mut inner.b)?,
+            IsMatchDfa::Split(begin, rest) => {
+                precompile_ldfa(begin, &mut inner.b)?;
+                precompile_ldfa(rest, &mut inner.b)?;
+            }
+            _ => {}
         }
         if self.has_bounded {
             precompile_bdfa(inner.bounded.as_mut().unwrap(), &mut inner.b)?;
@@ -197,8 +212,15 @@ impl Regex {
             }
         }
 
+        let (is_match_dfa, is_match_begin_dfa, pending) = match std::mem::replace(&mut inner.is_match_dfa, IsMatchDfa::Unneeded) {
+            IsMatchDfa::Fwd(d) | IsMatchDfa::Rev(d) => (Some(d), None, None),
+            IsMatchDfa::Split(begin, rest) => (Some(rest), Some(begin), None),
+            IsMatchDfa::Unneeded => (None, None, None),
+            IsMatchDfa::Pending(n) => (None, None, Some(n)),
+        };
         let dump = RegexDump {
             fixed_length: self.fixed_length,
+            min_length: self.min_length,
             empty_nullable: self.empty_nullable,
             always_nullable: self.always_nullable,
             star_loop: self.star_loop,
@@ -208,8 +230,10 @@ impl Regex {
             rev_end_nullable: self.rev_end_nullable,
             rev_end_anchored: self.rev_end_anchored,
             has_bounded: self.has_bounded,
-            bounded_safe_find_all: self.bounded_safe_find_all,
             fwd_lb_body_nullable: self.fwd_lb_body_nullable,
+            is_match_prefix: self.is_match_prefix.clone(),
+            is_match_extra: self.is_match_extra.clone(),
+            is_match_fwd: self.is_match_fwd.clone(),
             has_lb: self.init_flags.has_lb(),
             has_la: self.init_flags.has_la(),
             neg_lb: self.neg_lb.clone(),
@@ -233,16 +257,15 @@ impl Regex {
             } else {
                 None
             },
-            rev_ts: if uses_rev_ts {
-                Some(std::mem::replace(&mut inner.rev_ts, empty_ldfa()))
-            } else {
-                None
-            },
+            rev_ts: inner.rev_ts.take(),
             bounded: if self.has_bounded {
                 inner.bounded.take()
             } else {
                 None
             },
+            rev_anchored: if uses_rev_anchored { inner.rev.take() } else { None },
+            is_match_dfa,
+            is_match_begin_dfa,
             #[cfg(feature = "convergence_prefix")]
             conv_prefix: self.conv_prefix,
             #[cfg(feature = "convergence_prefix")]
@@ -267,8 +290,15 @@ impl Regex {
             inner.lb_verify = Some(lb_verify);
         }
         if let Some(rev_ts) = dump.rev_ts {
-            inner.rev_ts = rev_ts;
+            inner.rev_ts = Some(rev_ts);
         }
+        if let Some(rev) = dump.rev_anchored {
+            inner.rev = Some(rev);
+        }
+        inner.is_match_dfa = match pending {
+            Some(n) => IsMatchDfa::Pending(n),
+            None => IsMatchDfa::from_dump(dump.is_match_dfa, dump.is_match_begin_dfa),
+        };
         if let Some(b) = dump.bounded {
             inner.bounded = Some(b);
         }
@@ -293,9 +323,14 @@ impl Regex {
             inner: Mutex::new(RegexInner {
                 b: RegexBuilder::new(),
                 fwd,
+                #[cfg(feature = "stream")]
                 fwd_ts: empty_ldfa(),
-                rev: None,
-                rev_ts: dump.rev_ts.unwrap_or_else(empty_ldfa),
+                rev: dump.rev_anchored,
+                rev_ts: dump.rev_ts,
+                is_match_dfa: IsMatchDfa::from_dump(dump.is_match_dfa, dump.is_match_begin_dfa),
+                ism_elim: None,
+                ism_elim_fwd: None,
+                max_cap: 0,
                 #[cfg(feature = "convergence_prefix")]
                 conv_b: dump.conv_b,
                 #[cfg(feature = "stream")]
@@ -317,6 +352,7 @@ impl Regex {
             }),
             prefix: dump.prefix,
             fixed_length: dump.fixed_length,
+            min_length: dump.min_length,
             empty_nullable: dump.empty_nullable,
             always_nullable: dump.always_nullable,
             star_loop: dump.star_loop,
@@ -331,9 +367,11 @@ impl Regex {
             hardened: false,
             rev_end_anchored: dump.rev_end_anchored,
             has_bounded: dump.has_bounded,
-            bounded_safe_find_all: dump.bounded_safe_find_all,
             fwd_lb_body_nullable: dump.fwd_lb_body_nullable,
             fwd_lb_begin_len: dump.fwd_lb_begin_len,
+            is_match_prefix: dump.is_match_prefix,
+            is_match_extra: dump.is_match_extra,
+            is_match_fwd: dump.is_match_fwd,
             fwd_lb_begin_classes: dump.fwd_lb_begin_classes,
             init_flags: crate::InitialNodeFlags::new(dump.has_anchors, dump.has_lb, dump.has_la),
             #[cfg(feature = "convergence_prefix")]

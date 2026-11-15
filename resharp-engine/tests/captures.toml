@@ -3077,9 +3077,9 @@ pattern = '(?P<g0>(?:\w+|(?=\d)\d)){2,3}'
 compile_only = true
 
 [[test]]
-name = "exact_count_repeat_of_capture_with_lookbehind_literal_arm_compiles"
+name = "exact_count_repeat_of_capture_with_lookbehind_literal_arm_rejected"
 pattern = '(?P<g0>(?:y|(?<=y)x)){2}'
-compile_only = true
+expect_error = true
 
 [[test]]
 name = "optional_captured_neg_lookahead_participates"

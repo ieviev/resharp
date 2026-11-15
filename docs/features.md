@@ -19,11 +19,11 @@ Guarantees **linear matching for all patterns and all match-collecting APIs** (`
 ```rust
 let re = resharp::Regex::with_options(
     r"pattern",
-    resharp::RegexOptions::default().hardened(true),
+    resharp::RegexOptions::default().hardening(resharp::HardeningMode::Always),
 ).unwrap();
 ```
 
-Note: RE# auto-hardens many common patterns at compile time, so the default engine is already linear on the bulk of pathological real-world regexes. Use `hardened(true)` only when worst-case linearity is a hard requirement (e.g. running untrusted patterns).
+Note: RE# auto-hardens many common patterns at compile time, so the default engine is already linear on the bulk of pathological real-world regexes. Use `hardening(HardeningMode::Always)` only when worst-case linearity is a hard requirement (e.g. running untrusted patterns). `hardening(HardeningMode::Off)` skips the auto-hardening analysis.
 
 - With hardened mode, in the worst cases you can expect performance roughly around 100MBs on consumer hardware. Having it disabled can sometimes be more than 10x faster
 

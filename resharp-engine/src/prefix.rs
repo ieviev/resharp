@@ -73,6 +73,24 @@ pub(crate) fn calc_prefix_sets_inner(
                 char_set
             };
             result.push(set);
+            if strip_prefix
+                && result.len() >= 16
+                && result[result.len() - 16..].iter().all(|&s| s == set)
+            {
+                let bytes = b.solver_ref().collect_bytes(set).len();
+                let limit = if bytes >= 128 { 16 } else { 64 };
+                if result.len() >= limit
+                    && result[result.len() - limit..].iter().all(|&s| s == set)
+                {
+                    break;
+                }
+            }
+            if strip_prefix && result.len() >= 64 {
+                let tail = &result[result.len() - 64..];
+                if (2..=16).any(|period| tail[period..] == tail[..64 - period]) {
+                    break;
+                }
+            }
             node = target;
         } else {
             break;
@@ -288,6 +306,7 @@ pub struct PrefixSet {
 }
 
 /// Prefix sets for both directions.
+#[cfg(feature = "diag")]
 pub struct PrefixSets {
     /// Potential-start fwd sets (full node, self-loop bytes included).
     pub fwd_potential: PrefixSet,
@@ -302,6 +321,7 @@ pub struct PrefixSets {
     pub rev_stripped: NodeId,
 }
 
+#[cfg(feature = "diag")]
 impl PrefixSets {
     /// Compute all prefix sets for `node` (fwd) and `rev_start` (reversed, not yet stripped).
     pub fn compute(
@@ -309,52 +329,14 @@ impl PrefixSets {
         node: NodeId,
         rev_start: NodeId,
     ) -> Result<Self, crate::Error> {
-        let fwd_body = strip_leading_lookbehind(b, node);
-        let stripped_node = b.strip_prefix_safe(node);
-        let fwd_body_stripped = strip_leading_lookbehind(b, stripped_node);
-        let fwd_potential_sets = calc_potential_start(b, fwd_body, 16, 64, false)?;
-        let fwd_potential_stripped_sets =
-            calc_potential_start(b, fwd_body_stripped, 16, 64, false)?;
-        let rev_anchored_sets = calc_prefix_sets(b, rev_start)?;
-        let rev_combined_init = {
-            let n = b.prune_begin(rev_start);
-            b.strip_prefix_safe(n)
-        };
-        let rev_stripped = rev_combined_init;
-        let mut rev_potential_sets =
-            if let Some(s) = calc_rev_boundary_prefix(b, rev_start)? {
-                s
-            } else {
-                calc_combined_prefix(b, rev_combined_init, 3, 16, 64)?
-            };
-        if rev_potential_sets.is_empty() {
-            if let Ok(body) = b.strip_lb(node) {
-                if body != node {
-                    if let Ok(body_rev) = b.reverse(body) {
-                        if let Ok(bare) = b.strip_lb(body_rev) {
-                            rev_potential_sets = calc_potential_start(b, bare, 16, 64, false)?;
-                        }
-                    }
-                }
-            }
-        }
-
-        let body_shape = classify_body_shape(b, fwd_body, &fwd_potential_sets);
-        let mut mk = |sets: Vec<TSetId>, dir: Direction| PrefixSet {
-            cost: cost_for(b, &sets, dir, body_shape),
-            sets,
-        };
-
-        let fwd_potential = mk(fwd_potential_sets, Direction::Fwd);
-        let fwd_potential_stripped = mk(fwd_potential_stripped_sets, Direction::Fwd);
-        let rev_anchored = mk(rev_anchored_sets, Direction::Rev);
-        let rev_potential = mk(rev_potential_sets, Direction::Rev);
+        let fwd = compute_fwd(b, node)?;
+        let rev = compute_rev(b, node, rev_start)?;
         Ok(Self {
-            fwd_potential,
-            fwd_potential_stripped,
-            rev_anchored,
-            rev_potential,
-            rev_stripped,
+            fwd_potential: fwd.potential,
+            fwd_potential_stripped: fwd.potential_stripped,
+            rev_anchored: rev.anchored,
+            rev_potential: rev.potential,
+            rev_stripped: rev_stripped(b, rev_start),
         })
     }
 
@@ -363,6 +345,90 @@ impl PrefixSets {
     pub fn rarity(b: &mut RegexBuilder, sets: &[TSetId]) -> u64 {
         rarest_freq(b, sets)
     }
+}
+
+struct FwdSets {
+    potential: PrefixSet,
+    potential_stripped: PrefixSet,
+}
+
+struct RevSets {
+    anchored: PrefixSet,
+    potential: PrefixSet,
+}
+
+pub(crate) fn rev_stripped(b: &mut RegexBuilder, rev_start: NodeId) -> NodeId {
+    let n = b.prune_begin(rev_start);
+    b.strip_prefix_safe(n)
+}
+
+fn compute_fwd(b: &mut RegexBuilder, node: NodeId) -> Result<FwdSets, crate::Error> {
+    let fwd_body = strip_leading_lookbehind(b, node);
+    let stripped_node = b.strip_prefix_safe(node);
+    let fwd_body_stripped = strip_leading_lookbehind(b, stripped_node);
+    let mut fwd_potential_sets = calc_potential_start(b, fwd_body, 16, 64, false)?;
+    if fwd_potential_sets.len() == 16
+        && fwd_potential_sets.iter().all(|&s| b.solver_ref().single_byte(s).is_some())
+    {
+        fwd_potential_sets = calc_potential_start(b, fwd_body, 64, 64, false)?;
+    }
+    let fwd_potential_stripped_sets = calc_potential_start(b, fwd_body_stripped, 16, 64, false)?;
+    let body_shape = classify_body_shape(b, fwd_body, &fwd_potential_sets);
+    Ok(FwdSets {
+        potential: mk_set(b, fwd_potential_sets, Direction::Fwd, body_shape),
+        potential_stripped: mk_set(b, fwd_potential_stripped_sets, Direction::Fwd, body_shape),
+    })
+}
+
+fn compute_rev(
+    b: &mut RegexBuilder,
+    node: NodeId,
+    rev_start: NodeId,
+) -> Result<RevSets, crate::Error> {
+    let rev_anchored_sets = calc_prefix_sets(b, rev_start)?;
+    let rev_combined_init = rev_stripped(b, rev_start);
+    let mut rev_potential_sets = if let Some(s) = calc_rev_boundary_prefix(b, rev_start)? {
+        s
+    } else {
+        calc_combined_prefix(b, rev_combined_init, 3, 16, 64)?
+    };
+    if rev_potential_sets.is_empty() {
+        if let Ok(body) = b.strip_lb(node) {
+            if body != node {
+                if let Ok(body_rev) = b.reverse(body) {
+                    if let Ok(bare) = b.strip_lb(body_rev) {
+                        rev_potential_sets = calc_potential_start(b, bare, 16, 64, false)?;
+                    }
+                }
+            }
+        }
+    }
+    Ok(RevSets {
+        anchored: mk_set(b, rev_anchored_sets, Direction::Rev, NodeShape::Bounded),
+        potential: mk_set(b, rev_potential_sets, Direction::Rev, NodeShape::Bounded),
+    })
+}
+
+fn mk_set(
+    b: &mut RegexBuilder,
+    sets: Vec<TSetId>,
+    dir: Direction,
+    body_shape: NodeShape,
+) -> PrefixSet {
+    PrefixSet {
+        cost: cost_for(b, &sets, dir, body_shape),
+        sets,
+    }
+}
+
+fn rev_summary(b: &mut RegexBuilder, rev_start: NodeId, rev: Option<&RevSets>) -> (bool, u64) {
+    use resharp_algebra::nulls::NullsId;
+    let Some(rev) = rev else {
+        return (false, u64::MAX);
+    };
+    let usable = b.get_nulls_id(rev_start) == NullsId::EMPTY
+        && (!rev.anchored.sets.is_empty() || !rev.potential.sets.is_empty());
+    (usable, rev.anchored.cost.min(rev.potential.cost))
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -381,20 +447,17 @@ fn scan_cost(b: &mut RegexBuilder, sets: &[TSetId], dir: Direction, body_shape: 
     if sets.is_empty() {
         return u64::MAX;
     }
-    let counts: Vec<usize> = sets
-        .iter()
-        .map(|&s| b.solver().collect_bytes(s).len())
-        .collect();
-    let freqs: Vec<u64> = sets
+    let (counts, freqs): (Vec<usize>, Vec<u64>) = sets
         .iter()
         .map(|&s| {
-            b.solver()
-                .collect_bytes(s)
+            let bytes = b.solver().collect_bytes(s);
+            let freq: u64 = bytes
                 .iter()
                 .map(|&byte| crate::simd::BYTE_FREQ[byte as usize] as u64)
-                .sum()
+                .sum();
+            (bytes.len(), freq)
         })
-        .collect();
+        .unzip();
     let total = TOTAL_BYTE_FREQ as f64;
     let rarest = freqs
         .iter()
@@ -418,9 +481,9 @@ fn scan_cost(b: &mut RegexBuilder, sets: &[TSetId], dir: Direction, body_shape: 
     };
 
     let (scan_per_byte, verify_per_fire) = match dir {
-        Direction::Rev => (0.05, 20.0),
+        Direction::Rev => (SCAN_PER_BYTE, 20.0),
         Direction::Fwd => (
-            0.05,
+            SCAN_PER_BYTE,
             match body_shape {
                 NodeShape::TrailingStar => 1.0,
                 NodeShape::Bounded => 50.0,
@@ -441,6 +504,8 @@ pub enum NodeShape {
 }
 
 pub(crate) const SKIP_FREQ_THRESHOLD: u32 = 75_000;
+
+const SCAN_PER_BYTE: f64 = 0.05;
 
 /// Threshold above which a byte set is treated as wildcard-like.
 const WIDE_SET_BYTES: u32 = 200;
@@ -539,7 +604,7 @@ fn conv_b_interior_unbounded(b: &mut RegexBuilder, b_node: NodeId) -> bool {
 }
 const TEDDY_MAX_FREQ_SUM: u64 = 25_000;
 // sum of BYTE_FREQ[0..256] in the corpus
-pub(crate) const TOTAL_BYTE_FREQ: u64 = 252_052;
+pub(crate) const TOTAL_BYTE_FREQ: u64 = 458317;
 /// a position must be at least this rare to count as a selective Teddy lane;
 /// a bare multi-class fingerprint with no rare anchor is rejected
 const TEDDY_WEAK_POSITION_FREQ: u64 = 8_000;
@@ -548,7 +613,7 @@ const TEDDY_MEMCHR_MAX_FREQ: u64 = 2_500;
 const TEDDY_MEMCHR_MAX_FREQ_F: u64 = 1_500;
 #[cfg(feature = "convergence_prefix")]
 const CONV_MEMCHR_MAX: u64 = 5_000;
-const RARE_BYTE_FREQ_LIMIT: u16 = 25_000;
+pub(crate) const RARE_BYTE_FREQ_LIMIT: u16 = 25_000;
 
 /// Forward literal prefix for patterns with no `_*` stripping.
 /// Returns `Some` only when the pattern has a tight literal prefix and the
@@ -602,12 +667,15 @@ fn try_build_fwd_search_raw(
     allow_common: bool,
 ) -> Result<Option<crate::accel::FwdPrefixSearch>, crate::Error> {
     let lit_len = byte_sets_raw.iter().take_while(|bs| bs.len() == 1).count();
-    if lit_len >= 3 {
+    if lit_len >= 2 || (lit_len == 1 && byte_sets_raw.len() == 1) {
         let needle: Vec<u8> = byte_sets_raw[..lit_len].iter().map(|bs| bs[0]).collect();
         let lit = crate::simd::FwdLiteralSearch::new(&needle);
-        if lit_len == byte_sets_raw.len()
-            || crate::simd::BYTE_FREQ[lit.rare_byte() as usize] < RARE_BYTE_FREQ_LIMIT
-        {
+        let limit = if lit_len == 2 {
+            TEDDY_WEAK_POSITION_FREQ as u16
+        } else {
+            RARE_BYTE_FREQ_LIMIT
+        };
+        if lit_len == byte_sets_raw.len() || crate::simd::BYTE_FREQ[lit.rare_byte() as usize] < limit {
             return Ok(Some(crate::accel::FwdPrefixSearch::Literal(lit)));
         }
     }
@@ -701,6 +769,7 @@ fn try_build_fwd_search_raw(
     )))
 }
 
+#[cfg(feature = "diag")]
 fn rarest_freq(b: &mut RegexBuilder, sets: &[TSetId]) -> u64 {
     sets.iter()
         .map(|&s| {
@@ -972,15 +1041,15 @@ pub(crate) fn select_prefix(
     (
         Option<PrefixKind>,
         Option<(crate::accel::RevTeddySearch, Option<NodeId>, Option<NodeId>)>,
-        bool,
+        Option<crate::accel::FwdPrefixSearch>,
     ),
     Error,
 > {
     if !crate::simd::has_simd() {
-        return Ok((None, None, false));
+        return Ok((None, None, None));
     }
     let _ = force_convergence;
-    let (kind, skip, fwd_wins, selected_cost, rev_stripped) =
+    let (kind, skip, is_match_fwd, selected_cost, rev_stripped) =
         select_prefix_simd(b, node, rev_start, has_look, min_len, no_fwd_prefix, hardened)?;
     #[cfg(not(feature = "convergence_prefix"))]
     let _ = (selected_cost, rev_stripped);
@@ -1000,12 +1069,12 @@ pub(crate) fn select_prefix(
             return Ok((
                 Some(conv_kind),
                 Some((conv_skip, Some(conv_node), Some(b_node))),
-                false,
+                None,
             ));
         }
     }
     let _ = max_cap;
-    Ok((kind, skip.map(|s| (s, None, None)), fwd_wins))
+    Ok((kind, skip.map(|s| (s, None, None)), is_match_fwd))
 }
 
 #[cfg(feature = "convergence_prefix")]
@@ -1440,30 +1509,30 @@ fn select_prefix_simd(
     min_len: u32,
     no_fwd_prefix: bool,
     hardened: bool,
-) -> Result<(Option<PrefixKind>, Option<crate::accel::RevTeddySearch>, bool, u64, NodeId), Error> {
-    use resharp_algebra::nulls::NullsId;
+) -> Result<(Option<PrefixKind>, Option<crate::accel::RevTeddySearch>, Option<crate::accel::FwdPrefixSearch>, u64, NodeId), Error> {
     if min_len == 0 {
         if !no_fwd_prefix && has_look && node.contains_lookbehind(b) {
             if let Some(fp) = try_build_fwd_lb(b, node)? {
-                return Ok((Some(PrefixKind::AnchoredFwdLb(fp)), None, false, u64::MAX, NodeId::BOT));
+                return Ok((Some(PrefixKind::AnchoredFwdLb(fp)), None, None, u64::MAX, NodeId::BOT));
             }
         }
-        return Ok((None, None, false, u64::MAX, NodeId::BOT));
+        return Ok((None, None, None, u64::MAX, NodeId::BOT));
     }
-    let sets = PrefixSets::compute(b, node, rev_start)?;
-    let rev_stripped = sets.rev_stripped;
+    let fwd = compute_fwd(b, node)?;
+    let rev_stripped = rev_stripped(b, rev_start);
 
-    let fwd_cost = sets
-        .fwd_potential
-        .cost
-        .min(sets.fwd_potential_stripped.cost);
-    let rev_cost = sets.rev_anchored.cost.min(sets.rev_potential.cost);
-    let rev_usable = b.get_nulls_id(rev_start) == NullsId::EMPTY
-        && (!sets.rev_anchored.sets.is_empty() || !sets.rev_potential.sets.is_empty());
-    let (_, max_len) = b.get_min_max_length(node);
+    let fwd_cost = fwd.potential.cost.min(fwd.potential_stripped.cost);
+    let (min_len_node, max_len) = b.get_min_max_length(node);
     let bounded = max_len != u32::MAX;
     let fwd_quad = !bounded && fwd_interior_quadratic(b, node);
-    let fwd_wins = !fwd_quad && (bounded || fwd_cost < rev_cost);
+    let fwd_certain = bounded && !hardened && fwd_cost <= 2 * (SCAN_PER_BYTE * 1e9) as u64;
+    let rev_opt = if fwd_certain {
+        None
+    } else {
+        Some(compute_rev(b, node, rev_start)?)
+    };
+    let (rev_usable, rev_cost) = rev_summary(b, rev_start, rev_opt.as_ref());
+    let fwd_wins = !fwd_quad && (if bounded { !rev_usable || fwd_cost <= rev_cost.saturating_mul(2) } else { fwd_cost < rev_cost });
 
     let fwd_candidate = if fwd_quad {
         None
@@ -1478,7 +1547,7 @@ fn select_prefix_simd(
                 }
             } else {
                 let allow_common = every_first_byte_is_full_match(b, node);
-                build_fwd_prefix_from_sets(b, &sets.fwd_potential.sets, allow_common)?
+                build_fwd_prefix_from_sets(b, &fwd.potential.sets, allow_common)?
                     .map(PrefixKind::AnchoredFwd)
             }
         } else {
@@ -1491,7 +1560,7 @@ fn select_prefix_simd(
         }
     } else {
         let allow_common = every_first_byte_is_full_match(b, node);
-        let fp = build_fwd_prefix_from_sets(b, &sets.fwd_potential.sets, allow_common)?;
+        let fp = build_fwd_prefix_from_sets(b, &fwd.potential.sets, allow_common)?;
         match fp {
             Some(fp) => Some(PrefixKind::AnchoredFwd(fp)),
             None if b.is_infinite(node) => {
@@ -1500,19 +1569,27 @@ fn select_prefix_simd(
             None => None,
         }
     };
+    if fwd_certain {
+        if let Some(kind) = fwd_candidate {
+            return Ok((Some(kind), None, None, fwd_cost, rev_stripped));
+        }
+    }
+    let rev = match rev_opt {
+        Some(rev) => rev,
+        None => compute_rev(b, node, rev_start)?,
+    };
+    let (rev_usable, rev_cost) = rev_summary(b, rev_start, Some(&rev));
     let try_rev = |b: &mut RegexBuilder| -> Option<(PrefixKind, crate::accel::RevTeddySearch)> {
         if !rev_usable {
             return None;
         }
-        if !sets.rev_anchored.sets.is_empty() {
-            if let Some(s) = build_rev_prefix_search(b, &sets.rev_anchored.sets, TEDDY_MEMCHR_MAX_FREQ)
-            {
+        if !rev.anchored.sets.is_empty() {
+            if let Some(s) = build_rev_prefix_search(b, &rev.anchored.sets, TEDDY_MEMCHR_MAX_FREQ) {
                 return Some((PrefixKind::AnchoredRev, s));
             }
         }
-        if !sets.rev_potential.sets.is_empty() {
-            if let Some(s) =
-                build_rev_prefix_search(b, &sets.rev_potential.sets, TEDDY_MEMCHR_MAX_FREQ)
+        if !rev.potential.sets.is_empty() {
+            if let Some(s) = build_rev_prefix_search(b, &rev.potential.sets, TEDDY_MEMCHR_MAX_FREQ)
             {
                 return Some((PrefixKind::PotentialStart, s));
             }
@@ -1520,19 +1597,48 @@ fn select_prefix_simd(
         None
     };
 
-    if fwd_wins || no_fwd_prefix {
+    let exact_literal = !has_look
+        && !hardened
+        && bounded
+        && min_len_node == max_len
+        && matches!(&fwd_candidate, Some(PrefixKind::AnchoredFwd(fp)) if fp.is_literal() && fp.len() as u32 == max_len);
+    if fwd_wins || no_fwd_prefix || exact_literal {
         if let Some(kind) = fwd_candidate {
             let skip = if hardened { try_rev(b).map(|(_, s)| s) } else { None };
-            return Ok((Some(kind), skip, fwd_wins, fwd_cost, rev_stripped));
+            return Ok((Some(kind), skip, None, fwd_cost, rev_stripped));
         }
     }
     if let Some((kind, s)) = try_rev(b) {
-        return Ok((Some(kind), Some(s), false, rev_cost, rev_stripped));
+        let im_candidate = match fwd_candidate {
+            Some(PrefixKind::AnchoredFwd(fp)) => Some(fp),
+            None if (fwd_quad || no_fwd_prefix) && !(has_look && node.contains_lookbehind(b)) => {
+                let allow_common = every_first_byte_is_full_match(b, node);
+                build_fwd_prefix_from_sets(b, &fwd.potential.sets, allow_common)?
+            }
+            _ => None,
+        };
+        let is_match_fwd = match im_candidate {
+            Some(fp)
+                if !hardened
+                    && scan_cost(b, &fwd.potential.sets, Direction::Fwd, NodeShape::Bounded)
+                        .min(scan_cost(
+                            b,
+                            &fwd.potential_stripped.sets,
+                            Direction::Fwd,
+                            NodeShape::Bounded,
+                        ))
+                        <= rev_cost =>
+            {
+                Some(fp)
+            }
+            _ => None,
+        };
+        return Ok((Some(kind), Some(s), is_match_fwd, rev_cost, rev_stripped));
     }
     if let Some(kind) = fwd_candidate {
-        return Ok((Some(kind), None, fwd_wins, fwd_cost, rev_stripped));
+        return Ok((Some(kind), None, None, fwd_cost, rev_stripped));
     }
-    Ok((None, None, false, u64::MAX, rev_stripped))
+    Ok((None, None, None, u64::MAX, rev_stripped))
 }
 
 fn begins(b: &mut RegexBuilder, node_id: NodeId) -> NodeId {
@@ -1605,7 +1711,7 @@ pub(crate) enum BeginInfo {
 }
 
 pub(crate) fn fwd_lb_begin_info(b: &mut RegexBuilder, lb_inner: NodeId) -> BeginInfo {
-    // has_reachable_begin can't see a \A hidden inside a nested Lookahead/Lookbehind/Compl; bail out rather than assume None if contains_anchors sees one anyway
+    // has_reachable_begin misses a \A nested in a look/Compl
     if b.contains_anchors(lb_inner) && !has_reachable_begin(b, lb_inner) {
         return BeginInfo::Unrepresentable;
     }
@@ -1625,16 +1731,16 @@ pub(crate) fn fwd_lb_begin_classes(
     b: &mut RegexBuilder,
     began: NodeId,
     len: u32,
-) -> Option<Vec<crate::accel::TSet>> {
-    let sets = calc_prefix_sets_inner(b, began, false).ok()?;
+) -> Result<Option<Vec<crate::accel::TSet>>, crate::Error> {
+    let sets = calc_prefix_sets_inner(b, began, false)?;
     if sets.len() != len as usize {
-        return None;
+        return Ok(None);
     }
-    Some(
+    Ok(Some(
         sets.iter()
             .map(|&s| crate::accel::TSet::from_bytes(&b.solver().collect_bytes(s)))
             .collect(),
-    )
+    ))
 }
 
 /// The positive byte-class a leading lookbehind contributes to a fwd prefix,

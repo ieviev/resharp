@@ -1,7 +1,4 @@
-/// REMOVED FROM PUBLIC API TILL SEMANTICS FINISHED.
-// //! All stream/seek methods return shortest matches (left-to-right, earliest end).
-
-use crate::{accel, ldfa, prefix, Error, Match, Nullability, Regex};
+use crate::{accel, ldfa::{self, Sid}, prefix, Error, Match, Nullability, Regex};
 use resharp_algebra::nulls::{EID_ALWAYS0, EID_BEGIN0, EID_CENTER0, EID_END0, EID_NONE};
 
 fn collect_valid_ends(dfa: &ldfa::LDFA, state: u32, pos: usize, len: usize, out: &mut Vec<usize>) {
@@ -91,7 +88,7 @@ fn stream_anchored_fwd<const STOP: bool, F: FnMut(usize, usize)>(
             }
             if hit && p < end {
                 let mt = inner.fwd.mt_lookup[input[p] as usize] as u32;
-                let nxt = inner.fwd.lazy_transition(&mut inner.b, st as u16, mt)? as u32;
+                let nxt = inner.fwd.lazy_transition(&mut inner.b, st as Sid, mt)? as u32;
                 if nxt <= ldfa::DFA_DEAD as u32 {
                     break None;
                 }
@@ -385,7 +382,7 @@ fn stream_feed_loop<
         let mt = inner.fwd_ts.mt_lookup[input[pos] as usize] as u32;
         let next = inner
             .fwd_ts
-            .lazy_transition(&mut inner.b, state as u16, mt)? as u32;
+            .lazy_transition(&mut inner.b, state as Sid, mt)? as u32;
         pos += 1;
         if next == ldfa::DFA_DEAD as u32 {
             state = ldfa::DFA_INITIAL as u32;
@@ -574,7 +571,7 @@ impl Regex {
             let mt = inner.fwd_ts.mt_lookup[input[pos] as usize] as u32;
             let next = inner
                 .fwd_ts
-                .lazy_transition(&mut inner.b, state as u16, mt)? as u32;
+                .lazy_transition(&mut inner.b, state as Sid, mt)? as u32;
             pos += 1;
             if next == ldfa::DFA_DEAD as u32 {
                 state = fwd_initial_state;
@@ -638,12 +635,14 @@ impl Regex {
         while pos > 0 {
             let sid = inner
                 .rev_ts
+                .as_ref()
+                .expect("stream builds rev_ts")
                 .skip_ids
                 .get(state as usize)
                 .copied()
                 .unwrap_or(0);
             if sid != 0 {
-                if let accel::Skipper::State(s) = &inner.rev_ts.skip_searchers[sid as usize - 1] {
+                if let accel::Skipper::State(s) = &inner.rev_ts.as_ref().expect("stream builds rev_ts").skip_searchers[sid as usize - 1] {
                     match s.find_rev(&input[..pos]) {
                         Some(idx) => pos = idx + 1,
                         None => return Ok(None),
@@ -651,10 +650,10 @@ impl Regex {
                 }
             }
             pos -= 1;
-            let mt = inner.rev_ts.mt_lookup[input[pos] as usize] as u32;
-            let next = inner
-                .rev_ts
-                .lazy_transition(&mut inner.b, state as u16, mt)? as u32;
+            let rev = inner.rev_ts.as_mut().expect("stream builds rev_ts");
+            let mt = rev.mt_lookup[input[pos] as usize] as u32;
+            let next = rev
+                .lazy_transition(&mut inner.b, state as Sid, mt)? as u32;
             if next == ldfa::DFA_DEAD as u32 {
                 state = rev_initial_state;
                 transitioned = false;
@@ -665,7 +664,7 @@ impl Regex {
             if pos == 0 {
                 break;
             }
-            let dfa = &inner.rev_ts;
+            let dfa = inner.rev_ts.as_ref().expect("stream builds rev_ts");
             if ldfa::has_any_null(&dfa.effects_id, &dfa.effects, state, Nullability::CENTER) {
                 let mut match_start = usize::MAX;
                 ldfa::collect_max_rev(
@@ -685,7 +684,7 @@ impl Regex {
             }
         }
         if transitioned && pos == 0 {
-            let dfa = &inner.rev_ts;
+            let dfa = inner.rev_ts.as_ref().expect("stream builds rev_ts");
             if ldfa::has_any_null(&dfa.effects_id, &dfa.effects, state, Nullability::END) {
                 let mut match_start = usize::MAX;
                 ldfa::collect_max_rev(

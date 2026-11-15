@@ -40,6 +40,12 @@ const PATTERNS: &[&str] = &[
     r"(?<=\.)y",
     r"x|(?<=\.)y",
     r".|(?<=ab)y",
+    r"[^:]//+",
+    r"a.{20}z",
+    r"\{[0-9]{100,}\}",
+    r"(?:ab|bc){2,}",
+    r"(ab|bc)*c",
+    r"(a|b)&~a",
 ];
 
 const INPUTS: &[&[u8]] = &[
@@ -61,10 +67,17 @@ const INPUTS: &[&[u8]] = &[
     b"x.y",
     b"abxaby",
     b"\na\n",
+    b"x // text",
+    b"a01234567890123456789z",
+    b"ababc",
 ];
 
 fn mk(p: &str, mode: UnicodeMode, hardened: bool) -> Option<Regex> {
-    let opts = RegexOptions::default().unicode(mode).hardened(hardened);
+    let opts = RegexOptions::default().unicode(mode).hardening(if hardened {
+        resharp::HardeningMode::Always
+    } else {
+        resharp::HardeningMode::Auto
+    });
     Regex::with_options(p, opts).ok()
 }
 
@@ -149,6 +162,22 @@ fn empty_anchor_newline_seed() {
             resharp::Match { start: 2, end: 2 },
         ]
     );
+}
+
+#[test]
+fn is_match_does_not_exhaust_forward_dfa_for_absent_suffix() {
+    let mut opts = RegexOptions::default();
+    opts.max_dfa_capacity = 128;
+    let re = Regex::with_options(r"[ab]*a[ab]{12}z", opts).unwrap();
+    let mut seed = 1u32;
+    let input: Vec<u8> = (0..4096)
+        .map(|_| {
+            seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+            if seed >> 31 == 0 { b'a' } else { b'b' }
+        })
+        .collect();
+    assert!(re.find_all(&input).unwrap().is_empty());
+    assert!(!re.is_match(&input).unwrap());
 }
 
 #[test]

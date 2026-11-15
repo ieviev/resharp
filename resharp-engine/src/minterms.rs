@@ -1,79 +1,33 @@
 use std::collections::HashSet;
 
-use resharp_algebra::solver::{Solver, TSetId};
+use resharp_algebra::solver::{Solver, TSet, TSetId};
 use resharp_algebra::{Kind, NodeId, RegexBuilder, TRegex, TRegexId};
 
-pub(crate) struct PartitionTree {
-    sets: Vec<TSetId>,
-    lefts: Vec<u32>,
-    rights: Vec<u32>,
-}
+pub(crate) struct PartitionTree;
 
 impl PartitionTree {
-    const NO_CHILD: u32 = u32::MAX;
-
-    fn new(set: TSetId) -> PartitionTree {
-        PartitionTree {
-            sets: vec![set],
-            lefts: vec![Self::NO_CHILD],
-            rights: vec![Self::NO_CHILD],
-        }
-    }
-
-    fn push(&mut self, set: TSetId) -> u32 {
-        let idx = self.sets.len() as u32;
-        self.sets.push(set);
-        self.lefts.push(Self::NO_CHILD);
-        self.rights.push(Self::NO_CHILD);
-        idx
-    }
-
-    fn refine(&mut self, idx: u32, other: TSetId, solver: &mut Solver) {
-        let set = self.sets[idx as usize];
-        let this_and_other = solver.and_id(set, other);
-        if this_and_other != TSetId::EMPTY {
-            let notother = solver.not_id(other);
-            let this_minus_other = solver.and_id(set, notother);
-            if this_minus_other != TSetId::EMPTY {
-                if self.lefts[idx as usize] == Self::NO_CHILD {
-                    let l = self.push(this_and_other);
-                    let r = self.push(this_minus_other);
-                    self.lefts[idx as usize] = l;
-                    self.rights[idx as usize] = r;
-                } else {
-                    let l = self.lefts[idx as usize];
-                    let r = self.rights[idx as usize];
-                    self.refine(l, other, solver);
-                    self.refine(r, other, solver);
-                }
-            }
-        }
-    }
-
-    fn get_leaf_sets(&self) -> Vec<TSetId> {
-        let mut leaves = Vec::new();
-        let mut stack = vec![0u32];
-        while let Some(idx) = stack.pop() {
-            if self.lefts[idx as usize] == Self::NO_CHILD {
-                leaves.push(self.sets[idx as usize]);
-            } else {
-                stack.push(self.lefts[idx as usize]);
-                stack.push(self.rights[idx as usize]);
-            }
-        }
-        leaves
-    }
-
     pub fn generate_minterms(sets: HashSet<TSetId>, solver: &mut Solver) -> Vec<TSetId> {
-        let mut pt = PartitionTree::new(TSetId::FULL);
         let mut sets: Vec<TSetId> = sets.into_iter().collect();
         sets.sort();
+        let mut classes: Vec<TSet> = vec![Solver::full()];
         for set in sets {
-            pt.refine(0, set, solver);
+            let s = solver.get_set(set);
+            let mut next = Vec::with_capacity(classes.len() * 2);
+            for c in classes {
+                let inside = c & s;
+                let outside = c & !s;
+                if !Solver::is_empty(&inside) {
+                    next.push(inside);
+                }
+                if !Solver::is_empty(&outside) {
+                    next.push(outside);
+                }
+            }
+            classes = next;
         }
-        let mut lsets = pt.get_leaf_sets();
-        lsets[1..].sort();
-        lsets
+        let mut ids: Vec<TSetId> = classes.into_iter().map(|c| solver.get_id(c)).collect();
+        ids.sort();
+        ids
     }
 
     pub fn minterms_lookup(minterms: &[TSetId], solver: &mut Solver) -> [u8; 256] {
@@ -157,6 +111,53 @@ pub(crate) fn collect_tregex_leaves(b: &RegexBuilder, tregex: TRegexId, out: &mu
                 stack.push(then_br);
                 stack.push(else_br);
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn minterms_partition_bytes_and_refine_each_set() {
+        let mut solver = Solver::new();
+        let ranges = [
+            (b'a', b'm'),
+            (b'h', b'z'),
+            (0u8, 0x7f),
+            (b'0', b'9'),
+            (0xC2, 0xDF),
+        ];
+        let sets: HashSet<TSetId> = ranges
+            .iter()
+            .map(|&(lo, hi)| solver.range_to_set_id(lo, hi))
+            .collect();
+        let mts = PartitionTree::generate_minterms(sets.clone(), &mut solver);
+        let mut union = Solver::empty();
+        for (i, &m) in mts.iter().enumerate() {
+            for &o in &mts[i + 1..] {
+                assert!(solver.and_id(m, o) == TSetId::EMPTY, "minterms overlap");
+            }
+            union = union | solver.get_set(m);
+        }
+        assert!(
+            union == Solver::full(),
+            "minterms do not cover the byte universe"
+        );
+        for &s in &sets {
+            for &m in &mts {
+                let inter = solver.and_id(m, s);
+                assert!(inter == TSetId::EMPTY || inter == m, "set splits a minterm");
+            }
+        }
+        let lookup = PartitionTree::minterms_lookup(&mts, &mut solver);
+        for byte in 0..=255u8 {
+            let m = solver.get_set(mts[lookup[byte as usize] as usize]);
+            assert!(
+                m.contains_byte(byte),
+                "lookup maps byte {byte} to the wrong minterm"
+            );
         }
     }
 }

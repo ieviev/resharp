@@ -10,7 +10,7 @@ use resharp::{RegexOptions, UnicodeMode};
 pub fn option_sweep() -> [RegexOptions; 6] {
     [
         RegexOptions::default(),
-        RegexOptions::default().hardened(true),
+        RegexOptions::default().hardening(resharp::HardeningMode::Always),
         RegexOptions::default().unicode(UnicodeMode::Ascii),
         RegexOptions::default().unicode(UnicodeMode::Full),
         RegexOptions::default().unicode(UnicodeMode::Javascript),

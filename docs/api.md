@@ -23,10 +23,11 @@ pub struct Match { pub start: usize, pub end: usize }
 ## RegexOptions
 
 ```rust
-use resharp::{RegexOptions, UnicodeMode};
+use resharp::{HardeningMode, RegexOptions, UnicodeMode};
 
 let opts = RegexOptions {
-    max_dfa_capacity: 65535,         // cap on DFA states
+    max_dfa_capacity: 65535,         // cap on DFA states; above 65535 needs the `wide_state` feature (u32 ids, default 1<<20), else `CapacityTooLarge`
+    max_node_capacity: 1_000_000,    // max AST nodes
     lookahead_context_max: 800,      // max lookahead distance
     unicode: UnicodeMode::Default,   // Ascii | Default | Full | Javascript
     case_insensitive: false,         // (?i)
@@ -34,7 +35,7 @@ let opts = RegexOptions {
     multiline: true,                 // (?m); on by default, disable with (?-m)
     ignore_whitespace: false,        // (?x)
     implicit_captures: false,        // make every bare (...) capture
-    hardened: false,                 // true: linear find_all, slower
+    hardening: HardeningMode::Auto,  // Off | Auto | Always (Always: forces O(n), slower on average)
     unbounded_size: false,           // disable parser/algebra size caps
     ..Default::default()
 };
@@ -44,7 +45,7 @@ Setters chain: `RegexOptions::default().unicode(UnicodeMode::Ascii).case_insensi
 
 Inline flags (`(?i)`, `(?s)`, `(?-u)`, ...) override the global setting and can be scoped: `(?s:a.b)c.d`.
 
-`unicode`: [syntax.md](syntax.md#unicode). `hardened`: [features.md](features.md#hardened-mode).
+`unicode`: [syntax.md](syntax.md#unicode). `hardening`: [features.md](features.md#hardened-mode).
 
 ## Capture groups (experimental)
 
@@ -96,6 +97,7 @@ pub enum Error {
     Parse(Box<ParseError>),
     Algebra(ResharpError),
     CapacityExceeded,        // hit max_dfa_capacity
+    CapacityTooLarge(usize), // max_dfa_capacity above this build's limit
     PatternTooLarge,         // hit parser/algebra size cap
     Serialize(String),
     InternalError(&'static str),

@@ -6,10 +6,10 @@ use resharp_algebra::nulls::{
 use resharp_algebra::{NodeId, RegexBuilder};
 
 use crate::accel::{MintermSearchValue, Skipper};
-use crate::ldfa::{dfa_delta, DFA_DEAD, DFA_MISSING, NO_MATCH};
+use crate::ldfa::{dfa_delta, DFA_DEAD, DFA_MISSING, NO_MATCH, Sid};
 
 pub(crate) struct ScanTables {
-    pub(crate) center_table: *const u16,
+    pub(crate) center_table: *const Sid,
     pub(crate) center_effect_id: *const u16,
     pub(crate) effects: *const Vec<NullState>,
     pub(crate) data: *const u8,
@@ -186,7 +186,7 @@ fn skip_rev(
                     }
                     Some(skip_pos) => {
                         let cb = conv_b.as_deref_mut().unwrap();
-                        let matches = cb.conv_start_matches(b, skip_pos + 1, data)?;
+                        let matches = cb.matches_from(b, skip_pos + 1, data)?;
                         #[cfg(feature = "debug")]
                         eprintln!("[skip_rev Inner] branch B skip_pos={skip_pos} conv_start_matches={matches}");
                         if matches {
@@ -568,7 +568,11 @@ pub(crate) fn scan_fwd_first_null<const SKIP: bool>(
             }
             pos += 1;
             let eid = unsafe { *effects_id.add(curr as usize) as u32 }; // bounds: see `register_state`
-            if eid != 0 && eid != EID_BEGIN0 && eid != EID_END0 {
+            if eid != 0 && eid != EID_BEGIN0 && eid != EID_END0
+                && (eid == EID_CENTER0 || unsafe {
+                    (*t.effects.add(eid as usize)).iter().any(|n| n.mask.has(Nullability::CENTER))
+                })
+            {
                 return (curr, pos, true, false);
             }
             if SKIP && skip_ids[curr as usize] != 0 {
@@ -651,7 +655,6 @@ pub(crate) fn scan_fwd<const SKIP: bool>(
             if next == DFA_DEAD as u32 {
                 return (DFA_DEAD as u32, l_pos, max_end, false);
             }
-            // eprintln!("[pos] {:?}; {}->{}", l_pos, l_state, next);
             l_state = next;
             l_pos += 1;
             if l_pos == end {
@@ -665,20 +668,20 @@ pub(crate) fn scan_fwd<const SKIP: bool>(
 
 pub(crate) fn register_state(
     state_nodes: &mut Vec<NodeId>,
-    node_to_state: &mut HashMap<NodeId, u16>,
+    node_to_state: &mut HashMap<NodeId, Sid>,
     effects_id: &mut Vec<u16>,
     center_effect_id: &mut Vec<u16>,
     effects: &mut Vec<Vec<NullState>>,
     b: &mut RegexBuilder,
     node: NodeId,
     force: bool,
-) -> u16 {
+) -> Sid {
     if !force {
         if let Some(&sid) = node_to_state.get(&node) {
             return sid;
         }
     }
-    let sid = state_nodes.len() as u16;
+    let sid = state_nodes.len() as Sid;
     state_nodes.push(node);
     if !node_to_state.contains_key(&node) {
         node_to_state.insert(node, sid);

@@ -12,6 +12,15 @@ pub(crate) unsafe fn neon_movemask(v: uint8x16_t) -> u16 {
     (vaddv_u8(lo) as u16) | ((vaddv_u8(hi) as u16) << 8)
 }
 
+#[inline(always)]
+unsafe fn teddy_lane(vlo: uint8x16_t, vhi: uint8x16_t, c: uint8x16_t, nib: uint8x16_t) -> uint8x16_t {
+    let t = vandq_u8(
+        vqtbl1q_u8(vlo, vandq_u8(c, nib)),
+        vqtbl1q_u8(vhi, vshrq_n_u8(c, 4)),
+    );
+    vtstq_u8(t, t)
+}
+
 #[cfg_attr(debug_assertions, derive(Debug))]
 #[cfg_attr(feature = "serialize", derive(serde::Serialize, serde::Deserialize))]
 pub struct RevSearchBytes {
@@ -393,7 +402,7 @@ impl FwdLiteralSearch {
             if COLLECT_ALL && start < last_end {
                 return None;
             }
-            if !this.verify(haystack, start) {
+            if nlen > 1 && !this.verify(haystack, start) {
                 return None;
             }
             if COLLECT_ALL {
@@ -546,23 +555,6 @@ impl RevTeddySearch {
                 sets: all_sets,
                 tail_offset,
             }),
-        }
-    }
-
-    #[cfg(feature = "convergence_prefix")]
-    pub fn add_tail_offset(mut self, extra: u32) -> Self {
-        match &mut self.inner {
-            RevSearchInner::Teddy(t) => t.tail_offset += extra as usize,
-            RevSearchInner::Literal(l) => l.tail_offset += extra as usize,
-        }
-        self
-    }
-
-    #[cfg(feature = "convergence_prefix")]
-    pub fn len(&self) -> usize {
-        match &self.inner {
-            RevSearchInner::Teddy(t) => t.len,
-            RevSearchInner::Literal(l) => l.len(),
         }
     }
 
@@ -880,8 +872,9 @@ impl FwdPrefixSearch {
             let mut lo = [0u8; 16];
             let mut hi = [0u8; 16];
             for &b in &byte_sets_raw[pos] {
-                lo[(b & 0xF) as usize] |= 0x80;
-                hi[(b >> 4) as usize] |= 0x80;
+                let bucket = 1u8 << ((b >> 4) & 7);
+                lo[(b & 0xF) as usize] |= bucket;
+                hi[(b >> 4) as usize] |= bucket;
             }
             masks.lo[i][..16].copy_from_slice(&lo);
             masks.lo[i][16..].copy_from_slice(&lo);
@@ -956,10 +949,7 @@ impl FwdPrefixSearch {
 
         while pos < simd_end {
             let c0 = vld1q_u8(ptr.add(pos + off0));
-            let r0 = vandq_u8(
-                vqtbl1q_u8(vlo0, vandq_u8(c0, nib)),
-                vqtbl1q_u8(vhi0, vshrq_n_u8(c0, 4)),
-            );
+            let r0 = teddy_lane(vlo0, vhi0, c0, nib);
             if vmaxvq_u8(r0) != 0 {
                 let mask = neon_movemask(r0);
                 if let Some(m) =
@@ -991,14 +981,8 @@ impl FwdPrefixSearch {
         while pos < simd_end {
             let c0 = vld1q_u8(ptr.add(pos + off0));
             let c1 = vld1q_u8(ptr.add(pos + off1));
-            let r0 = vandq_u8(
-                vqtbl1q_u8(vlo0, vandq_u8(c0, nib)),
-                vqtbl1q_u8(vhi0, vshrq_n_u8(c0, 4)),
-            );
-            let r1 = vandq_u8(
-                vqtbl1q_u8(vlo1, vandq_u8(c1, nib)),
-                vqtbl1q_u8(vhi1, vshrq_n_u8(c1, 4)),
-            );
+            let r0 = teddy_lane(vlo0, vhi0, c0, nib);
+            let r1 = teddy_lane(vlo1, vhi1, c1, nib);
             let combined = vandq_u8(r0, r1);
             if vmaxvq_u8(combined) != 0 {
                 let mask = neon_movemask(combined);
@@ -1037,19 +1021,10 @@ impl FwdPrefixSearch {
             let c2a = vld1q_u8(ptr.add(pos + off2));
             let ra = vandq_u8(
                 vandq_u8(
-                    vandq_u8(
-                        vqtbl1q_u8(vlo0, vandq_u8(c0a, nib)),
-                        vqtbl1q_u8(vhi0, vshrq_n_u8(c0a, 4)),
-                    ),
-                    vandq_u8(
-                        vqtbl1q_u8(vlo1, vandq_u8(c1a, nib)),
-                        vqtbl1q_u8(vhi1, vshrq_n_u8(c1a, 4)),
-                    ),
+                    teddy_lane(vlo0, vhi0, c0a, nib),
+                    teddy_lane(vlo1, vhi1, c1a, nib),
                 ),
-                vandq_u8(
-                    vqtbl1q_u8(vlo2, vandq_u8(c2a, nib)),
-                    vqtbl1q_u8(vhi2, vshrq_n_u8(c2a, 4)),
-                ),
+                teddy_lane(vlo2, vhi2, c2a, nib),
             );
 
             let c0b = vld1q_u8(ptr.add(pos + 16 + off0));
@@ -1057,19 +1032,10 @@ impl FwdPrefixSearch {
             let c2b = vld1q_u8(ptr.add(pos + 16 + off2));
             let rb = vandq_u8(
                 vandq_u8(
-                    vandq_u8(
-                        vqtbl1q_u8(vlo0, vandq_u8(c0b, nib)),
-                        vqtbl1q_u8(vhi0, vshrq_n_u8(c0b, 4)),
-                    ),
-                    vandq_u8(
-                        vqtbl1q_u8(vlo1, vandq_u8(c1b, nib)),
-                        vqtbl1q_u8(vhi1, vshrq_n_u8(c1b, 4)),
-                    ),
+                    teddy_lane(vlo0, vhi0, c0b, nib),
+                    teddy_lane(vlo1, vhi1, c1b, nib),
                 ),
-                vandq_u8(
-                    vqtbl1q_u8(vlo2, vandq_u8(c2b, nib)),
-                    vqtbl1q_u8(vhi2, vshrq_n_u8(c2b, 4)),
-                ),
+                teddy_lane(vlo2, vhi2, c2b, nib),
             );
 
             if vmaxvq_u8(vorrq_u8(ra, rb)) != 0 {
@@ -1109,19 +1075,10 @@ impl FwdPrefixSearch {
             let c2 = vld1q_u8(ptr.add(pos + off2));
             let combined = vandq_u8(
                 vandq_u8(
-                    vandq_u8(
-                        vqtbl1q_u8(vlo0, vandq_u8(c0, nib)),
-                        vqtbl1q_u8(vhi0, vshrq_n_u8(c0, 4)),
-                    ),
-                    vandq_u8(
-                        vqtbl1q_u8(vlo1, vandq_u8(c1, nib)),
-                        vqtbl1q_u8(vhi1, vshrq_n_u8(c1, 4)),
-                    ),
+                    teddy_lane(vlo0, vhi0, c0, nib),
+                    teddy_lane(vlo1, vhi1, c1, nib),
                 ),
-                vandq_u8(
-                    vqtbl1q_u8(vlo2, vandq_u8(c2, nib)),
-                    vqtbl1q_u8(vhi2, vshrq_n_u8(c2, 4)),
-                ),
+                teddy_lane(vlo2, vhi2, c2, nib),
             );
             if vmaxvq_u8(combined) != 0 {
                 let mask = neon_movemask(combined);

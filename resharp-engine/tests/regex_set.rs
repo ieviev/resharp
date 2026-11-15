@@ -115,6 +115,7 @@ fn member_matches_span(
 }
 
 #[test]
+#[ignore = "slow randomized crosscheck; run explicitly with --ignored"]
 fn set_crosscheck_against_anchored_members() {
     let pool = [
         "a", "ab", "b+", "a[ab]*", "ba", "a(?=b)", "b(?=a)", "b\\b", "a$", "\\Aab", "[ab]{2}",

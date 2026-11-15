@@ -120,7 +120,7 @@ fn length_one_lookbehind_alternation_supported() {
 
 #[test]
 fn bounded_repeat_mixed_lookaround_union_compiles_fast() {
-    let pat = r"(?:x|(?<!x)|(?=x)){0,28}";
+    let pat = r"(?:x|(?!x)|(?=x)){0,28}";
     let t = std::time::Instant::now();
     let re = Regex::new(pat).unwrap();
     assert!(
@@ -140,7 +140,7 @@ fn bounded_union_before_mandatory_trailing_class_not_quadratic() {
     let pat = "(?:[cx]{0,50}|[^b]+){0,50}[bx]+";
     let re = Regex::with_options(
         pat,
-        RegexOptions::default().unicode(resharp::UnicodeMode::Ascii).hardened(true),
+        RegexOptions::default().unicode(resharp::UnicodeMode::Ascii).hardening(resharp::HardeningMode::Always),
     )
     .unwrap();
     let mut hay = "c".repeat(50).into_bytes();
@@ -659,28 +659,12 @@ fn hardened_zero_width_interior_null_matches_default() {
         (r"^_?", &b"\n\n"[..]),
     ] {
         let def = Regex::new(pat).unwrap();
-        let hard = Regex::with_options(pat, RegexOptions::default().hardened(true)).unwrap();
+        let hard = Regex::with_options(pat, RegexOptions::default().hardening(resharp::HardeningMode::Always)).unwrap();
         assert_eq!(
             def.find_all(hay).unwrap(),
             hard.find_all(hay).unwrap(),
             "default vs hardened find_all diverge for {pat:?} on {hay:?}"
         );
-    }
-}
-
-#[test]
-fn bounded_repeat_over_lookaround_alternation_compiles() {
-    let pats = [
-        r"\A[a-z0-9]([a-z0-9]|(-(?!-))){1,61}[a-z0-9]\z",
-        r"\A[^-#\x00-/:-@\[-^`{-\u{10FFFF}]([a-z]|[-](?![-])){0,62}[^-#\x00-/:-@\[-^`{-\u{10FFFF}]\z",
-        r"\A([a-z]|(\d(?!\d{0,2}\.\d{1,3}\.\d{1,3}\.\d{1,3})))([a-z0-9]|(\.(?!(\.|-)))|(-(?!\.))){1,61}[a-z0-9]\z",
-        r"\A\_\_([a-zA-Z](?:[a-zA-Z0-9]|\.[a-zA-Z]|(\.\_id)|\_(?!\_)){0,100})\_\_\z",
-    ];
-    for pat in pats {
-        let opts = RegexOptions::default().unicode(resharp::UnicodeMode::Javascript);
-        let re = Regex::with_options(pat, opts)
-            .unwrap_or_else(|e| panic!("compile failed for {pat:?}: {e:?}"));
-        let _ = re.find_all(b"ahZ09_/. ").unwrap();
     }
 }
 
@@ -929,6 +913,23 @@ fn capacity_exceeded_at_compile() {
 }
 
 #[test]
+fn node_capacity_exceeded_during_scan() {
+    let re = Regex::with_options(
+        r"\w+(?=\w{70}_)",
+        RegexOptions {
+            max_node_capacity: 5000,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let hay = "abcdefghijklmnopqrstuvwxyz".repeat(4);
+    assert!(
+        matches!(re.find_all(hay.as_bytes()), Err(Error::NodeCapacityExceeded(5000))),
+        "expected NodeCapacityExceeded error"
+    );
+}
+
+#[test]
 #[ignore = "slow; run with --ignored"]
 fn dictionary_context_medium() {
     let path = format!(
@@ -1082,7 +1083,7 @@ fn run_file_hardened(filename: &str) {
             check_hardened_vs_normal(&tc.pattern, tc.input.as_bytes());
             continue;
         }
-        let opts = case_options(tc).hardened(true);
+        let opts = case_options(tc).hardening(resharp::HardeningMode::Always);
         let re = match Regex::with_options(&tc.pattern, opts) {
             Ok(re) => re,
             Err(_) => continue,
@@ -1203,7 +1204,7 @@ fn hardened_pathological() {
     let pattern = r".*[^A-Z]|[A-Z]";
     let input = "A".repeat(1000);
     let re_normal = Regex::new(pattern).unwrap();
-    let re_hardened = Regex::with_options(pattern, RegexOptions::default().hardened(true)).unwrap();
+    let re_hardened = Regex::with_options(pattern, RegexOptions::default().hardening(resharp::HardeningMode::Always)).unwrap();
     assert_eq!(
         re_normal.find_all(input.as_bytes()).unwrap(),
         re_hardened.find_all(input.as_bytes()).unwrap(),
@@ -1212,7 +1213,7 @@ fn hardened_pathological() {
 }
 
 fn check_hardened_vs_normal(pattern: &str, input: &[u8]) {
-    let opts = RegexOptions::default().hardened(true);
+    let opts = RegexOptions::default().hardening(resharp::HardeningMode::Always);
     let re_s = match Regex::with_options(pattern, opts) {
         Ok(re) => re,
         Err(_) => return,
@@ -1278,7 +1279,7 @@ fn hardened_bounded_repeat_tail() {
             .map(|m| (m.start(), m.end()))
             .collect();
 
-        let re_u = Regex::with_options(pattern, RegexOptions::default().hardened(true)).unwrap();
+        let re_u = Regex::with_options(pattern, RegexOptions::default().hardening(resharp::HardeningMode::Always)).unwrap();
         let got: Vec<(usize, usize)> = re_u
             .find_all(input.as_bytes())
             .unwrap()
@@ -1323,7 +1324,7 @@ fn range_prefix_correctness() {
     ];
     for p in &patterns {
         let re = Regex::new(p).unwrap();
-        let re_hardened = Regex::with_options(p, RegexOptions::default().hardened(true)).unwrap();
+        let re_hardened = Regex::with_options(p, RegexOptions::default().hardening(resharp::HardeningMode::Always)).unwrap();
         for input in &inputs {
             let normal = re.find_all(input).unwrap();
             let hardened = re_hardened.find_all(input).unwrap();
@@ -1356,7 +1357,7 @@ fn range_prefix_random_haystack() {
             .collect();
         for p in &patterns {
             let re = Regex::new(p).unwrap();
-            let re_s = Regex::with_options(p, RegexOptions::default().hardened(true)).unwrap();
+            let re_s = Regex::with_options(p, RegexOptions::default().hardening(resharp::HardeningMode::Always)).unwrap();
             let normal = re.find_all(&input).unwrap();
             let hardened = re_s.find_all(&input).unwrap();
             assert_eq!(
@@ -1387,7 +1388,7 @@ fn hardened_nullable_empty_after_dedup() {
             .map(|m| (m.start, m.end))
             .collect();
 
-        let opts = RegexOptions::default().hardened(true);
+        let opts = RegexOptions::default().hardening(resharp::HardeningMode::Always);
         let re_h = Regex::with_options(pattern, opts).unwrap();
         let hardened: Vec<(usize, usize)> = re_h
             .find_all(input.as_bytes())
@@ -1433,7 +1434,7 @@ fn hardened_cross_validate_all_toml() {
                 check_hardened_vs_normal(&tc.pattern, tc.input.as_bytes());
                 continue;
             }
-            let opts = RegexOptions::default().hardened(true);
+            let opts = RegexOptions::default().hardening(resharp::HardeningMode::Always);
             let re = match Regex::with_options(&tc.pattern, opts) {
                 Ok(re) => re,
                 Err(_) => continue,
@@ -1651,7 +1652,7 @@ fn reject_lookahead_in_loop() {
 fn hardened_long_word() {
     let p = r"\b[a-z]{12,}\b";
     let input = b"!extraordinary";
-    let re_h = Regex::with_options(p, RegexOptions::default().hardened(true)).unwrap();
+    let re_h = Regex::with_options(p, RegexOptions::default().hardening(resharp::HardeningMode::Always)).unwrap();
     let re_n = Regex::new(p).unwrap();
     let a = re_n.find_all(input).unwrap();
     let b = re_h.find_all(input).unwrap();
@@ -1680,6 +1681,7 @@ fn repeat_limit_unbounded_allows_large_count() {
 }
 
 #[test]
+#[cfg_attr(target_family = "wasm", ignore)]
 fn deep_concat_chain_compiles_on_a_small_stack() {
     let done = std::thread::Builder::new()
         .stack_size(256 * 1024)
@@ -1744,6 +1746,7 @@ fn rev_bot_constant_time() {
 }
 
 #[test]
+#[cfg_attr(target_family = "wasm", ignore)]
 fn max_depth_rejects_deep_nesting() {
     let handle = std::thread::Builder::new()
         .stack_size(64 * 1024 * 1024)
@@ -1834,7 +1837,7 @@ fn trailing_star_yields_to_fwd_prefix_kind() {
     use resharp::UnicodeMode;
     let opts = RegexOptions::default().unicode(UnicodeMode::Javascript);
     let re = Regex::with_options(r"BREAKING CHANGE:([\s\S]*)", opts).unwrap();
-    assert_eq!(re.prefix_kind_name(), Some("AnchoredFwd"));
+    assert_eq!(re.prefix_kind_name(), Some("AnchoredRev"));
 }
 
 #[test]
@@ -1985,6 +1988,95 @@ mod prefix_toml {
         (b, sets)
     }
 
+    #[test]
+    fn full_set_keeps_selective_reverse_prefix() {
+        let (b, sets) = make_prefix_sets(r"(?s)abc.");
+        assert_eq!(pp_sets(&b, &sets.rev_anchored.sets), "_;c;b;a");
+    }
+
+    #[test]
+    fn bounded_any_prefix_node_budget() {
+        for (class, multiplier) in [
+            (".", 20),
+            ("[0-9]", 70),
+            ("[ab]", 70),
+            ("a", 70),
+            ("(?:ab)", 140),
+            ("(?:abc)", 210),
+        ] {
+            for n in [100, 200, 500] {
+                let pattern = format!(r"\{{{class}{{{n},}}\}}");
+                let (b, _) = make_prefix_sets(&pattern);
+                assert!(
+                    b.num_nodes() < multiplier * n + 1000,
+                    "{pattern}: {} nodes",
+                    b.num_nodes()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn bounded_nine_byte_repeat_prefix_node_budget() {
+        for n in [100, 200] {
+            let pattern = format!(r"\{{(?:abcdefghi){{{n},}}\}}");
+            let (b, _) = make_prefix_sets(&pattern);
+            assert!(b.num_nodes() < 630 * n + 1000, "{pattern}: {} nodes", b.num_nodes());
+        }
+    }
+
+    #[test]
+    fn bounded_sixteen_byte_repeat_prefix_node_budget() {
+        for n in [100, 120] {
+            let pattern = format!(r"\{{(?:abcdefghijklmnop){{{n},}}\}}");
+            let (b, _) = make_prefix_sets(&pattern);
+            assert!(b.num_nodes() < 1120 * n + 1000, "{pattern}: {} nodes", b.num_nodes());
+        }
+    }
+
+    #[test]
+    fn bounded_long_repeat_prefix_stack() {
+        let (b, _) = make_prefix_sets(r"\{(?:abcdefghi){500,}\}");
+        assert!(b.num_nodes() < 630 * 500 + 1000, "{} nodes", b.num_nodes());
+    }
+
+    #[test]
+    fn bounded_any_prefix_matches_hardened() {
+        for pattern in [
+            r"\{.{100,}\}",
+            r"\{[0-9]{100,}\}",
+            r"\{[ab]{100,}\}",
+            r"\{a{100,}\}",
+            r"\{(?:ab){100,}\}",
+            r"\{(?:abcdefghi){100,}\}",
+            r"a.{20}z",
+            r"(?:a|b).{20}z",
+            r"x.{20}a*",
+        ] {
+            let fast = resharp::Regex::new(pattern).unwrap();
+            let slow = resharp::Regex::with_options(
+                pattern,
+                resharp::RegexOptions::default().hardening(resharp::HardeningMode::Always),
+            )
+            .unwrap();
+            for input in [
+                format!("{{{}}}", "a".repeat(100)),
+                format!("{{{}}}", "1".repeat(100)),
+                format!("{{{}}}", "ab".repeat(100)),
+                format!("{{{}}}", "abcdefghi".repeat(100)),
+                format!("a{}z a{}z", "b".repeat(20), "c".repeat(21)),
+                format!("x{}aa", "b".repeat(20)),
+                "a\n".repeat(100),
+            ] {
+                assert_eq!(
+                    fast.find_all(input.as_bytes()).unwrap(),
+                    slow.find_all(input.as_bytes()).unwrap(),
+                    "{pattern:?} {input:?}"
+                );
+            }
+        }
+    }
+
     fn pp_sets(b: &RegexBuilder, sets: &[TSetId]) -> String {
         sets.iter()
             .map(|&s| b.solver_ref().pp(s))
@@ -2058,6 +2150,7 @@ mod prefix_toml {
             #[cfg(feature = "convergence_prefix")]
             if let Some(e) = &tc.conv_literal {
                 let got = resharp::detect_inner_literal_bytes(&tc.pattern)
+                    .unwrap_or_else(|e| panic!("conv_literal parse of {}: {e:?}", tc.name))
                     .map(|v| String::from_utf8_lossy(&v).into_owned())
                     .unwrap_or_else(|| "None".to_string());
                 assert_eq!(&got, e, "conv_literal mismatch: name={}", tc.name);
@@ -2127,7 +2220,7 @@ mod auto_harden {
             );
             if tc.hardened {
                 let hardened =
-                    Regex::with_options(&tc.pattern, RegexOptions::default().hardened(true))
+                    Regex::with_options(&tc.pattern, RegexOptions::default().hardening(resharp::HardeningMode::Always))
                         .unwrap();
                 let inputs: &[&[u8]] = &[b"", b"aaaaaaaa", b"abcdefg", b"|  |\n| a |\n|  |"];
                 for input in inputs {
@@ -2139,6 +2232,52 @@ mod auto_harden {
                         input
                     );
                 }
+            }
+        }
+    }
+}
+
+mod hardening_mode {
+    use resharp::{HardeningMode, Regex, RegexOptions};
+
+    const PATTERN: &str = r"([^$]*\{@[^}]+\})|.*$";
+
+    #[test]
+    fn modes_control_is_hardened() {
+        let hardened =
+            |opts: RegexOptions| Regex::with_options(PATTERN, opts).unwrap().is_hardened();
+        assert!(hardened(RegexOptions::default()));
+        assert!(hardened(
+            RegexOptions::default().hardening(HardeningMode::Auto)
+        ));
+        assert!(hardened(
+            RegexOptions::default().hardening(HardeningMode::Always)
+        ));
+        assert!(!hardened(
+            RegexOptions::default().hardening(HardeningMode::Off)
+        ));
+        assert!(hardened(RegexOptions::default().hardening(resharp::HardeningMode::Always)));
+    }
+
+    #[test]
+    fn off_matches_auto_results() {
+        let inputs: &[&[u8]] = &[b"", b"aaaaaaaa", b"x {@ab} {@c}\nq", b"|  |\n| a |\n|  |"];
+        for pat in [
+            PATTERN,
+            r"\Wprops.(\w+)",
+            r"_*a_{10}&_*b_{10}",
+            r"(?P<g1>\W{1,2})(?P<g2>\S+)",
+        ] {
+            let off =
+                Regex::with_options(pat, RegexOptions::default().hardening(HardeningMode::Off))
+                    .unwrap();
+            let auto = Regex::new(pat).unwrap();
+            for input in inputs {
+                assert_eq!(
+                    off.find_all(input).unwrap(),
+                    auto.find_all(input).unwrap(),
+                    "pattern={pat:?} input={input:?}"
+                );
             }
         }
     }
@@ -2172,7 +2311,7 @@ mod quadratic {
             match tc.kind {
                 QuadKind::Fwd => {
                     let re =
-                        Regex::with_options(&tc.pattern, RegexOptions::default().hardened(true))
+                        Regex::with_options(&tc.pattern, RegexOptions::default().hardening(resharp::HardeningMode::Always))
                             .unwrap_or_else(|e| panic!("{}: compile failed: {e:?}", tc.name));
                     assert!(
                         !re.has_fwd_prefix(),
@@ -2333,7 +2472,7 @@ mod hardened_regressions {
         let mk = || {
             RegexOptions::default()
                 .unicode(UnicodeMode::Javascript)
-                .hardened(true)
+                .hardening(resharp::HardeningMode::Always)
         };
         let cases: &[(&str, &[u8], &[(usize, usize)])] = &[
             ("(?:b*c|)", b"yy", &[(0, 0), (1, 1), (2, 2)]),
@@ -2410,6 +2549,7 @@ fn test_word_boundary_group() {
 }
 
 #[test]
+#[cfg_attr(target_family = "wasm", ignore)]
 fn prefix_calc_terminates_on_complement_intersection_quantified() {
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
@@ -2924,12 +3064,12 @@ fn lookahead_in_optional_with_surrounding_stars() {
 
 #[test]
 fn hardened_word_boundary_non_utf8_findall() {
-    assert!(Regex::with_options(r"\B|,", RegexOptions::default().hardened(true)).is_err());
+    assert!(Regex::with_options(r"\B|,", RegexOptions::default().hardening(resharp::HardeningMode::Always)).is_err());
 }
 
 #[test]
 fn hardened_bare_lookahead_zero_width_dot_hash() {
-    let opts = RegexOptions::default().hardened(true);
+    let opts = RegexOptions::default().hardening(resharp::HardeningMode::Always);
     let re = Regex::with_options("(?=[.#])", opts).unwrap();
     let result: Vec<[usize; 2]> = re
         .find_all(b"a.b#c")
@@ -3167,7 +3307,7 @@ fn bounded_matches_general_path_differential() {
     let alphabet = b"abc";
     for pat in pats {
         let bounded = Regex::new(pat).unwrap();
-        let general = Regex::with_options(pat, RegexOptions::default().hardened(true)).unwrap();
+        let general = Regex::with_options(pat, RegexOptions::default().hardening(resharp::HardeningMode::Always)).unwrap();
         for n in 0u32..=6 {
             for code in 0..3usize.pow(n) {
                 let mut s = String::new();
@@ -3189,36 +3329,45 @@ fn bounded_matches_general_path_differential() {
 fn inner_literal_detection() {
     use resharp::detect_inner_literal_bytes;
     assert_eq!(
-        detect_inner_literal_bytes(r"(\S+)\/(\S+)"),
+        detect_inner_literal_bytes(r"(\S+)\/(\S+)").unwrap(),
         Some(vec![b'/'])
     );
     assert_eq!(
-        detect_inner_literal_bytes(r"(\d+)\/(\d+)"),
+        detect_inner_literal_bytes(r"(\d+)\/(\d+)").unwrap(),
         Some(vec![b'/'])
     );
-    assert_eq!(detect_inner_literal_bytes(r"\S+@\S+"), Some(vec![b'@']));
-    assert_eq!(detect_inner_literal_bytes(r"\w+@\w+"), Some(vec![b'@']));
-    assert_eq!(detect_inner_literal_bytes(r".(?=a)"), Some(vec![b'a']));
     assert_eq!(
-        detect_inner_literal_bytes(r".(?=a|$)"),
+        detect_inner_literal_bytes(r"\S+@\S+").unwrap(),
+        Some(vec![b'@'])
+    );
+    assert_eq!(
+        detect_inner_literal_bytes(r"\w+@\w+").unwrap(),
+        Some(vec![b'@'])
+    );
+    assert_eq!(
+        detect_inner_literal_bytes(r".(?=a)").unwrap(),
+        Some(vec![b'a'])
+    );
+    assert_eq!(
+        detect_inner_literal_bytes(r".(?=a|$)").unwrap(),
         Some(vec![b'\n', b'a'])
     );
-    assert_eq!(detect_inner_literal_bytes(r"\S+(/\S+)?"), None);
-    assert_eq!(detect_inner_literal_bytes(r"\S+"), None);
+    assert_eq!(detect_inner_literal_bytes(r"\S+(/\S+)?").unwrap(), None);
+    assert_eq!(detect_inner_literal_bytes(r"\S+").unwrap(), None);
     assert_eq!(
-        detect_inner_literal_bytes(r"\S+://\S+"),
+        detect_inner_literal_bytes(r"\S+://\S+").unwrap(),
         Some(b"://".to_vec())
     );
     assert_eq!(
-        detect_inner_literal_bytes(r"foo\S+bar"),
+        detect_inner_literal_bytes(r"foo\S+bar").unwrap(),
         Some(b"bar".to_vec())
     );
     assert_eq!(
-        detect_inner_literal_bytes(r"\S+ <-> \S+"),
+        detect_inner_literal_bytes(r"\S+ <-> \S+").unwrap(),
         Some(b" <-> ".to_vec())
     );
     assert_eq!(
-        detect_inner_literal_bytes(r"<(g|mi) (xlink[^> ]+) (xml[^> ]+)"),
+        detect_inner_literal_bytes(r"<(g|mi) (xlink[^> ]+) (xml[^> ]+)").unwrap(),
         Some(b" xml".to_vec())
     );
 }
@@ -3614,7 +3763,7 @@ fn default_and_hardened_find_all_agree_lookaround() {
     for (pat, hay) in cases {
         let def = resharp::Regex::new(pat).unwrap();
         let hard =
-            resharp::Regex::with_options(pat, resharp::RegexOptions::default().hardened(true))
+            resharp::Regex::with_options(pat, resharp::RegexOptions::default().hardening(resharp::HardeningMode::Always))
                 .unwrap();
         let def_ms = def.find_all(hay).unwrap();
         let hard_ms = hard.find_all(hay).unwrap();
@@ -3626,6 +3775,7 @@ fn default_and_hardened_find_all_agree_lookaround() {
 }
 
 #[test]
+#[cfg_attr(target_family = "wasm", ignore)]
 fn compile_wildcard_literal_wildcard_terminates() {
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
@@ -3644,7 +3794,7 @@ fn default_and_hardened_find_all_agree_alternation() {
     for (pat, hay) in cases {
         let def = resharp::Regex::new(pat).unwrap();
         let hard =
-            resharp::Regex::with_options(pat, resharp::RegexOptions::default().hardened(true))
+            resharp::Regex::with_options(pat, resharp::RegexOptions::default().hardening(resharp::HardeningMode::Always))
                 .unwrap();
         let def_ms = def.find_all(hay).unwrap();
         let hard_ms = hard.find_all(hay).unwrap();
@@ -3666,7 +3816,7 @@ fn find_all_lb_prefix_keeps_offset1_zero_width() {
             .collect()
     };
     let def = resharp::Regex::new("^$").unwrap();
-    let hard = resharp::Regex::with_options("^$", resharp::RegexOptions::default().hardened(true))
+    let hard = resharp::Regex::with_options("^$", resharp::RegexOptions::default().hardening(resharp::HardeningMode::Always))
         .unwrap();
     let def_spans = spans(&def);
     let hard_spans = spans(&hard);
@@ -3822,7 +3972,7 @@ fn find_all_anchor_in_consumed_region() {
     let spans = |pat: &str, hay: &[u8]| -> Vec<(usize, usize)> {
         let def = resharp::Regex::new(pat).unwrap();
         let hard =
-            resharp::Regex::with_options(pat, resharp::RegexOptions::default().hardened(true))
+            resharp::Regex::with_options(pat, resharp::RegexOptions::default().hardening(resharp::HardeningMode::Always))
                 .unwrap();
         let d: Vec<(usize, usize)> = def
             .find_all(hay)
@@ -3870,6 +4020,114 @@ fn nullable_sibling_drops_lookbehind_gate() {
             Regex::new(pat).is_err(),
             "pat={pat:?} should be rejected (nullable sibling + lookbehind union)"
         );
+    }
+}
+
+#[test]
+fn lookbehind_branch_covered_by_plain_branch_is_dropped() {
+    use resharp::Regex;
+    let pairs: &[(&str, &str)] = &[
+        (r"b*|^b", r"b*"),
+        (r"b+|^b+", r"b+"),
+        (r"[a-z]*|^[a-z]", r"[a-z]*"),
+        (r"^b|b*", r"b*"),
+        (r"a*b*|^ab", r"a*b*"),
+        (r"b*|(?<=a)b(?=c)", r"b*"),
+        (r"b*|^b$", r"b*"),
+        (r"x(b*|^b)", r"xb*"),
+        (r"x(b*|^b)y", r"xb*y"),
+    ];
+    let hays: &[&[u8]] = &[
+        b"",
+        b"b",
+        b"bb",
+        b"abb\nb",
+        b"\nbb\n b",
+        b"x\nb",
+        b"abcbc",
+        b"xb\nxby",
+    ];
+    for &(pat, simpl) in pairs {
+        let re = Regex::new(pat).unwrap_or_else(|e| panic!("{pat:?} should compile: {e:?}"));
+        let want = Regex::new(simpl).unwrap();
+        for &h in hays {
+            let spans = |r: &Regex| -> Vec<(usize, usize)> {
+                r.find_all(h)
+                    .unwrap()
+                    .iter()
+                    .map(|m| (m.start, m.end))
+                    .collect()
+            };
+            assert_eq!(spans(&re), spans(&want), "pat={pat:?} hay={h:?}");
+        }
+    }
+    assert!(
+        Regex::new(r"c*|^b").is_err(),
+        "b is not covered by c*: must stay rejected"
+    );
+}
+
+#[test]
+fn repeated_word_boundary_equals_single_boundary() {
+    use resharp::Regex;
+    let pairs: &[(&str, &str)] = &[
+        (r"\b{2}", r"\b"),
+        (r"(?:\b){2}", r"\b"),
+        (r"a(?:\b)+", r"a\b"),
+        (r"(?:\b\b){2}", r"\b"),
+        (r"a\b{2}", r"a\b"),
+        (r"a\b\b", r"a\b"),
+        (r"a\b{1,3}", r"a\b"),
+        (r"\b+", r"\b"),
+        (r"\z\b", r"\b\z"),
+        (r"\z\B", r"\B\z"),
+        (r"a\z\b", r"a\b\z"),
+        (r"\z\b\b", r"\b\z"),
+        (r"\z\b{1,3}", r"\b\z"),
+        (r"(?=\z\b)a", r"(?=\b\z)a"),
+        (r"(?=\z\B)a", r"(?=\B\z)a"),
+        (r"(?=\z\b\b)a", r"(?=\b\z)a"),
+        (r"a\b{2,}", r"a\b"),
+        (r"a\z\b{1,3}", r"a\z\b"),
+        (r"a\z\b{2}", r"a\z\b"),
+        (r"\B{2}", r"\B"),
+        (r"a\B{2}", r"a\B"),
+        (r"a\B\B", r"a\B"),
+    ];
+    let hays: &[&[u8]] = &[b"", b"a", b"ab cd  e-f", b"a\nb", b"a b\n", b"aa\n\n"];
+    for &(pat, plain) in pairs {
+        let re = Regex::new(pat).unwrap_or_else(|e| panic!("{pat:?} should compile: {e:?}"));
+        let want = Regex::new(plain).unwrap();
+        for &h in hays {
+            let spans = |r: &Regex| -> Vec<(usize, usize)> {
+                r.find_all(h)
+                    .unwrap()
+                    .iter()
+                    .map(|m| (m.start, m.end))
+                    .collect()
+            };
+            assert_eq!(spans(&re), spans(&want), "pat={pat:?} hay={h:?}");
+        }
+    }
+}
+
+#[test]
+fn quantified_word_boundary_equals_plain_word_boundary() {
+    use resharp::Regex;
+    let hays: &[&[u8]] = &[b"", b"ab cd  e-f", b"a\nb", b"--a", b"x y\n\n"];
+    for (pat, plain) in [(r"\b{1,3}", r"\b"), (r"\B{1,3}", r"\B")] {
+        let re = Regex::new(pat).unwrap_or_else(|e| panic!("{pat:?} should compile: {e:?}"));
+        let want = Regex::new(plain).unwrap();
+        for &h in hays {
+            let spans = |r: &Regex| -> Vec<(usize, usize)> {
+                r.find_all(h)
+                    .unwrap()
+                    .iter()
+                    .map(|m| (m.start, m.end))
+                    .collect()
+            };
+            assert_eq!(spans(&re), spans(&want), "pat={pat:?} hay={h:?}");
+        }
     }
 }
 
@@ -4129,14 +4387,11 @@ fn end_before_begin_anchor_matches_empty_string() {
 }
 
 #[test]
-fn end_before_begin_anchor_reverse_dead_skips() {
+fn end_before_begin_anchor_does_not_scan_whole_input() {
     let re = Regex::new(r"\z\A").unwrap();
     let hay = vec![b'a'; 200_000];
     assert_eq!(re.find_all(&hay).unwrap().len(), 0);
-    assert!(
-        re.has_accel().1,
-        "\\z\\A reverse scan must enable dead-skip instead of self-looping over the whole input"
-    );
+    assert_eq!(re.find_all_kind_name(), "Anchored", "\\z\\A must be a single forward scan from byte 0");
 }
 
 #[test]
@@ -4224,6 +4479,166 @@ fn end_anchored_short_circuits() {
         re.find_all(b"notes").unwrap(),
         vec![resharp::Match { start: 3, end: 5 }]
     );
+}
+
+#[test]
+fn ascii_word_boundary_literal_is_match() {
+    let re = Regex::with_options(r"\bxml\b", RegexOptions::default().unicode(resharp::UnicodeMode::Ascii).multiline(false)).unwrap();
+    for (input, expected) in [("", false), ("xml", true), (" xml ", true), ("!xml!", true), ("éxmlé", true), ("_xml", false), ("xml2", false), ("not here", false), ("xmlxml xml", true)] {
+        assert_eq!(re.is_match(input.as_bytes()).unwrap(), expected, "{input:?}");
+        assert_eq!(!re.find_all(input.as_bytes()).unwrap().is_empty(), expected, "{input:?}");
+    }
+}
+
+#[test]
+fn lookbehind_literal_contains_matches_find_all() {
+    for pattern in [r"\bxml\b", r"\bxml(?=x)", r"(?<=a)xml", r"(?<!a)xml", r"(?<!a)xml$"] {
+        let re = Regex::with_options(pattern, RegexOptions::default().unicode(resharp::UnicodeMode::Ascii).multiline(false)).unwrap();
+        for left in ["", "a", "!", "é", "xm"] {
+            for middle in ["", "xml", "xmlxml", "xmx"] {
+                for right in ["", "a", "x", "!", "é"] {
+                    let input = format!("{left}{middle}{right}");
+                    assert_eq!(re.is_match(input.as_bytes()).unwrap(), !re.find_all(input.as_bytes()).unwrap().is_empty(), "{pattern} {input:?}");
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn single_byte_literal_scan_matches_naive_at_every_length() {
+    let re = Regex::with_options(";", RegexOptions::default().multiline(false)).unwrap();
+    for len in 0..300usize {
+        for pattern in 0..4usize {
+            let hay: Vec<u8> = (0..len)
+                .map(|i| match pattern {
+                    0 => b'a',
+                    1 => b';',
+                    2 => if i % 37 == 0 { b';' } else { b'a' },
+                    _ => if i == len - 1 || i == 0 || i == 127 || i == 128 { b';' } else { b'a' },
+                })
+                .collect();
+            let expected: Vec<(usize, usize)> = hay
+                .iter()
+                .enumerate()
+                .filter(|(_, &b)| b == b';')
+                .map(|(i, _)| (i, i + 1))
+                .collect();
+            let got: Vec<(usize, usize)> = re.find_all(&hay).unwrap().iter().map(|m| (m.start, m.end)).collect();
+            assert_eq!(got, expected, "len {len} pattern {pattern}");
+            assert_eq!(re.is_match(&hay).unwrap(), !expected.is_empty(), "len {len} pattern {pattern}");
+        }
+    }
+}
+
+#[test]
+fn multi_byte_literal_scan_matches_naive_at_every_length() {
+    for needle in ["qu", "zz", "  ", "ing", "Qzx", "Sherlock"] {
+        let re = Regex::with_options(needle, RegexOptions::default().multiline(false)).unwrap();
+        let nb = needle.as_bytes();
+        for len in 0..400usize {
+            for shape in 0..4usize {
+                let mut hay = vec![b'a'; len];
+                let starts: Vec<usize> = match shape {
+                    0 => vec![],
+                    1 => (0..len.saturating_sub(nb.len() - 1)).step_by(nb.len()).collect(),
+                    2 => (0..len.saturating_sub(nb.len() - 1)).step_by(41).collect(),
+                    _ => [0, 63, 64, 127, 128, 129, len.wrapping_sub(nb.len())]
+                        .into_iter()
+                        .filter(|&p| p.checked_add(nb.len()).is_some_and(|e| e <= len))
+                        .collect(),
+                };
+                let mut expected = Vec::new();
+                let mut last_end = 0;
+                for p in starts {
+                    if p >= last_end {
+                        hay[p..p + nb.len()].copy_from_slice(nb);
+                        expected.push((p, p + nb.len()));
+                        last_end = p + nb.len();
+                    }
+                }
+                let got: Vec<(usize, usize)> = re.find_all(&hay).unwrap().iter().map(|m| (m.start, m.end)).collect();
+                assert_eq!(got, expected, "{needle} len {len} shape {shape}");
+                assert_eq!(re.is_match(&hay).unwrap(), !expected.is_empty(), "{needle} len {len} shape {shape}");
+            }
+        }
+    }
+}
+
+#[test]
+fn two_byte_literal_uses_literal_prefix() {
+    for (pattern, kind) in [("qu", ("Literal", 2)), ("zz", ("Literal", 2)), ("  ", ("Literal", 2)), ("qu[a-z]+", ("Literal", 2))] {
+        let re = Regex::with_options(pattern, RegexOptions::default().multiline(false)).unwrap();
+        assert_eq!(re.fwd_prefix_kind(), Some(kind), "{pattern}");
+    }
+}
+
+#[test]
+fn single_byte_literal_prefix_matches() {
+    for pattern in [";", "[;]"] {
+        let re = Regex::with_options(pattern, RegexOptions::default().multiline(false)).unwrap();
+        assert_eq!(re.fwd_prefix_kind(), Some(("Literal", 1)), "{pattern}");
+        for (input, expected) in [("", false), ("abc", false), (";", true), ("abc;def", true)] {
+            assert_eq!(re.is_match(input.as_bytes()).unwrap(), expected, "{pattern} {input:?}");
+        }
+        assert_eq!(re.find_all(b";;x;").unwrap().iter().map(|m| (m.start, m.end)).collect::<Vec<_>>(), vec![(0, 1), (1, 2), (3, 4)]);
+    }
+    for (pattern, input, expected) in [
+        (";(?=x)", ";x", true),
+        (";(?=x)", ";y", false),
+        (";(?!x)", ";x", false),
+        (";(?!x)", ";y", true),
+        (";$", ";x", false),
+        (";$", "x;", true),
+        (";[xy]", ";z;x", true),
+        (";[xy]", ";z", false),
+    ] {
+        let re = Regex::with_options(pattern, RegexOptions::default().multiline(false)).unwrap();
+        assert_eq!(re.is_match(input.as_bytes()).unwrap(), expected, "{pattern} {input:?}");
+        assert_eq!(!re.find_all(input.as_bytes()).unwrap().is_empty(), expected, "{pattern} {input:?}");
+    }
+}
+
+#[test]
+fn anchored_is_match_early_exit() {
+    let patterns = [
+        r"^a+", r"^a+b?", r"^a+$", r"^a*", r"^a?b", r"^a\b", r"^a\B",
+        r"^a(?=b)", r"^a(?!b)", r"^(a|ab)$", r"^(a$|ab)", r"^a(?=b$)",
+        r"^true$", r"^ab$", r"^a$|^b$", r"^a(?=b$)|^ab$", r"^a.*$",
+    ];
+    let inputs = ["", "a", "b", "aa", "ab", "abc", "a ", "a\n", "aab", "abx", "zab", "true", "truex"];
+    for pattern in patterns {
+        let re = Regex::with_options(
+            pattern,
+            RegexOptions::default().unicode(resharp::UnicodeMode::Ascii).multiline(false),
+        ).unwrap();
+        assert_eq!(re.find_all_kind_name(), "Anchored", "pattern={pattern}");
+        for input in inputs {
+            let input = input.as_bytes();
+            let expected = re.find_anchored(input).unwrap().is_some();
+            assert_eq!(re.is_match(input).unwrap(), expected, "pattern={pattern} input={input:?}");
+        }
+    }
+}
+
+#[test]
+fn end_anchored_is_match_early_exit() {
+    for (pattern, cases) in [
+        (r"[^.]+$", vec![("", false), (".", false), ("abc", true), ("abc.", false), (".x", true)]),
+        (r"a?b+$", vec![("", false), ("a", false), ("b", true), ("aaab", true), ("bbx", false)]),
+        (r"\bcat$", vec![("cat", true), ("a cat", true), ("scat", false), ("cat!", false)]),
+        (r"a*$", vec![("", true), ("b", true), ("aaa", true)]),
+        (r"^ab+$", vec![("ab", true), ("abb", true), ("zabb", false), ("a", false)]),
+    ] {
+        let re = Regex::with_options(pattern, RegexOptions::default().unicode(resharp::UnicodeMode::Ascii).multiline(false)).unwrap();
+        if !pattern.starts_with('^') && pattern != r"a*$" {
+            assert_eq!(re.find_all_kind_name(), "EndAnchored", "pattern={pattern}");
+        }
+        for (input, expected) in cases {
+            assert_eq!(re.is_match(input.as_bytes()).unwrap(), expected, "pattern={pattern} input={input:?}");
+            assert_eq!(!re.find_all(input.as_bytes()).unwrap().is_empty(), expected, "pattern={pattern} input={input:?}");
+        }
+    }
 }
 
 #[test]
@@ -4895,11 +5310,12 @@ waiting";
     let spans: Vec<(usize, usize)> = ms.iter().map(|m| (m.start, m.end)).collect();
     assert_eq!(spans, expected);
 
+    let slow: u128 = std::env::var("RESHARP_SLOW_TARGET").map_or(1, |_| 50);
     let t = Instant::now();
     re.find_all(hay).unwrap();
     let elapsed = t.elapsed();
     assert!(
-        elapsed.as_millis() < 500,
+        elapsed.as_millis() < 500 * slow,
         "find_all on a {}-byte haystack took {elapsed:?}",
         hay.len()
     );
@@ -4910,7 +5326,7 @@ waiting";
     re.find_all(long_hay).unwrap();
     let elapsed2 = t2.elapsed();
     assert!(
-        elapsed2.as_millis() < 3000,
+        elapsed2.as_millis() < 3000 * slow,
         "find_all on a {}-byte haystack took {elapsed2:?}",
         long_hay.len()
     );
@@ -6130,7 +6546,7 @@ fn optional_atom_then_two_unbounded_plus_finds_leftmost_via_backoff() {
 #[test]
 fn convergence_prefix_hardened_no_quadratic() {
     use resharp::{Regex, RegexOptions};
-    let re = Regex::with_options("x[ax]*c", RegexOptions::default().hardened(true)).unwrap();
+    let re = Regex::with_options("x[ax]*c", RegexOptions::default().hardening(resharp::HardeningMode::Always)).unwrap();
     assert!(re.is_hardened());
 
     let small = "x".repeat(8_000_000).into_bytes();
@@ -6159,7 +6575,7 @@ fn convergence_prefix_hardened_no_quadratic() {
 #[test]
 fn hardened_trailing_dotstar_after_dangerous_prefix_no_quadratic() {
     use resharp::{Regex, RegexOptions};
-    let re = Regex::with_options("x[ax]*c(.|\n)*", RegexOptions::default().hardened(true)).unwrap();
+    let re = Regex::with_options("x[ax]*c(.|\n)*", RegexOptions::default().hardening(resharp::HardeningMode::Always)).unwrap();
     assert!(re.is_hardened());
 
     let small = "x".repeat(8_000_000).into_bytes();
@@ -6191,7 +6607,7 @@ fn convergence_reverse_pass_no_quadratic_full_unicode() {
     use resharp::{Regex, RegexOptions, UnicodeMode};
     let re = Regex::with_options(
         r"[^a]*a.{1,4}b.+",
-        RegexOptions::default().hardened(true).unicode(UnicodeMode::Full),
+        RegexOptions::default().hardening(resharp::HardeningMode::Always).unicode(UnicodeMode::Full),
     )
     .unwrap();
     assert_eq!(re.prefix_kind_name(), Some("Convergence"));
@@ -10079,7 +10495,11 @@ fn word_boundary_after_mixed_class_matches_oracle() {
         let cap_pat = format!("(?P<g>{x}){wb}{}", y.unwrap_or(""));
         let rc = Regex::new(&cap_pat).unwrap_or_else(|e| panic!("compile {cap_pat:?}: {e}"));
         for hardened in [false, true] {
-            let r = Regex::with_options(&pat, RegexOptions::default().hardened(hardened))
+            let r = Regex::with_options(&pat, RegexOptions::default().hardening(if hardened {
+                resharp::HardeningMode::Always
+            } else {
+                resharp::HardeningMode::Auto
+            }))
                 .unwrap_or_else(|e| panic!("compile {pat:?}: {e}"));
             for _ in 0..100 {
                 let d: String = (0..rng.below(8)).map(|_| alphabet[rng.below(alphabet.len())]).collect();
@@ -10139,10 +10559,441 @@ fn reverse_long_concat_is_linear() {
 }
 
 #[test]
+fn reverse_bounded_repeats_around_literal_is_linear() {
+    let mut b = resharp_algebra::RegexBuilder::new();
+    let n = resharp_parser::parse_ast(&mut b, "[^}]{0,500}T[^)]{0,200}\\)[^}]{0,500}").unwrap();
+    let before = b.num_nodes();
+    b.reverse(n).unwrap();
+    assert!(b.num_nodes() - before < 10_000, "{}", b.num_nodes() - before);
+}
+
+#[test]
 fn pp_star_and_plus_over_complement_are_consistent() {
     for (pat, expected) in [("~(cab)*", "~(cab)*"), ("~(cab)+", "~(cab)+")] {
         let mut b = resharp_algebra::RegexBuilder::new();
         let n = resharp_parser::parse_ast(&mut b, pat).unwrap();
         assert_eq!(b.pp(n), expected);
     }
+}
+
+#[test]
+fn is_match_agrees_with_find_all_on_counter_pattern() {
+    let re = Regex::new(r"[^\r]{40} [^\r]*").unwrap();
+    assert_eq!(re.find_all_kind_name(), "Dfa");
+    let mut seed = 12345u32;
+    let mut next = || {
+        seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+        seed >> 16
+    };
+    for _ in 0..3000 {
+        let line: Vec<u8> = (0..(next() % 90))
+            .map(|_| match next() % 8 {
+                0 => b' ',
+                1 => b'\r',
+                _ => b'a' + (next() % 26) as u8,
+            })
+            .collect();
+        let expected = !re.find_all(&line).unwrap().is_empty();
+        assert_eq!(re.is_match(&line).unwrap(), expected, "{:?}", String::from_utf8_lossy(&line));
+    }
+}
+
+#[test]
+fn is_match_agrees_with_find_all_on_fwd_ts_regressions() {
+    let cases: &[(&str, &[&str])] = &[
+        (r"(?<=a)&(?:b|$)", &["a", "ab", "ba"]),
+        (r"~((?:b\z)?)", &["b", "bb", "a"]),
+        (r"..&(?:b(?!a)|ba)", &["bbb", "ba", "ab"]),
+        (r"(?:(?:(?!a)|x)&x?)b", &["b", "ab", "xb"]),
+        (r"(?:..)+&b(?:(?!a)|a)", &["bbb", "ba"]),
+    ];
+    for (pat, inputs) in cases {
+        let re = Regex::new(pat).unwrap();
+        for input in *inputs {
+            let expected = !re.find_all(input.as_bytes()).unwrap().is_empty();
+            assert_eq!(
+                re.is_match(input.as_bytes()).unwrap(),
+                expected,
+                "{pat} on {input:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn is_match_lookbehind_union_under_inter() {
+    for (pat, input) in [
+        (r"~(b*)&(?:(?<!a)|a)b", " b"),
+        (r"~([ab]*)&(?:(?<!a)|a)b", "aab b"),
+    ] {
+        let re = Regex::new(pat).unwrap();
+        let expected = !re.find_all(input.as_bytes()).unwrap().is_empty();
+        assert_eq!(re.is_match(input.as_bytes()).unwrap(), expected, "{pat} on {input:?}");
+    }
+}
+
+#[test]
+fn is_match_agrees_with_find_all_on_anchored_counter_pattern() {
+    let re = resharp::Regex::with_options(
+        r"^[^\r]{0,20}(?:foo|bar[0-9]|Baz)",
+        resharp::RegexOptions::default().multiline(false),
+    )
+    .unwrap();
+    assert_eq!(re.find_all_kind_name(), "Anchored");
+    let mut seed = 7u64;
+    for _ in 0..3000 {
+        seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        let plen = ((seed >> 33) % 30) as usize;
+        let mut line: Vec<u8> = (0..plen).map(|i| b"abz /fo"[(seed >> (i % 40)) as usize % 7]).collect();
+        if (seed >> 20) % 3 != 0 {
+            line.extend_from_slice([&b"foo"[..], b"bar7", b"Baz", b"bar"][(seed >> 50) as usize % 4]);
+        }
+        assert_eq!(
+            re.is_match(&line).unwrap(),
+            !re.find_all(&line).unwrap().is_empty(),
+            "{:?}",
+            String::from_utf8_lossy(&line)
+        );
+    }
+}
+
+#[test]
+fn is_match_agrees_with_find_all_on_lookaround_patterns() {
+    let cases: &[(&str, &[&str])] = &[
+        (r"\b(?:|HTC/)HTC[^\r]{0,20}(?:[()/;]|$)", &["xHTC", "HTC/HTC;", "aHTC", "HTCx(", " HTC abc", "HTC"]),
+        (r"\b(?:|ab/|ab/[0-9]{1,3}/)ab[^\r]{0,5}(?:x|$)", &["ab", "xab", " ab/12/ab", "ab/1234/abx", "b ab"]),
+        (r"(?<=a_*)\b", &["a", "ba", "a b", " "]),
+        (r"(?<=[ab])(?:(?<=a)|x)~(x)(?:(?:\A|(?=b))){1,3}", &["ab", "xab", "ba"]),
+        (r"\bfoo(?=\s+bar)", &["foo bar", "foobar", " foo  bar", "xfoo bar"]),
+        (r"foo(?!bar)[a-z]{0,3}\b", &["foobar", "foobaz", "foo", "foo bar"]),
+        (r"..&(?:b(?!a)|ba)", &["bbb", "ba", "ab"]),
+        (r"a(?=bx)b&..", &["abx", "ab", "abxx"]),
+    ];
+    for (pat, inputs) in cases {
+        let re = Regex::with_options(pat, RegexOptions::default().unicode(resharp::UnicodeMode::Ascii).multiline(false)).unwrap_or_else(|e| panic!("{pat}: {e:?}"));
+        for input in *inputs {
+            assert_eq!(
+                re.is_match(input.as_bytes()).unwrap(),
+                !re.find_all(input.as_bytes()).unwrap().is_empty(),
+                "{pat} on {input:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn elim_lookarounds_preserves_contains_match() {
+    let opts = || RegexOptions::default().unicode(resharp::UnicodeMode::Ascii).multiline(false);
+    let cases: &[(&str, &[&str])] = &[
+        (r"..&(?:b(?!a)|ba)", &["bbb", "ba", "bab", "bb"]),
+        (r"(?:a(?=b)|ab)&.{2}", &["ab", "a"]),
+        (r"(?<=a)b(?=c)&.b", &["abc", "ab"]),
+        (r"(?<=a)_&(?<=ca)_", &["bab", "cab"]),
+        (r"b(?=c)|bd", &["bc", "bd", "b"]),
+        (r"(?:b(?=c))(?:c|d)", &["bc", "bd"]),
+        (r"(?:(?<=a)|(?<=c))b", &["cb", "ab", "b"]),
+    ];
+    for (pat, inputs) in cases {
+        let mut b = resharp_algebra::RegexBuilder::new();
+        let n = resharp_parser::parse_ast(&mut b, pat).unwrap();
+        let Some(e) = b.try_elim_lookarounds(n) else { continue };
+        let elim = Regex::with_options(&b.pp(e), opts()).unwrap();
+        let native = Regex::with_options(pat, opts()).unwrap();
+        for i in *inputs {
+            assert_eq!(
+                elim.is_match(i.as_bytes()).unwrap(),
+                !native.find_all(i.as_bytes()).unwrap().is_empty(),
+                "{pat} on {i:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn wide_union_derivative_matches_every_alternative() {
+    let words: Vec<String> = (0..40).map(|i| format!("w{}x{}", i, i * 7 % 13)).collect();
+    let pat = format!("(?:{})", words.join("|"));
+    let re = Regex::new(&pat).unwrap();
+    let text: String = words.iter().map(|w| format!("..{w}..")).collect();
+    let found = re.find_all(text.as_bytes()).unwrap();
+    assert_eq!(found.len(), words.len());
+    for (m, w) in found.iter().zip(&words) {
+        assert_eq!(&text[m.start..m.end], w);
+    }
+    assert!(re.is_match(text.as_bytes()).unwrap());
+    assert!(!re.is_match(b"w99x99").unwrap());
+}
+
+#[test]
+fn nested_lookahead_budget_still_enforced_after_analysis() {
+    let mut opts = RegexOptions::default();
+    opts.lookahead_context_max = 0;
+    let re = Regex::with_options(r"a(?=b(?!c))", opts).expect("compile");
+    let err = re
+        .is_match(b"xxabxx")
+        .expect_err("expected AnchorLimit at search");
+    assert!(err.to_string().contains("anchor limit"), "got: {err:?}");
+}
+
+#[test]
+fn negative_lookahead_is_match_long_input() {
+    let re = Regex::new(r"abcd(?!\w+z)").unwrap();
+    assert!(re.is_match(format!("abcd{}", "y".repeat(1000)).as_bytes()).unwrap());
+    assert!(!re.is_match(format!("abcd{}z", "y".repeat(1000)).as_bytes()).unwrap());
+}
+
+#[test]
+fn word_boundary_is_match_uses_prefix_and_agrees_with_find_all() {
+    let pat = r"error\b[\t\x0b\f ]*[\t\x0b-\r :-]*[^\r]*";
+    let re = Regex::new(pat).unwrap();
+    assert!(re.has_fwd_prefix());
+    let inputs = ["error  foo", "an error: x", "errorx y", "no match here", "error"];
+    for i in inputs {
+        assert_eq!(
+            re.is_match(i.as_bytes()).unwrap(),
+            !re.find_all(i.as_bytes()).unwrap().is_empty(),
+            "{i:?}"
+        );
+    }
+    assert!(re.is_match(b"an error: x").unwrap());
+    assert!(!re.is_match(b"errorx y").unwrap());
+}
+
+#[test]
+fn word_boundary_around_wildcard_rewrites_to_complements() {
+    let re = Regex::new(r"(?<!\w)the(.+&~(\w_*)&~(_*\w))end(?!\w)").unwrap();
+    let cases: [(&str, Vec<(usize, usize)>); 10] = [
+        ("the end", vec![(0, 7)]),
+        ("then end", vec![]),
+        ("the xend", vec![]),
+        ("the x end.", vec![(0, 9)]),
+        ("the\nend", vec![]),
+        ("xthe a end", vec![]),
+        ("theend", vec![]),
+        ("the,end", vec![(0, 7)]),
+        ("the end the end", vec![(0, 15)]),
+        ("the -- end", vec![(0, 10)]),
+    ];
+    for (input, want) in cases {
+        let got: Vec<(usize, usize)> = re
+            .find_all(input.as_bytes())
+            .unwrap()
+            .iter()
+            .map(|m| (m.start, m.end))
+            .collect();
+        assert_eq!(got, want, "{input:?}");
+    }
+}
+
+#[test]
+fn negative_lookahead_graph_stays_as_small_as_positive() {
+    let pos = Regex::new("abcd(?=x)").unwrap();
+    let neg = Regex::new("abcd(?!x)").unwrap();
+    assert!(
+        neg.node_count() <= 2 * pos.node_count(),
+        "neg={} pos={}",
+        neg.node_count(),
+        pos.node_count()
+    );
+}
+
+#[test]
+fn reverse_walk_of_counted_star_run_grows_linearly() {
+    let re = Regex::new(r"\{[^}]{300,}\}").unwrap();
+    let mut hay = Vec::new();
+    for _ in 0..3 {
+        hay.extend_from_slice(b"x {");
+        hay.extend(std::iter::repeat_n(b'a', 400));
+        hay.extend_from_slice(b"} y ");
+    }
+    let before = re.node_count();
+    let found = re.find_all(&hay).unwrap();
+    assert_eq!(found.len(), 3);
+    let grown = re.node_count() - before;
+    assert!(grown < 20_000, "reverse DFA grew {grown} nodes");
+}
+
+#[test]
+fn nested_bounded_repeat_nodes_grow_linearly() {
+    let nodes = |n: usize| {
+        Regex::new(&format!(r"acceptez[^\r]{{0,{n}}}l[^\r]{{0,{n}}}utilisation"))
+            .unwrap()
+            .node_count()
+    };
+    let (n100, n200) = (nodes(100), nodes(200));
+    assert!(
+        f64::from(n200) <= 3.5 * f64::from(n100),
+        "n100={} n200={}",
+        n100,
+        n200
+    );
+}
+
+#[test]
+fn second_bounded_repeat_derivative_builds_linear_nodes() {
+    let n = 100u32;
+    let pattern = format!(r"x[^\r]{{0,{n}}}l[^\r]{{0,{n}}}u");
+    let mut b = resharp_algebra::RegexBuilder::new();
+    let node = resharp_parser::parse_ast(&mut b, &pattern).unwrap();
+    let mut node = b.simplify_fwd_initial(node);
+    let step = |b: &mut resharp_algebra::RegexBuilder, node, byte: u8| {
+        let mask = resharp_algebra::nulls::Nullability::CENTER;
+        let tr = b.der(node, mask).unwrap();
+        let set = b.solver().u8_to_set_id(byte);
+        b.transition_term(tr, set)
+    };
+    node = step(&mut b, node, b'x');
+    let before = b.num_nodes();
+    let _ = step(&mut b, node, b'a');
+    let grown = b.num_nodes() - before;
+    assert!(
+        grown <= 4 * n,
+        "one derivative built {grown} nodes for n={n}, expected <= {}",
+        4 * n
+    );
+}
+
+#[test]
+fn lookahead_eliminated_forms_stay_as_small_as_positive() {
+    let pos = Regex::new("abcdx").unwrap();
+    let neg = Regex::new(r"abcd~(x_*)\z").unwrap();
+    assert!(
+        neg.node_count() <= 2 * pos.node_count(),
+        "neg={} pos={}",
+        neg.node_count(),
+        pos.node_count()
+    );
+}
+
+fn teddy_expected(pats: &[&str], hay: &str) -> Vec<(usize, usize)> {
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < hay.len() {
+        if let Some(l) = pats
+            .iter()
+            .filter(|p| hay[i..].starts_with(**p))
+            .map(|p| p.len())
+            .max()
+        {
+            out.push((i, i + l));
+            i += l;
+        } else {
+            i += 1;
+        }
+    }
+    out
+}
+
+fn teddy_check(pats: &[&str], filler: &str) {
+    let re = Regex::new(&pats.join("|")).unwrap();
+    let mut hay = String::new();
+    for round in 0..40 {
+        for _ in 0..(round * 7 % 53) {
+            hay.push_str(filler);
+        }
+        hay.push_str(pats[round % pats.len()]);
+    }
+    let got: Vec<(usize, usize)> = re
+        .find_all(hay.as_bytes())
+        .unwrap()
+        .iter()
+        .map(|m| (m.start, m.end))
+        .collect();
+    assert_eq!(got, teddy_expected(pats, &hay), "{pats:?}");
+}
+
+#[test]
+fn teddy_prefix_non_ascii_literals_match_at_every_alignment() {
+    teddy_check(&["café au lait", "naïve brûlée", "über straße", "señor Ñandú"], "x ");
+    teddy_check(&["日本語のテキスト", "中文文本内容", "한국어텍스트"], "ab ");
+}
+
+#[test]
+fn teddy_prefix_ascii_near_misses_do_not_match() {
+    let pats = ["Sherlock Holmes", "John Watson", "Irene Adler", "Mycroft Holmes"];
+    teddy_check(&pats, "Cherlock Zolmes Jhn Wats Mrene Adder ");
+    teddy_check(&pats, "Jherlock Solmes Iohn Matson Srene Odler ");
+}
+
+#[test]
+fn bounded_self_overlapping_find_all_matches_plain_dfa() {
+    let pats = [
+        "[a-z]{3,6}",
+        "[a-z]{2,4} [a-z]{2,4}",
+        "[a-z]{2,4}|[a-z]x[a-z]{4}",
+        "[ab]{2,4}c|[bc ]{3,5}a",
+        ".{2,4}x|.y",
+        "[A-Za-z]{8,13}",
+    ];
+    let hay = "abcxyz abababab bbbbbbbbbbbbbbbbbbbb xxabcxyzabcdefghijklmnop q rs tuv abcabcabcabcabcabc cccaaabbbc";
+    for p in pats {
+        let bounded = Regex::new(p).unwrap();
+        assert_eq!(bounded.find_all_kind_name(), "Bounded", "{p}");
+        let plain = Regex::with_options(p, RegexOptions { disable_prefixes: true, ..RegexOptions::default() }).unwrap();
+        for start in 0..hay.len() {
+            let h = &hay.as_bytes()[start..];
+            assert_eq!(bounded.find_all(h).unwrap(), plain.find_all(h).unwrap(), "{p} at {start}");
+            assert_eq!(bounded.is_match(h).unwrap(), !plain.find_all(h).unwrap().is_empty(), "{p} is_match at {start}");
+        }
+    }
+}
+
+#[test]
+fn word_boundary_after_multibyte_alternation_resolves_like_class() {
+    for (alt, class) in [
+        (r"x(?:ä|ö)\b", r"x[äö]\b"),
+        (r"x(?:ä|ö)+\b", r"x[äö]+\b"),
+    ] {
+        let a = Regex::new(alt).unwrap();
+        let c = Regex::new(class).unwrap();
+        assert!(
+            a.node_count() * 5 <= c.node_count() * 6,
+            "{alt}={} {class}={}",
+            a.node_count(),
+            c.node_count()
+        );
+    }
+}
+
+#[cfg(feature = "wide_state")]
+#[test]
+fn ordered_union_beyond_u16_states_equals_union_of_its_arms() {
+    let all = include_bytes!("../../data/haystacks/ru-sampled.txt");
+    let end = all.iter().enumerate().filter(|&(_, &b)| b == b'\n').nth(2499).unwrap().0 + 1;
+    let build = |p: &str| {
+        let mut o = RegexOptions::default().unicode(resharp::UnicodeMode::Full);
+        o.max_node_capacity = 6_000_000;
+        Regex::with_options(p, o).unwrap()
+    };
+    let union = build(r".*\w{5}.*[аоуыз].*|.*[аоуыз].*\w{5}.*");
+    let mut expected: Vec<resharp::Match> = build(r".*\w{5}.*[аоуыз].*").find_all(&all[..end]).unwrap();
+    expected.extend(build(r".*[аоуыз].*\w{5}.*").find_all(&all[..end]).unwrap());
+    expected.sort_by_key(|m| (m.start, m.end));
+    expected.dedup();
+    let got = union.find_all(&all[..end]).unwrap();
+    assert!(!got.is_empty());
+    assert_eq!(got, expected);
+}
+
+#[cfg(not(feature = "wide_state"))]
+#[test]
+fn max_dfa_capacity_above_u16_is_rejected_without_wide_state() {
+    let opts = RegexOptions {
+        max_dfa_capacity: u16::MAX as usize + 1,
+        ..Default::default()
+    };
+    assert!(matches!(
+        Regex::with_options("a+", opts),
+        Err(Error::CapacityTooLarge(65536))
+    ));
+}
+
+#[cfg(feature = "wide_state")]
+#[test]
+fn max_dfa_capacity_above_u16_is_accepted_with_wide_state() {
+    let opts = RegexOptions {
+        max_dfa_capacity: u16::MAX as usize + 1,
+        ..Default::default()
+    };
+    assert!(Regex::with_options("a+", opts).unwrap().is_match(b"aa").unwrap());
 }

@@ -11,6 +11,14 @@ impl Debug for Nullability {
         f.write_str(format!("{num}").as_str())
     }
 }
+impl std::ops::BitOr for Nullability {
+    type Output = Nullability;
+    #[inline]
+    fn bitor(self, other: Nullability) -> Nullability {
+        Nullability(self.0 | other.0)
+    }
+}
+
 impl Nullability {
     pub const NEVER: Nullability = Nullability(0b000);
     pub const CENTER: Nullability = Nullability(0b001);

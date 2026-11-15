@@ -60,17 +60,18 @@ Lazy quantifiers (`*?`, `+?`, ...) are parse errors: rewrite with complement whe
 All options and their defaults:
 
 ```rust
-use resharp::{RegexOptions, UnicodeMode};
+use resharp::{HardeningMode, RegexOptions, UnicodeMode};
 
 let defaults = RegexOptions {
     max_dfa_capacity: u16::MAX as usize, // max cached DFA states
+    max_node_capacity: 1_000_000,        // max AST nodes
     lookahead_context_max: 800,          // max lookahead context distance
     unicode: UnicodeMode::Default,       // Ascii | Default | Full | Javascript
     case_insensitive: false,
     dot_matches_new_line: false,         // `.` matches `\n`
     multiline: true,                     // `^`/`$` match start/end of line
     ignore_whitespace: false,            // verbose mode
-    hardened: false,                     // true: linear find_all, slower
+    hardening: HardeningMode::Auto,      // Off | Auto | Always (Always: forces O(n), slower on average)
     unbounded_size: false,               // lift size caps
     ..Default::default()
 };
@@ -79,7 +80,7 @@ let defaults = RegexOptions {
 Override with the builder methods:
 
 ```rust
-let opts = RegexOptions::default().unicode(UnicodeMode::Ascii).hardened(true);
+let opts = RegexOptions::default().unicode(UnicodeMode::Ascii).hardening(HardeningMode::Always);
 let re = resharp::Regex::with_options(r"pattern", opts).unwrap();
 ```
 

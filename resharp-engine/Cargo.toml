@@ -22,6 +22,7 @@ default = []
 stream = []
 debug = ["resharp-algebra/debug"]
 diag = []
+wide_state = []
 precompile-tests = []
 # disabled till certain it wont cause blowup
 convergence_prefix = []

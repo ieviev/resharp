@@ -268,19 +268,39 @@ impl FwdLiteralSearch {
 
     pub fn find_fwd(&self, haystack: &[u8]) -> Option<usize> {
         let mut sink: Vec<(usize, usize)> = Vec::new();
-        unsafe { self.scan_avx2::<false>(haystack, &mut sink) }
+        unsafe {
+            match self.scan_mode() {
+                0 => self.scan_avx2::<false, 0>(haystack, &mut sink),
+                1 => self.scan_avx2::<false, 1>(haystack, &mut sink),
+                _ => self.scan_avx2::<false, 2>(haystack, &mut sink),
+            }
+        }
+    }
+
+    fn scan_mode(&self) -> u8 {
+        if self.needle.len() == 1 {
+            0
+        } else if BYTE_FREQ[self.rare_byte as usize] >= 1000 {
+            2
+        } else {
+            1
+        }
     }
 
     pub fn find_all_fixed(&self, haystack: &[u8], matches: &mut Vec<(usize, usize)>) {
         unsafe {
-            self.scan_avx2::<true>(haystack, matches);
+            match self.scan_mode() {
+                0 => self.scan_avx2::<true, 0>(haystack, matches),
+                1 => self.scan_avx2::<true, 1>(haystack, matches),
+                _ => self.scan_avx2::<true, 2>(haystack, matches),
+            };
         }
     }
 
     // COLLECT_ALL=false: stop at first match, return its start.
     // COLLECT_ALL=true:  push every non-overlapping match into `matches`, return None.
     #[target_feature(enable = "avx2")]
-    unsafe fn scan_avx2<const COLLECT_ALL: bool>(
+    unsafe fn scan_avx2<const COLLECT_ALL: bool, const MODE: u8>(
         &self,
         haystack: &[u8],
         matches: &mut Vec<(usize, usize)>,
@@ -298,14 +318,13 @@ impl FwdLiteralSearch {
         let vrare = _mm256_set1_epi8(rare_byte as i8);
         let vconf = _mm256_set1_epi8(confirm_byte as i8);
         let confirm_off = confirm_idx as isize - rare_idx as isize;
-        let dual = nlen > 1;
         let mut last_end: usize = 0;
 
         let mut handle = |this: &Self, start: usize| -> Option<usize> {
             if COLLECT_ALL && start < last_end {
                 return None;
             }
-            if !this.verify(haystack, start) {
+            if MODE != 0 && !this.verify(haystack, start) {
                 return None;
             }
             if COLLECT_ALL {
@@ -319,13 +338,75 @@ impl FwdLiteralSearch {
         };
 
         let mut pos = rare_idx;
-        while pos + 32 <= end + 1 {
-            let chunk = _mm256_loadu_si256(ptr.add(pos) as *const __m256i);
-            let mut mask = _mm256_movemask_epi8(_mm256_cmpeq_epi8(chunk, vrare)) as u32;
-            if dual && mask != 0 {
+        if MODE == 2 {
+            let pair = |p: usize| {
+                _mm256_and_si256(
+                    _mm256_cmpeq_epi8(_mm256_loadu_si256(ptr.add(p) as *const __m256i), vrare),
+                    _mm256_cmpeq_epi8(
+                        _mm256_loadu_si256(ptr.offset(p as isize + confirm_off) as *const __m256i),
+                        vconf,
+                    ),
+                )
+            };
+            while pos + 128 <= end + 1 {
+                let m0 = pair(pos);
+                let m1 = pair(pos + 32);
+                let m2 = pair(pos + 64);
+                let m3 = pair(pos + 96);
+                let any = _mm256_or_si256(_mm256_or_si256(m0, m1), _mm256_or_si256(m2, m3));
+                if _mm256_testz_si256(any, any) == 0 {
+                    for (k, m) in [m0, m1, m2, m3].into_iter().enumerate() {
+                        let mut mask = _mm256_movemask_epi8(m) as u32;
+                        while mask != 0 {
+                            let bit = mask.trailing_zeros() as usize;
+                            if let Some(s) = handle(self, pos + 32 * k + bit - rare_idx) {
+                                return Some(s);
+                            }
+                            mask &= mask - 1;
+                        }
+                    }
+                }
+                pos += 128;
+            }
+        } else if MODE == 0 {
+            while pos + 128 <= end + 1 {
+                let m0 = _mm256_cmpeq_epi8(_mm256_loadu_si256(ptr.add(pos) as *const __m256i), vrare);
+                let m1 = _mm256_cmpeq_epi8(_mm256_loadu_si256(ptr.add(pos + 32) as *const __m256i), vrare);
+                let m2 = _mm256_cmpeq_epi8(_mm256_loadu_si256(ptr.add(pos + 64) as *const __m256i), vrare);
+                let m3 = _mm256_cmpeq_epi8(_mm256_loadu_si256(ptr.add(pos + 96) as *const __m256i), vrare);
+                let any = _mm256_or_si256(_mm256_or_si256(m0, m1), _mm256_or_si256(m2, m3));
+                if _mm256_testz_si256(any, any) == 0 {
+                    for (k, m) in [m0, m1, m2, m3].into_iter().enumerate() {
+                        let mut mask = _mm256_movemask_epi8(m) as u32;
+                        while mask != 0 {
+                            let bit = mask.trailing_zeros() as usize;
+                            if let Some(s) = handle(self, pos + 32 * k + bit - rare_idx) {
+                                return Some(s);
+                            }
+                            mask &= mask - 1;
+                        }
+                    }
+                }
+                pos += 128;
+            }
+        }
+        'outer: while pos + 32 <= end + 1 {
+            let mut mask;
+            loop {
+                let chunk = _mm256_loadu_si256(ptr.add(pos) as *const __m256i);
                 let cchunk =
                     _mm256_loadu_si256(ptr.offset(pos as isize + confirm_off) as *const __m256i);
-                mask &= _mm256_movemask_epi8(_mm256_cmpeq_epi8(cchunk, vconf)) as u32;
+                mask = _mm256_movemask_epi8(_mm256_and_si256(
+                    _mm256_cmpeq_epi8(chunk, vrare),
+                    _mm256_cmpeq_epi8(cchunk, vconf),
+                )) as u32;
+                if mask != 0 {
+                    break;
+                }
+                pos += 32;
+                if pos + 32 > end + 1 {
+                    break 'outer;
+                }
             }
             while mask != 0 {
                 let bit = mask.trailing_zeros() as usize;
@@ -337,7 +418,59 @@ impl FwdLiteralSearch {
             }
             pos += 32;
         }
-        // scalar tail
+        let vrare128 = _mm_set1_epi8(rare_byte as i8);
+        let vconf128 = _mm_set1_epi8(confirm_byte as i8);
+        let sse_mask = |p: usize| -> u32 {
+            let c = _mm_loadu_si128(ptr.add(p) as *const __m128i);
+            let mut m = _mm_movemask_epi8(_mm_cmpeq_epi8(c, vrare128)) as u32;
+            if MODE != 0 && m != 0 {
+                let cc = _mm_loadu_si128(ptr.offset(p as isize + confirm_off) as *const __m128i);
+                m &= _mm_movemask_epi8(_mm_cmpeq_epi8(cc, vconf128)) as u32;
+            }
+            m
+        };
+        if pos <= end && end + 1 - rare_idx >= 32 {
+            let p = end + 1 - 32;
+            let chunk = _mm256_loadu_si256(ptr.add(p) as *const __m256i);
+            let mut mask = _mm256_movemask_epi8(_mm256_cmpeq_epi8(chunk, vrare)) as u32;
+            if MODE != 0 && mask != 0 {
+                let cchunk =
+                    _mm256_loadu_si256(ptr.offset(p as isize + confirm_off) as *const __m256i);
+                mask &= _mm256_movemask_epi8(_mm256_cmpeq_epi8(cchunk, vconf)) as u32;
+            }
+            mask &= u32::MAX << (pos - p);
+            while mask != 0 {
+                let bit = mask.trailing_zeros() as usize;
+                if let Some(s) = handle(self, p + bit - rare_idx) {
+                    return Some(s);
+                }
+                mask &= mask - 1;
+            }
+            return None;
+        }
+        while pos + 16 <= end + 1 {
+            let mut mask = sse_mask(pos);
+            while mask != 0 {
+                let bit = mask.trailing_zeros() as usize;
+                if let Some(s) = handle(self, pos + bit - rare_idx) {
+                    return Some(s);
+                }
+                mask &= mask - 1;
+            }
+            pos += 16;
+        }
+        if pos <= end && end + 1 - rare_idx >= 16 {
+            let p = end + 1 - 16;
+            let mut mask = sse_mask(p) & (u32::MAX << (pos - p));
+            while mask != 0 {
+                let bit = mask.trailing_zeros() as usize;
+                if let Some(s) = handle(self, p + bit - rare_idx) {
+                    return Some(s);
+                }
+                mask &= mask - 1;
+            }
+            return None;
+        }
         while pos <= end {
             if *ptr.add(pos) == rare_byte {
                 let start = pos - rare_idx;
@@ -485,6 +618,36 @@ impl RevLiteralInner {
                 mask &= !(1u32 << bit);
             }
             pos -= 32;
+        }
+        let need = rare_idx.max(confirm_idx) + 32;
+        let mut padded = [0u8; 96];
+        let tail_ptr = if haystack.len() >= need {
+            Some(ptr)
+        } else if haystack.len() <= 64 {
+            padded[..haystack.len()].copy_from_slice(haystack);
+            Some(padded.as_ptr())
+        } else {
+            None
+        };
+        if let Some(tp) = tail_ptr {
+            let span = pos - min_rare_pos;
+            let chunk = _mm256_loadu_si256(tp.add(min_rare_pos) as *const __m256i);
+            let mut mask = _mm256_movemask_epi8(_mm256_cmpeq_epi8(chunk, vrare)) as u32;
+            if dual && mask != 0 {
+                let cchunk = _mm256_loadu_si256(tp.add(confirm_idx) as *const __m256i);
+                mask &= _mm256_movemask_epi8(_mm256_cmpeq_epi8(cchunk, vconf)) as u32;
+            }
+            if span < 31 {
+                mask &= (1u32 << (span + 1)) - 1;
+            }
+            while mask != 0 {
+                let bit = 31 - (mask.leading_zeros() as usize);
+                if self.verify(haystack, bit) {
+                    return Some(bit + nlen - 1);
+                }
+                mask &= !(1u32 << bit);
+            }
+            return None;
         }
         loop {
             if *ptr.add(pos) == rare_byte {
@@ -828,6 +991,7 @@ pub struct FwdPrefixSearch {
     pub(crate) masks: TeddyMasks,
     pub(crate) sets: Vec<TSet>,
     pub(crate) verify_order: [u8; 16],
+    pub(crate) ascii: bool,
 }
 
 #[repr(align(32))]
@@ -866,41 +1030,26 @@ impl TeddyMasks {
 
 #[cfg(target_arch = "x86_64")]
 #[inline(always)]
-unsafe fn teddy_filter_fwd<const N: usize>(
+unsafe fn teddy_filter_fwd<const N: usize, const ASCII: bool>(
     ptr: *const u8,
     pos: usize,
     offsets: &[usize; 3],
     masks: &TeddyMasks,
     nib: __m256i,
 ) -> u32 {
-    let vlo0 = _mm256_load_si256(masks.lo[0].as_ptr() as *const __m256i);
-    let vhi0 = _mm256_load_si256(masks.hi[0].as_ptr() as *const __m256i);
-    let c0 = _mm256_loadu_si256(ptr.add(pos + offsets[0]) as *const __m256i);
-    let mut r = _mm256_and_si256(
-        _mm256_shuffle_epi8(vlo0, _mm256_and_si256(c0, nib)),
-        _mm256_shuffle_epi8(vhi0, _mm256_and_si256(_mm256_srli_epi16(c0, 4), nib)),
-    );
-    if N >= 2 {
-        let vlo1 = _mm256_load_si256(masks.lo[1].as_ptr() as *const __m256i);
-        let vhi1 = _mm256_load_si256(masks.hi[1].as_ptr() as *const __m256i);
-        let c1 = _mm256_loadu_si256(ptr.add(pos + offsets[1]) as *const __m256i);
-        let r1 = _mm256_and_si256(
-            _mm256_shuffle_epi8(vlo1, _mm256_and_si256(c1, nib)),
-            _mm256_shuffle_epi8(vhi1, _mm256_and_si256(_mm256_srli_epi16(c1, 4), nib)),
+    let mut acc = _mm256_set1_epi8(-1);
+    for i in 0..N {
+        let vlo = _mm256_load_si256(masks.lo[i].as_ptr() as *const __m256i);
+        let vhi = _mm256_load_si256(masks.hi[i].as_ptr() as *const __m256i);
+        let c = _mm256_loadu_si256(ptr.add(pos + offsets[i]) as *const __m256i);
+        let lo_idx = if ASCII { c } else { _mm256_and_si256(c, nib) };
+        let t = _mm256_and_si256(
+            _mm256_shuffle_epi8(vlo, lo_idx),
+            _mm256_shuffle_epi8(vhi, _mm256_and_si256(_mm256_srli_epi16(c, 4), nib)),
         );
-        r = _mm256_and_si256(r, r1);
+        acc = _mm256_and_si256(acc, t);
     }
-    if N >= 3 {
-        let vlo2 = _mm256_load_si256(masks.lo[2].as_ptr() as *const __m256i);
-        let vhi2 = _mm256_load_si256(masks.hi[2].as_ptr() as *const __m256i);
-        let c2 = _mm256_loadu_si256(ptr.add(pos + offsets[2]) as *const __m256i);
-        let r2 = _mm256_and_si256(
-            _mm256_shuffle_epi8(vlo2, _mm256_and_si256(c2, nib)),
-            _mm256_shuffle_epi8(vhi2, _mm256_and_si256(_mm256_srli_epi16(c2, 4), nib)),
-        );
-        r = _mm256_and_si256(r, r2);
-    }
-    _mm256_movemask_epi8(r) as u32
+    _mm256_movemask_epi8(acc) as u32
 }
 
 #[cfg(target_arch = "x86_64")]
@@ -995,6 +1144,8 @@ impl FwdPrefixSearch {
             }
         }
 
+        let ascii = (0..num_simd).all(|i| byte_sets_raw[simd_offsets[i]].iter().all(|&b| b < 0x80));
+
         Self {
             len,
             num_simd,
@@ -1002,6 +1153,7 @@ impl FwdPrefixSearch {
             masks,
             sets: all_sets,
             verify_order,
+            ascii,
         }
     }
 
@@ -1030,15 +1182,18 @@ impl FwdPrefixSearch {
 
     #[target_feature(enable = "avx2")]
     unsafe fn find_fwd_avx2(&self, haystack: &[u8], start: usize) -> Option<usize> {
-        match self.num_simd {
-            1 => self.teddy::<1>(haystack, start),
-            2 => self.teddy::<2>(haystack, start),
-            _ => self.teddy::<3>(haystack, start),
+        match (self.num_simd, self.ascii) {
+            (1, true) => self.teddy::<1, true>(haystack, start),
+            (1, false) => self.teddy::<1, false>(haystack, start),
+            (2, true) => self.teddy::<2, true>(haystack, start),
+            (2, false) => self.teddy::<2, false>(haystack, start),
+            (_, true) => self.teddy::<3, true>(haystack, start),
+            (_, false) => self.teddy::<3, false>(haystack, start),
         }
     }
 
     #[target_feature(enable = "avx2")]
-    unsafe fn teddy<const N: usize>(&self, haystack: &[u8], start: usize) -> Option<usize> {
+    unsafe fn teddy<const N: usize, const ASCII: bool>(&self, haystack: &[u8], start: usize) -> Option<usize> {
         let ptr = haystack.as_ptr();
         let nib = _mm256_set1_epi8(0x0F);
         let sets_ptr = self.sets.as_ptr();
@@ -1050,9 +1205,9 @@ impl FwdPrefixSearch {
 
         if N == 3 {
             while pos + 32 < simd_end {
-                let mask_a = teddy_filter_fwd::<N>(ptr, pos, &self.simd_offsets, &self.masks, nib);
+                let mask_a = teddy_filter_fwd::<N, ASCII>(ptr, pos, &self.simd_offsets, &self.masks, nib);
                 let mask_b =
-                    teddy_filter_fwd::<N>(ptr, pos + 32, &self.simd_offsets, &self.masks, nib);
+                    teddy_filter_fwd::<N, ASCII>(ptr, pos + 32, &self.simd_offsets, &self.masks, nib);
                 if mask_a != 0 {
                     if let Some(m) = Self::verify_inline(ptr, pos, mask_a, sets_ptr, len, vo) {
                         return Some(m);
@@ -1068,13 +1223,36 @@ impl FwdPrefixSearch {
         }
 
         while pos < simd_end {
-            let mask = teddy_filter_fwd::<N>(ptr, pos, &self.simd_offsets, &self.masks, nib);
+            let mask = teddy_filter_fwd::<N, ASCII>(ptr, pos, &self.simd_offsets, &self.masks, nib);
             if mask != 0 {
                 if let Some(m) = Self::verify_inline(ptr, pos, mask, sets_ptr, len, vo) {
                     return Some(m);
                 }
             }
             pos += 32;
+        }
+        if simd_end > 0 && pos - (simd_end - 1) < 32 {
+            let p = simd_end - 1;
+            let mask = teddy_filter_fwd::<N, ASCII>(ptr, p, &self.simd_offsets, &self.masks, nib)
+                & (u32::MAX << (pos - p));
+            if mask != 0 {
+                return Self::verify_inline(ptr, p, mask, sets_ptr, len, vo);
+            }
+            return None;
+        }
+        if simd_end == 0 && haystack.len() <= 32 && haystack.len() >= len && pos <= haystack.len() - len {
+            let mut buf = [0u8; 64];
+            buf[..haystack.len()].copy_from_slice(haystack);
+            let bp = buf.as_ptr();
+            let last = haystack.len() - len;
+            let valid = if last >= 31 { u32::MAX } else { (1u32 << (last + 1)) - 1 };
+            let mask = teddy_filter_fwd::<N, ASCII>(bp, 0, &self.simd_offsets, &self.masks, nib)
+                & valid
+                & (u32::MAX << pos);
+            if mask != 0 {
+                return Self::verify_inline(bp, 0, mask, sets_ptr, len, vo);
+            }
+            return None;
         }
         self.verify_tail_fwd(haystack, pos)
     }

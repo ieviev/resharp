@@ -23,7 +23,7 @@ pub struct BDFA {
     pub states: Vec<NodeId>,
     #[cfg_attr(feature = "serialize", serde(skip))]
     state_map: HashMap<NodeId, u16>,
-    /// packed transition table: entry = (match_rel << 16) | next_state.
+    /// transition table: entry = (next_state << mt_log) | MATCH_BIT if the state matches.
     /// 0 = uncached sentinel.
     pub table: Vec<u32>,
     /// match start rel per state: step (0 = no match).
@@ -126,7 +126,7 @@ impl BDFA {
                 Solver::is_sat(&mt_set, &prefix_set)
             });
             match mt_idx {
-                Some(idx) => state = (self.transition(b, state, idx)? & 0xFFFF) as u16,
+                Some(idx) => state = entry_state(self.transition(b, state, idx)?, self.mt_log),
                 None => return Ok(()),
             }
         }
@@ -401,12 +401,19 @@ impl BDFA {
             );
         }
 
-        let rel = self.match_rel[next_sid as usize];
-        let packed = (rel << 16) | next_sid as u32;
+        let flag = if self.match_rel[next_sid as usize] > 0 { MATCH_BIT } else { 0 };
+        let packed = ((next_sid as u32) << self.mt_log) | flag;
         let delta = (state as usize) << self.mt_log | mt_idx;
         self.table[delta] = packed;
         Ok(packed)
     }
+}
+
+const MATCH_BIT: u32 = 1 << 31;
+
+#[inline(always)]
+fn entry_state(entry: u32, mt_log: u32) -> u16 {
+    ((entry & !MATCH_BIT) >> mt_log) as u16
 }
 
 #[repr(u8)]
@@ -418,52 +425,51 @@ pub(crate) enum Prefix {
 }
 
 #[inline(never)]
-fn bdfa_inner<const PREFIX: u8>(
+fn bdfa_inner(
     table: *const u32,
     ml: *const u8,
     data: *const u8,
     mt_log: u32,
     initial: u16,
+    match_rel: *const u32,
     match_end_off: *const u32,
-    mut state: u16,
+    state: u16,
     mut pos: usize,
     len: usize,
     match_buf: *mut Match,
     match_cap: usize,
 ) -> (u16, usize, usize) {
     let mut mc: usize = 0;
+    let initial_p = (initial as usize) << mt_log;
+    let mut sp = (state as usize) << mt_log;
     unsafe {
         while pos < len {
-            if PREFIX != Prefix::None as u8 && state == initial {
-                return (state, pos, mc);
-            }
             let mt = *ml.add(*data.add(pos) as usize) as usize;
-            let delta = (state as usize) << mt_log | mt;
-            let entry = *table.add(delta);
+            let entry = *table.add(sp | mt);
             if entry == 0 {
-                return (state, pos, mc);
+                break;
             }
-            let rel = entry >> 16;
-            if rel > 0 && mc >= match_cap {
-                return (state, pos, mc);
-            }
-            state = (entry & 0xFFFF) as u16;
-            if rel > 0 {
-                let end_off = *match_end_off.add(state as usize);
-                let end = pos + 1 - end_off as usize;
+            if entry >= MATCH_BIT {
+                if mc >= match_cap {
+                    break;
+                }
+                let next = entry_state(entry, mt_log) as usize;
+                let rel = *match_rel.add(next);
+                let end = pos + 1 - *match_end_off.add(next) as usize;
                 *match_buf.add(mc) = Match {
                     start: pos + 1 - rel as usize,
                     end,
                 };
                 mc += 1;
-                state = initial;
+                sp = initial_p;
                 pos = end;
                 continue;
             }
+            sp = entry as usize;
             pos += 1;
         }
-        (state, pos, mc)
     }
+    ((sp >> mt_log) as u16, pos, mc)
 }
 
 pub(crate) fn bdfa_scan<const PREFIX: u8, const ISMATCH: bool>(
@@ -501,12 +507,14 @@ pub(crate) fn bdfa_scan<const PREFIX: u8, const ISMATCH: bool>(
             };
             let table = bounded.table.as_ptr();
             let meo = bounded.match_end_off.as_ptr();
-            let (s, p, mc) = bdfa_inner::<{ Prefix::None as u8 }>(
+            let mrel = bounded.match_rel.as_ptr();
+            let (s, p, mc) = bdfa_inner(
                 table,
                 ml.as_ptr(),
                 data,
                 mt_log,
                 initial,
+                mrel,
                 meo,
                 state,
                 pos,
@@ -525,12 +533,12 @@ pub(crate) fn bdfa_scan<const PREFIX: u8, const ISMATCH: bool>(
             }
             let mt = ml[input[pos] as usize] as usize;
             let entry = bounded.transition(b, state, mt)?;
-            state = (entry & 0xFFFF) as u16;
-            let rel = entry >> 16;
-            if rel > 0 {
+            state = entry_state(entry, mt_log);
+            if entry >= MATCH_BIT {
                 if ISMATCH {
                     return Ok(true);
                 }
+                let rel = bounded.match_rel[state as usize];
                 let end_off = bounded.match_end_off[state as usize];
                 let end = pos + 1 - end_off as usize;
                 matches.push(Match {
@@ -570,7 +578,7 @@ pub(crate) fn bdfa_scan<const PREFIX: u8, const ISMATCH: bool>(
                                 } else {
                                     bounded.transition(b, state, mt)?
                                 };
-                                state = (entry & 0xFFFF) as u16;
+                                state = entry_state(entry, mt_log);
                                 if state == initial {
                                     break;
                                 }
@@ -602,6 +610,7 @@ pub(crate) fn bdfa_scan<const PREFIX: u8, const ISMATCH: bool>(
                 let data = input.as_ptr();
                 let ml_ptr = ml.as_ptr();
                 let meo = bounded.match_end_off.as_ptr();
+                let mrel = bounded.match_rel.as_ptr();
 
                 while pos < len {
                     let mt = *ml_ptr.add(*data.add(pos) as usize) as usize;
@@ -610,15 +619,15 @@ pub(crate) fn bdfa_scan<const PREFIX: u8, const ISMATCH: bool>(
                     if entry == 0 {
                         break;
                     }
-                    let rel = entry >> 16;
-                    state = (entry & 0xFFFF) as u16;
+                    state = entry_state(entry, mt_log);
                     if state == initial {
                         continue 'main;
                     }
-                    if rel > 0 {
+                    if entry >= MATCH_BIT {
                         if ISMATCH {
                             return Ok(true);
                         }
+                        let rel = *mrel.add(state as usize);
                         let end_off = *meo.add(state as usize);
                         let end = pos + 1 - end_off as usize;
                         matches.push(Match {
@@ -638,12 +647,12 @@ pub(crate) fn bdfa_scan<const PREFIX: u8, const ISMATCH: bool>(
             }
             let mt = ml[input[pos] as usize] as usize;
             let entry = bounded.transition(b, state, mt)?;
-            state = (entry & 0xFFFF) as u16;
-            let rel = entry >> 16;
-            if rel > 0 {
+            state = entry_state(entry, mt_log);
+            if entry >= MATCH_BIT {
                 if ISMATCH {
                     return Ok(true);
                 }
+                let rel = bounded.match_rel[state as usize];
                 let end_off = bounded.match_end_off[state as usize];
                 let end = pos + 1 - end_off as usize;
                 matches.push(Match {
@@ -687,6 +696,27 @@ pub(crate) fn bdfa_scan<const PREFIX: u8, const ISMATCH: bool>(
 }
 
 impl Regex {
+    pub(crate) fn is_match_bounded(&self, input: &[u8]) -> Result<bool, Error> {
+        debug_assert!(!input.is_empty());
+        let crate::RegexInner {
+            b,
+            bounded,
+            matches: matches_buf,
+            ..
+        } = &mut *self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let bounded = bounded
+            .as_mut()
+            .ok_or(Error::InternalError("Bounded kind without bounded automaton"))?;
+        matches_buf.clear();
+        match &bounded.prefix {
+            Some(p) if p.is_literal() => {
+                bdfa_scan::<{ Prefix::Literal as u8 }, true>(bounded, b, input, matches_buf)
+            }
+            Some(_) => bdfa_scan::<{ Prefix::Search as u8 }, true>(bounded, b, input, matches_buf),
+            None => bdfa_scan::<{ Prefix::None as u8 }, true>(bounded, b, input, matches_buf),
+        }
+    }
+
     pub(crate) fn find_all_fwd_bounded(&self, input: &[u8]) -> Result<Vec<Match>, Error> {
         debug_assert!(!input.is_empty());
         let crate::RegexInner {

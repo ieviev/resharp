@@ -95,19 +95,26 @@ fn is_word_byte(b: u8) -> bool {
     b.is_ascii_alphanumeric() || b == b'_'
 }
 
+fn literal_word_kind(c: char) -> WordCharKind {
+    if !c.is_ascii() {
+        WordCharKind::Unknown
+    } else if is_word_byte(c as u8) {
+        WordCharKind::Word
+    } else {
+        WordCharKind::NonWord
+    }
+}
+
 fn class_set_item_word_kind(item: &regex_syntax::ast::ClassSetItem) -> WordCharKind {
     use regex_syntax::ast::{ClassPerlKind, ClassSetItem};
     use WordCharKind::*;
     match item {
         ClassSetItem::Empty(_) => Unknown,
-        ClassSetItem::Literal(l) => {
-            if is_word_byte(l.c as u8) {
-                Word
-            } else {
-                NonWord
-            }
-        }
+        ClassSetItem::Literal(l) => literal_word_kind(l.c),
         ClassSetItem::Range(r) => {
+            if !r.start.c.is_ascii() || !r.end.c.is_ascii() {
+                return Unknown;
+            }
             let all_word = (r.start.c as u8..=r.end.c as u8).all(is_word_byte);
             let all_non = (r.start.c as u8..=r.end.c as u8).all(|b| !is_word_byte(b));
             if all_word {
@@ -568,7 +575,17 @@ fn ensure_lookbehind_at_start(ast: &Ast, at_start: bool) -> core::result::Result
         }
         Ast::Complement(c) => ensure_lookbehind_at_start(&c.ast, at_start),
         Ast::Group(g) => ensure_lookbehind_at_start(&g.ast, at_start),
-        Ast::Repetition(r) => ensure_lookbehind_at_start(&r.ast, at_start),
+        Ast::Repetition(r) => {
+            let repeats = match &r.op.kind {
+                RepetitionKind::ZeroOrOne => false,
+                RepetitionKind::ZeroOrMore | RepetitionKind::OneOrMore => true,
+                RepetitionKind::Range(ast::RepetitionRange::Exactly(n)) => *n >= 2,
+                RepetitionKind::Range(ast::RepetitionRange::AtLeast(_)) => true,
+                RepetitionKind::Range(ast::RepetitionRange::Bounded(_, m)) => *m >= 2,
+            };
+            let body_at_start = at_start && !(repeats && ast_may_consume(&r.ast));
+            ensure_lookbehind_at_start(&r.ast, body_at_start)
+        }
         Ast::Lookaround(g) => {
             match g.kind {
                 LookaroundKind::PositiveLookbehind | LookaroundKind::NegativeLookbehind => {
@@ -1428,13 +1445,7 @@ impl<'s> ResharpParser<'s> {
     fn word_char_kind(ast: &Ast, left: bool) -> WordCharKind {
         use WordCharKind::*;
         match ast {
-            Ast::Literal(lit) => {
-                if is_word_byte(lit.c as u8) {
-                    Word
-                } else {
-                    NonWord
-                }
-            }
+            Ast::Literal(lit) => literal_word_kind(lit.c),
             Ast::ClassPerl(c) => match (&c.kind, c.negated) {
                 (&regex_syntax::ast::ClassPerlKind::Word, false) => Word,
                 (&regex_syntax::ast::ClassPerlKind::Word, true) => NonWord,
@@ -1571,6 +1582,19 @@ impl<'s> ResharpParser<'s> {
             return Ok(fast);
         }
         let neighbor_idx = (idx as isize + dir) as usize;
+        if !Self::is_transparent_for_dir(&asts[neighbor_idx], dir) {
+            match Self::word_char_kind(&asts[neighbor_idx], dir < 0) {
+                MaybeWord => {
+                    let beyond = self.resolve_word_kind(asts, neighbor_idx, dir, translator, tb)?;
+                    return Ok(if beyond == Word { Word } else { Unknown });
+                }
+                MaybeNonWord => {
+                    let beyond = self.resolve_word_kind(asts, neighbor_idx, dir, translator, tb)?;
+                    return Ok(if beyond == NonWord { NonWord } else { Unknown });
+                }
+                _ => {}
+            }
+        }
         let node = if let Some(edge) = Self::edge_class_ast(&asts[neighbor_idx], dir < 0) {
             self.ast_to_node_id(edge, translator, tb)?
         } else if dir > 0 {
@@ -1608,7 +1632,7 @@ impl<'s> ResharpParser<'s> {
                             self.error(self.span(), ast::ErrorKind::UnsupportedResharpRegex)
                         })?;
                         if tb.get_min_max_length(n) == (0, 0) {
-                            // n is a bare zero-width assertion (e.g. `\z`); folding it in as Concat(n, TS) is wrong since there may be no next byte at all. Bail to Unknown.
+                            // bare zero-width assertion (e.g. `\z`): Concat(n, TS) would need a next byte
                             return Ok(Unknown);
                         }
                         bodies.push(tb.mk_concat(n, NodeId::TS));
@@ -1638,8 +1662,14 @@ impl<'s> ResharpParser<'s> {
             neighbor_node = tb
                 .reverse(neighbor_node)
                 .map_err(|_| self.error(self.span(), ast::ErrorKind::UnsupportedResharpRegex))?;
-            let word_prefix = tb.mk_concat(word_id, NodeId::TS);
-            let non_word_prefix = tb.mk_concat(not_word_id, NodeId::TS);
+            let rev_word = tb
+                .reverse(word_id)
+                .map_err(|_| self.error(self.span(), ast::ErrorKind::UnsupportedResharpRegex))?;
+            let rev_not_word = tb
+                .reverse(not_word_id)
+                .map_err(|_| self.error(self.span(), ast::ErrorKind::UnsupportedResharpRegex))?;
+            let word_prefix = tb.mk_concat(rev_word, NodeId::TS);
+            let non_word_prefix = tb.mk_concat(rev_not_word, NodeId::TS);
             return if tb.subsumes(word_prefix, neighbor_node) == Some(true) {
                 Ok(Word)
             } else if tb.subsumes(non_word_prefix, neighbor_node) == Some(true) {
@@ -1705,7 +1735,7 @@ impl<'s> ResharpParser<'s> {
                 &r.op.kind,
                 ast::RepetitionKind::Range(ast::RepetitionRange::Exactly(0))
             ),
-            // transparent (skip to find the real neighbor) only when scanning away from the edge it anchors; opaque in the direction it guarantees
+            // transparent only when scanning away from the edge it anchors
             Ast::Assertion(a) => matches!(
                 a.kind,
                 ast::AssertionKind::StartLine | ast::AssertionKind::EndLine
@@ -2319,7 +2349,7 @@ impl<'s> ResharpParser<'s> {
                     ast::LookaroundKind::PositiveLookahead if body.contains_lookbehind(tb) => {
                         let mut prefix = NodeId::EPS;
                         let mut rest = body;
-                        // a lookahead whose entire body is one bare lookbehind (e.g. `(?=^)`) has no Concat wrapper for the loop below; handle it directly
+                        // `(?=^)`: bare lookbehind body has no Concat for the loop below
                         if tb.get_kind(rest) == Kind::Lookbehind && rest.right(tb) == NodeId::MISSING {
                             prefix = rest;
                             rest = NodeId::EPS;
@@ -2572,7 +2602,7 @@ impl<'s> ResharpParser<'s> {
         {
             return Err(self.error(*ast.span(), ast::ErrorKind::UnsupportedResharpRegex));
         }
-        Ok(ast)
+        Ok(Self::drop_repeated_word_boundaries(ast))
     }
 
     fn parse(&mut self, tb: &mut TB<'s>) -> Result<NodeId> {
@@ -2601,6 +2631,102 @@ impl<'s> ResharpParser<'s> {
             None
         };
         Ok((node, sk))
+    }
+
+    fn run_rank(ast: &Ast) -> Option<u8> {
+        match ast {
+            Ast::Assertion(a) => match a.kind {
+                ast::AssertionKind::WordBoundary => Some(0),
+                ast::AssertionKind::NotWordBoundary => Some(1),
+                ast::AssertionKind::EndText => Some(2),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    fn flush_run(run: &mut Vec<(u8, Ast)>, out: &mut Vec<Ast>) {
+        run.sort_by_key(|(rank, _)| *rank);
+        run.dedup_by_key(|(rank, _)| *rank);
+        out.extend(run.drain(..).map(|(_, ast)| ast));
+    }
+
+    fn is_plain_group(g: &ast::Group) -> bool {
+        matches!(&g.kind, ast::GroupKind::NonCapturing(f) if f.items.is_empty())
+    }
+
+    fn is_plain_boundary(ast: &Ast) -> bool {
+        match ast {
+            Ast::Group(g) => Self::is_plain_group(g) && Self::is_plain_boundary(&g.ast),
+            _ => Self::is_word_boundary(ast),
+        }
+    }
+
+    fn unwrap_plain_group(ast: Ast) -> Ast {
+        match ast {
+            Ast::Group(g) if Self::is_plain_group(&g) => Self::unwrap_plain_group(*g.ast),
+            other => other,
+        }
+    }
+
+    fn is_word_boundary(ast: &Ast) -> bool {
+        matches!(ast, Ast::Assertion(a) if a.kind == ast::AssertionKind::WordBoundary || a.kind == ast::AssertionKind::NotWordBoundary)
+    }
+
+    fn drop_repeated_word_boundaries(ast: Ast) -> Ast {
+        match ast {
+            Ast::Repetition(mut r) => {
+                r.ast = Box::new(Self::drop_repeated_word_boundaries(*r.ast));
+                if Self::rep_lo(&r.op.kind) >= 1 && Self::is_plain_boundary(&r.ast) {
+                    Self::unwrap_plain_group(*r.ast)
+                } else {
+                    Ast::Repetition(r)
+                }
+            }
+            Ast::Concat(mut c) => {
+                let mut kept: Vec<Ast> = Vec::with_capacity(c.asts.len());
+                let mut run: Vec<(u8, Ast)> = Vec::new();
+                for child in std::mem::take(&mut c.asts) {
+                    let child = Self::drop_repeated_word_boundaries(child);
+                    let child = if Self::is_plain_boundary(&child) {
+                        Self::unwrap_plain_group(child)
+                    } else {
+                        child
+                    };
+                    match Self::run_rank(&child) {
+                        Some(rank) => run.push((rank, child)),
+                        None => {
+                            Self::flush_run(&mut run, &mut kept);
+                            kept.push(child);
+                        }
+                    }
+                }
+                Self::flush_run(&mut run, &mut kept);
+                c.asts = kept;
+                c.into_ast()
+            }
+            Ast::Alternation(mut a) => {
+                a.asts = a
+                    .asts
+                    .into_iter()
+                    .map(Self::drop_repeated_word_boundaries)
+                    .collect();
+                Ast::Alternation(a)
+            }
+            Ast::Group(mut g) => {
+                g.ast = Box::new(Self::drop_repeated_word_boundaries(*g.ast));
+                Ast::Group(g)
+            }
+            Ast::Lookaround(mut l) => {
+                l.ast = Box::new(Self::drop_repeated_word_boundaries(*l.ast));
+                Ast::Lookaround(l)
+            }
+            Ast::Complement(mut c) => {
+                c.ast = Box::new(Self::drop_repeated_word_boundaries(*c.ast));
+                Ast::Complement(c)
+            }
+            other => other,
+        }
     }
 
     fn rep_lo(kind: &ast::RepetitionKind) -> u32 {

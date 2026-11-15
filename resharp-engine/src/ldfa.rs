@@ -20,13 +20,29 @@ pub(crate) use crate::scan::{collect_max_fwd, collect_max_rev};
 use crate::{Error, Match};
 
 pub const NO_MATCH: usize = usize::MAX;
-pub const DFA_MISSING: u16 = 0;
-pub const DFA_DEAD: u16 = 1;
-pub const DFA_INITIAL: u16 = 2;
+#[cfg(not(feature = "wide_state"))]
+pub type Sid = u16;
+#[cfg(feature = "wide_state")]
+pub type Sid = u32;
+pub const MAX_STATES: usize = Sid::MAX as usize;
+#[cfg(not(feature = "wide_state"))]
+pub const DEFAULT_MAX_STATES: usize = MAX_STATES;
+#[cfg(feature = "wide_state")]
+pub const DEFAULT_MAX_STATES: usize = 1 << 20;
+pub const DFA_MISSING: Sid = 0;
+pub const DFA_DEAD: Sid = 1;
+pub const DFA_INITIAL: Sid = 2;
+
+pub(crate) fn checked_capacity(n: usize) -> Result<usize, Error> {
+    if n > MAX_STATES {
+        return Err(Error::CapacityTooLarge(n));
+    }
+    Ok(n)
+}
 
 #[inline(always)]
-fn as_sid(s: u32) -> Result<u16, Error> {
-    u16::try_from(s).map_err(|_| Error::CapacityExceeded)
+fn as_sid(s: u32) -> Result<Sid, Error> {
+    Sid::try_from(s).map_err(|_| Error::CapacityExceeded)
 }
 
 #[inline(always)]
@@ -170,11 +186,11 @@ fn skip_is_profitable(bytes: &[u8]) -> bool {
 #[cfg_attr(feature = "serialize", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serialize", allow(missing_docs))]
 pub struct LDFA {
-    pub pruned: u16,
+    pub pruned: Sid,
     #[cfg_attr(feature = "serialize", serde(skip))]
     pub prune_memo: FxHashMap<(NodeId, bool), NodeId>,
-    pub begin_table: Vec<u16>,
-    pub center_table: Vec<u16>,
+    pub begin_table: Vec<Sid>,
+    pub center_table: Vec<Sid>,
     pub effects_id: Vec<u16>,
     pub effects: Vec<Vec<NullState>>,
     pub center_effect_id: Vec<u16>,
@@ -186,7 +202,7 @@ pub struct LDFA {
     #[cfg_attr(feature = "serialize", serde(skip))]
     pub state_nodes: Vec<NodeId>,
     #[cfg_attr(feature = "serialize", serde(skip))]
-    pub node_to_state: HashMap<NodeId, u16>,
+    pub node_to_state: HashMap<NodeId, Sid>,
     pub skip_ids: Vec<u8>,
     pub skip_searchers: Vec<Skipper>,
     pub max_capacity: usize,
@@ -222,11 +238,11 @@ impl LDFA {
         let sets = collect_sets(b, initial);
         let minterms = PartitionTree::generate_minterms(sets, b.solver());
         let u8_lookup = PartitionTree::minterms_lookup(&minterms, b.solver());
-        let max_capacity = max_capacity.min(65535);
+        let max_capacity = checked_capacity(max_capacity)?;
 
         // state 0 = uncomputed, state 1 = dead
         let mut state_nodes: Vec<NodeId> = vec![NodeId::MISSING, NodeId::BOT];
-        let mut node_to_state: HashMap<NodeId, u16> = HashMap::new();
+        let mut node_to_state: HashMap<NodeId, Sid> = HashMap::new();
         node_to_state.insert(NodeId::BOT, DFA_DEAD);
 
         let mut effects_id: Vec<u16> = vec![0u16; 2]; // slots 0,1 (MISSING, DEAD)
@@ -291,6 +307,9 @@ impl LDFA {
             if state_nodes.len() > max_capacity {
                 return Err(Error::CapacityExceeded);
             }
+            if b.over_node_capacity() {
+                return Err(Error::NodeCapacityExceeded(b.max_node_capacity));
+            }
             begin_table[idx] = sid;
         }
         let num_minterms = minterms.len() as u32;
@@ -329,11 +348,11 @@ impl LDFA {
     }
 
     #[inline(always)]
-    pub fn dfa_delta(&self, state_id: u16, mt: u32) -> usize {
+    pub fn dfa_delta(&self, state_id: Sid, mt: u32) -> usize {
         dfa_delta(state_id as u32, mt, self.mt_log)
     }
 
-    pub fn ensure_capacity(&mut self, state_id: u16) {
+    pub fn ensure_capacity(&mut self, state_id: Sid) {
         let cap = state_id as usize + 1;
         if cap > self.effects_id.len() {
             let new_len = self.effects_id.len().max(4) * 2;
@@ -356,7 +375,7 @@ impl LDFA {
         debug_assert!(self.center_table.len() >= cap * stride);
     }
 
-    pub fn get_or_register(&mut self, b: &mut RegexBuilder, node: NodeId) -> u16 {
+    pub fn get_or_register(&mut self, b: &mut RegexBuilder, node: NodeId) -> Sid {
         let sid = register_state(
             &mut self.state_nodes,
             &mut self.node_to_state,
@@ -372,7 +391,7 @@ impl LDFA {
     }
 
     fn try_create(&mut self, b: &mut RegexBuilder, curr: u32) {
-        if let Ok(sid) = u16::try_from(curr) {
+        if let Ok(sid) = as_sid(curr) {
             self.create_state(b, sid).ok();
         }
     }
@@ -381,9 +400,9 @@ impl LDFA {
     pub fn lazy_transition(
         &mut self,
         b: &mut RegexBuilder,
-        state_id: u16,
+        state_id: Sid,
         minterm_idx: u32,
-    ) -> Result<u16, Error> {
+    ) -> Result<Sid, Error> {
         let delta = self.dfa_delta(state_id, minterm_idx);
         if self.center_table[delta] != DFA_MISSING {
             return Ok(self.center_table[delta]);
@@ -396,9 +415,9 @@ impl LDFA {
     fn lazy_transition_slow(
         &mut self,
         b: &mut RegexBuilder,
-        state_id: u16,
+        state_id: Sid,
         minterm_idx: u32,
-    ) -> Result<u16, Error> {
+    ) -> Result<Sid, Error> {
         if state_id == DFA_DEAD {
             return Ok(DFA_DEAD);
         }
@@ -411,7 +430,7 @@ impl LDFA {
     #[allow(dead_code)]
     pub fn precompile(&mut self, b: &mut RegexBuilder, threshold: usize) -> bool {
         use std::collections::VecDeque;
-        let mut worklist: VecDeque<u16> = VecDeque::new();
+        let mut worklist: VecDeque<Sid> = VecDeque::new();
         let mut visited = HashSet::new();
 
         for &sid in &self.begin_table {
@@ -535,7 +554,7 @@ impl LDFA {
     pub(crate) fn create_state(
         &mut self,
         b: &mut RegexBuilder,
-        state_id: u16,
+        state_id: Sid,
     ) -> Result<(), Error> {
         let node = self.state_nodes[state_id as usize];
         if node == NodeId::MISSING {
@@ -557,13 +576,16 @@ impl LDFA {
             if self.state_nodes.len() >= self.max_capacity {
                 return Err(Error::CapacityExceeded);
             }
+            if b.over_node_capacity() {
+                return Err(Error::NodeCapacityExceeded(b.max_node_capacity));
+            }
             let next_sid = self.get_or_register(b, next_node);
             self.ensure_capacity(next_sid);
             let delta = self.dfa_delta(state_id, mt_idx as u32);
             self.center_table[delta] = next_sid;
         }
         if crate::simd::has_simd() {
-            self.try_build_skip_simd(b, state_id.into());
+            self.try_build_skip_simd(b, state_id as usize);
         }
         Ok(())
     }
@@ -720,7 +742,7 @@ impl LDFA {
         let skipper = if resume == 0 {
             Skipper::Prefix(search)
         } else {
-            self.create_state(b, resume as u16)?;
+            self.create_state(b, resume as Sid)?;
             Skipper::Inner {
                 search,
                 resume,
@@ -1432,10 +1454,7 @@ impl LDFA {
         }
     }
 
-    /// Existence-only forward check for the convergence filter: does any match
-    /// start at `pos_begin`? Uses the shortest-match walk to stay O(shortest `b`)
-    /// per candidate, keeping the whole filter linear.
-    pub(crate) fn conv_start_matches(
+    pub(crate) fn matches_from(
         &mut self,
         b: &mut RegexBuilder,
         pos_begin: usize,
@@ -1455,16 +1474,12 @@ impl LDFA {
             return Ok(false);
         }
         let (state, fpos, hit) = self.scan_fwd_first_null_from(b, curr, pos, data)?;
-        if hit {
+        if hit && fpos < end {
             return Ok(true);
         }
-        if fpos >= end
+        Ok(fpos >= end
             && state > DFA_DEAD as u32
-            && has_any_null(&self.effects_id, &self.effects, state, Nullability::END)
-        {
-            return Ok(true);
-        }
-        Ok(false)
+            && has_any_null(&self.effects_id, &self.effects, state, Nullability::END))
     }
 
     #[inline(always)]
@@ -1563,6 +1578,26 @@ impl LDFA {
         begin: usize,
         data: &[u8],
     ) -> Result<Option<usize>, Error> {
+        self.scan_rev_from_inner::<false>(b, end, begin, data)
+    }
+
+    pub(crate) fn matches_rev_from(
+        &mut self,
+        b: &mut RegexBuilder,
+        end: usize,
+        begin: usize,
+        data: &[u8],
+    ) -> Result<bool, Error> {
+        Ok(self.scan_rev_from_inner::<true>(b, end, begin, data)?.is_some())
+    }
+
+    fn scan_rev_from_inner<const FIRST: bool>(
+        &mut self,
+        b: &mut RegexBuilder,
+        end: usize,
+        begin: usize,
+        data: &[u8],
+    ) -> Result<Option<usize>, Error> {
         if end == 0 || end > data.len() || end <= begin {
             return Ok(None);
         }
@@ -1582,6 +1617,9 @@ impl LDFA {
             center_or_end(start_pos == begin),
             &mut min_start,
         );
+        if FIRST && min_start != NO_MATCH {
+            return Ok(found(min_start));
+        }
 
         let mut pos = start_pos;
         while pos > begin {
@@ -1606,6 +1644,9 @@ impl LDFA {
                 center_or_end(pos == begin),
                 &mut min_start,
             );
+            if FIRST && min_start != NO_MATCH {
+                return Ok(found(min_start));
+            }
         }
 
         Ok(found(min_start))
@@ -1828,10 +1869,10 @@ impl LDFA {
     fn handle_rev_end(
         &mut self,
         b: &mut RegexBuilder,
-        sid: u16,
+        sid: Sid,
         data: &[u8],
         nulls: &mut StartPositions,
-    ) -> Result<u16, Error> {
+    ) -> Result<Sid, Error> {
         let mt = self.mt_lookup[data[0] as usize] as u32;
         #[cfg(feature = "debug")]
         {

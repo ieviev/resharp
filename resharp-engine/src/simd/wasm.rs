@@ -15,10 +15,11 @@ unsafe fn teddy_chunk<const N: usize>(
 ) -> v128 {
     let load = |i: usize| v128_load(ptr.add(pos + offsets[i]) as *const v128);
     let lookup = |i: usize, c: v128| {
-        v128_and(
+        let t = v128_and(
             u8x16_swizzle(masks_lo[i], v128_and(c, nib)),
             u8x16_swizzle(masks_hi[i], u8x16_shr(c, 4)),
-        )
+        );
+        u8x16_ne(t, u8x16_splat(0))
     };
     let mut r = lookup(0, load(0));
     if N >= 2 {
@@ -154,19 +155,29 @@ impl FwdLiteralSearch {
 
     pub fn find_fwd(&self, haystack: &[u8]) -> Option<usize> {
         let mut sink: Vec<(usize, usize)> = Vec::new();
-        unsafe { self.scan::<false>(haystack, &mut sink) }
+        unsafe {
+            if self.needle.len() == 1 {
+                self.scan::<false, false>(haystack, &mut sink)
+            } else {
+                self.scan::<false, true>(haystack, &mut sink)
+            }
+        }
     }
 
     pub fn find_all_fixed(&self, haystack: &[u8], matches: &mut Vec<(usize, usize)>) {
         unsafe {
-            self.scan::<true>(haystack, matches);
+            if self.needle.len() == 1 {
+                self.scan::<true, false>(haystack, matches);
+            } else {
+                self.scan::<true, true>(haystack, matches);
+            }
         }
     }
 
     // COLLECT_ALL=false: return first match start (sink unused).
     // COLLECT_ALL=true:  push every non-overlapping match into `matches`, return None.
     #[inline(always)]
-    unsafe fn scan<const COLLECT_ALL: bool>(
+    unsafe fn scan<const COLLECT_ALL: bool, const DUAL: bool>(
         &self,
         haystack: &[u8],
         matches: &mut Vec<(usize, usize)>,
@@ -184,14 +195,13 @@ impl FwdLiteralSearch {
         let vrare = u8x16_splat(rare_byte);
         let vconf = u8x16_splat(confirm_byte);
         let confirm_off = confirm_idx as isize - rare_idx as isize;
-        let dual = nlen > 1;
         let mut last_end: usize = 0;
 
         let mut handle = |this: &Self, start: usize| -> Option<usize> {
             if COLLECT_ALL && start < last_end {
                 return None;
             }
-            if !this.verify(haystack, start) {
+            if DUAL && !this.verify(haystack, start) {
                 return None;
             }
             if COLLECT_ALL {
@@ -205,17 +215,41 @@ impl FwdLiteralSearch {
         };
 
         let mut pos = rare_idx;
-        while pos + 16 <= end + 1 {
-            let chunk = v128_load(ptr.add(pos) as *const v128);
-            let mut mask = u8x16_bitmask(u8x16_eq(chunk, vrare));
-            if dual && mask != 0 {
-                let cchunk = v128_load(ptr.offset(pos as isize + confirm_off) as *const v128);
-                mask &= u8x16_bitmask(u8x16_eq(cchunk, vconf));
+        let pair = |p: usize| -> v128 {
+            let r = u8x16_eq(v128_load(ptr.add(p) as *const v128), vrare);
+            if DUAL {
+                v128_and(
+                    r,
+                    u8x16_eq(v128_load(ptr.offset(p as isize + confirm_off) as *const v128), vconf),
+                )
+            } else {
+                r
             }
+        };
+        while pos + 64 <= end + 1 {
+            let m0 = pair(pos);
+            let m1 = pair(pos + 16);
+            let m2 = pair(pos + 32);
+            let m3 = pair(pos + 48);
+            if v128_any_true(v128_or(v128_or(m0, m1), v128_or(m2, m3))) {
+                for k in 0..4 {
+                    let mut mask = u8x16_bitmask(pair(pos + 16 * k)) as u32;
+                    while mask != 0 {
+                        let bit = mask.trailing_zeros() as usize;
+                        if let Some(s) = handle(self, pos + 16 * k + bit - rare_idx) {
+                            return Some(s);
+                        }
+                        mask &= mask - 1;
+                    }
+                }
+            }
+            pos += 64;
+        }
+        while pos + 16 <= end + 1 {
+            let mut mask = u8x16_bitmask(pair(pos)) as u32;
             while mask != 0 {
                 let bit = mask.trailing_zeros() as usize;
-                let start = pos + bit - rare_idx;
-                if let Some(s) = handle(self, start) {
+                if let Some(s) = handle(self, pos + bit - rare_idx) {
                     return Some(s);
                 }
                 mask &= mask - 1;
@@ -739,8 +773,9 @@ impl FwdPrefixSearch {
             let mut lo = [0u8; 16];
             let mut hi = [0u8; 16];
             for &b in &byte_sets_raw[pos] {
-                lo[(b & 0xF) as usize] |= 0x80;
-                hi[(b >> 4) as usize] |= 0x80;
+                let bucket = 1u8 << ((b >> 4) & 7);
+                lo[(b & 0xF) as usize] |= bucket;
+                hi[(b >> 4) as usize] |= bucket;
             }
             masks.lo[i][..16].copy_from_slice(&lo);
             masks.lo[i][16..].copy_from_slice(&lo);

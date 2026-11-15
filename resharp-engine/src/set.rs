@@ -1,7 +1,7 @@
 use resharp_algebra::nulls::{Nullability, NO_TAG};
 use resharp_algebra::{NodeId, RegexBuilder};
 
-use crate::ldfa::{context_at, DFA_DEAD, DFA_INITIAL, LDFA};
+use crate::ldfa::{context_at, DFA_DEAD, DFA_INITIAL, LDFA, Sid};
 use crate::{pattern_flags, Error, Match, Regex, RegexInner, RegexOptions};
 
 /// a span of a [`RegexSet`] match plus the index of the member that produced it.
@@ -81,7 +81,7 @@ impl RegexSet {
             union = b.mk_union(union, tagged);
             len = i + 1;
         }
-        let max_cap = opts.max_dfa_capacity.min(u16::MAX as usize);
+        let max_cap = crate::ldfa::checked_capacity(opts.max_dfa_capacity)?;
         let re = Regex::from_set_node(b, union, opts)?;
         {
             let inner = &mut *re.inner.lock().unwrap_or_else(|e| e.into_inner());
@@ -168,7 +168,7 @@ fn tag_of(inner: &mut RegexInner, input: &[u8], m: Match) -> Result<usize, Error
     let len = input.len();
     let ctx_max = b.lookahead_context_max as usize;
     let mut pos = m.start;
-    let mut state: u16 = if pos == 0 { DFA_INITIAL } else { fwd.pruned };
+    let mut state: Sid = if pos == 0 { DFA_INITIAL } else { fwd.pruned };
     let mut best: Option<u32> = None;
     while state > DFA_DEAD {
         if pos >= m.end {

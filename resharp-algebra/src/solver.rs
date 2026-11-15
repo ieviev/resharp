@@ -383,12 +383,13 @@ impl Solver {
     }
 
     #[inline]
-    pub fn is_sat_id(&mut self, set1: TSetId, set2: TSetId) -> bool {
-        self.and_id(set1, set2) != TSetId::EMPTY
+    pub fn is_sat_id(&self, set1: TSetId, set2: TSetId) -> bool {
+        let (a, b) = (self.get_set_ref(set1), self.get_set_ref(set2));
+        (0..4).any(|i| a[i] & b[i] != 0)
     }
     #[inline]
-    pub fn unsat_id(&mut self, set1: TSetId, set2: TSetId) -> bool {
-        self.and_id(set1, set2) == TSetId::EMPTY
+    pub fn unsat_id(&self, set1: TSetId, set2: TSetId) -> bool {
+        !self.is_sat_id(set1, set2)
     }
 
     pub fn byte_count(&self, set_id: TSetId) -> u32 {
@@ -435,9 +436,9 @@ impl Solver {
     }
 
     #[inline]
-    pub fn contains_id(&mut self, large_id: TSetId, small_id: TSetId) -> bool {
-        let not_large = self.not_id(large_id);
-        self.and_id(small_id, not_large) == TSetId::EMPTY
+    pub fn contains_id(&self, large_id: TSetId, small_id: TSetId) -> bool {
+        let (l, s) = (self.get_set_ref(large_id), self.get_set_ref(small_id));
+        (0..4).all(|i| s[i] & !l[i] == 0)
     }
 
     pub fn u8_to_set_id(&mut self, byte: u8) -> TSetId {

@@ -14,7 +14,7 @@ fuzz_target!(|input: (&str, &[u8])| {
 
     for opts in [
         RegexOptions::default(),
-        RegexOptions::default().hardened(true),
+        RegexOptions::default().hardening(resharp::HardeningMode::Always),
     ] {
         let re = match Regex::with_options(pattern, opts) {
             Ok(re) => re,

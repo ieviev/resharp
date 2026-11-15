@@ -574,3 +574,27 @@ name = "optional_lookbehind_class_collapses_before_non_word_boundary"
 pattern = '(?<=[^a-z])?\B'
 input = "x,,y"
 matches = [[2, 2]]
+
+[[test]]
+name = "wb_star_nonascii_upper_literal"
+pattern = '\b\w*Õ\w*\b'
+input = "tõde Õun ÕÕ x"
+vs_regex = true
+
+[[test]]
+name = "wb_star_nonascii_lower_literal"
+pattern = '\b\w*ö\w*\b'
+input = "töö öö x"
+vs_regex = true
+
+[[test]]
+name = "wb_star_nonascii_range"
+pattern = '\b\w*[äöõü]\w*\b'
+input = "päev Üks x"
+vs_regex = true
+
+[[test]]
+name = "wb_before_nonascii_literal_after_word"
+pattern = '\bä'
+input = "xä ä"
+vs_regex = true

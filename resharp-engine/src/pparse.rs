@@ -432,7 +432,7 @@ impl PosixParser {
     }
 }
 
-// reversing a trailing zero-width lookahead would turn it into a leading lookbehind peeking past the walk's start, which a backward scan can't do; drop it instead
+// reversed, a trailing lookahead would peek past the walk's start
 fn drop_trailing_zero_width_lookahead(b: &mut RegexBuilder, node: NodeId) -> NodeId {
     if node.is_lookahead(b) {
         return if b.get_lookahead_tail(node) == NodeId::MISSING {

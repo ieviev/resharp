@@ -10,7 +10,7 @@ pub(crate) mod union_find;
 use rustc_hash::FxHashMap;
 #[cfg(feature = "reentrant-assert")]
 use rustc_hash::FxHashSet;
-use solver::{Solver, TSetId};
+use solver::{Solver, TSet, TSetId};
 use std::collections::{BTreeSet, VecDeque};
 use std::fmt::Debug;
 use std::fmt::Write;
@@ -338,6 +338,14 @@ impl BuilderFlags {
     pub(crate) const SUBSUME: BuilderFlags = BuilderFlags(1);
 }
 
+#[derive(Clone, Default)]
+struct DerAnalysis {
+    written: Vec<(NodeId, Nullability)>,
+    violated: bool,
+    nodes_start: usize,
+    node_limit: usize,
+}
+
 #[derive(Clone)]
 pub struct RegexBuilder {
     mb: MetadataBuilder,
@@ -356,8 +364,13 @@ pub struct RegexBuilder {
     flags: BuilderFlags,
     /// maximum lookahead context distance before returning `AnchorLimit`.
     pub lookahead_context_max: u32,
+    /// maximum total nodes before matcher construction returns `NodeCapacityExceeded`.
+    pub max_node_capacity: usize,
+    der_analysis: Option<DerAnalysis>,
     mk_binary_memo: FxHashMap<(TRegexId, TRegexId), TRegexId>,
-    clean_cache: FxHashMap<(TSetId, TRegexId), TRegexId>,
+    run_suffix_memo: FxHashMap<(NodeId, NodeId), Vec<NodeId>>,
+    clean_cache: FxHashMap<(TSet, TRegexId), TRegexId>,
+    union_terms_cache: FxHashMap<(TSetId, Vec<TRegexId>), TRegexId>,
     #[cfg(feature = "reentrant-assert")]
     rw_active: FxHashSet<(Kind, NodeId, NodeId)>,
     hit_unsupported_lb_fusion: bool,
@@ -663,6 +676,14 @@ impl Default for RegexBuilder {
     }
 }
 
+#[derive(Clone, Copy)]
+struct ElimTerm {
+    pre: NodeId,
+    body: NodeId,
+    post: NodeId,
+    opaque: bool,
+}
+
 impl RegexBuilder {
     pub fn new() -> RegexBuilder {
         let mut inst = Self {
@@ -675,17 +696,21 @@ impl RegexBuilder {
             tr_cache: FxHashMap::default(),
             flags: BuilderFlags::ZERO,
             lookahead_context_max: 800,
+            max_node_capacity: usize::MAX,
             num_created: 0,
             metadata: Vec::new(),
             reversed: Vec::new(),
             tr_der_center: Vec::new(),
             tr_der_begin: Vec::new(),
+            der_analysis: None,
             temp_vec: Vec::new(),
             nsub_stamp: Vec::new(),
             nsub_epoch: 0,
             nsub_stack: Vec::new(),
             mk_binary_memo: FxHashMap::default(),
+            run_suffix_memo: FxHashMap::default(),
             clean_cache: FxHashMap::default(),
+            union_terms_cache: FxHashMap::default(),
             #[cfg(feature = "reentrant-assert")]
             rw_active: FxHashSet::default(),
             hit_unsupported_lb_fusion: false,
@@ -739,11 +764,6 @@ impl RegexBuilder {
 
     pub fn get_tregex(&self, inst: TRegexId) -> &TRegex<TSetId> {
         &self.tr_array[inst.0 as usize]
-    }
-
-    fn unsat(&mut self, cond1: TSetId, cond2: TSetId) -> bool {
-        let solv = self.solver();
-        !solv.is_sat_id(cond1, cond2)
     }
 
     pub(crate) fn mk_leaf(&mut self, node_id: NodeId) -> TRegexId {
@@ -809,29 +829,38 @@ impl RegexBuilder {
     }
 
     fn clean(&mut self, beta: TSetId, tterm: TRegexId) -> TRegexId {
-        if let Some(&cached) = self.clean_cache.get(&(beta, tterm)) {
-            return cached;
-        }
-        let result = match *self.get_tregex(tterm) {
-            TRegex::Leaf(_) => tterm,
-            TRegex::ITE(alpha, _then_id, _else_id) => {
-                let notalpha = self.mb.solver.not_id(alpha);
-                if self.mb.solver.unsat_id(beta, alpha) {
-                    // beta ⊆ ¬alpha, so beta ∧ ¬alpha = beta
-                    self.clean(beta, _else_id)
-                } else if self.unsat(beta, notalpha) {
-                    // beta ⊆ alpha, so beta ∧ alpha = beta
-                    self.clean(beta, _then_id)
-                } else {
-                    let tc = self.mb.solver.and_id(beta, alpha);
-                    let ec = self.mb.solver.and_id(beta, notalpha);
-                    let new_then = self.clean(tc, _then_id);
-                    let new_else = self.clean(ec, _else_id);
-                    self.mk_ite(alpha, new_then, new_else)
-                }
-            }
+        let beta = self.mb.solver.get_set(beta);
+        self.clean_set(beta, tterm)
+    }
+
+    fn clean_set(&mut self, beta: TSet, tterm: TRegexId) -> TRegexId {
+        let TRegex::ITE(alpha_id, _then_id, _else_id) = self.tr_array[tterm.0 as usize] else {
+            return tterm;
         };
-        self.clean_cache.insert((beta, tterm), result);
+        let alpha = self.mb.solver.get_set(alpha_id);
+        if (0..4).all(|i| beta[i] & alpha[i] == 0) {
+            return self.clean_set(beta, _else_id);
+        }
+        if (0..4).all(|i| beta[i] & !alpha[i] == 0) {
+            return self.clean_set(beta, _then_id);
+        }
+        let branching = matches!(self.tr_array[_then_id.0 as usize], TRegex::ITE(..))
+            && matches!(self.tr_array[_else_id.0 as usize], TRegex::ITE(..));
+        if branching {
+            if let Some(&cached) = self.clean_cache.get(&(beta, tterm)) {
+                return cached;
+            }
+        }
+        let new_then = self.clean_set(beta & alpha, _then_id);
+        let new_else = self.clean_set(beta & !alpha, _else_id);
+        let result = if new_then == _then_id && new_else == _else_id {
+            tterm
+        } else {
+            self.mk_ite(alpha_id, new_then, new_else)
+        };
+        if branching {
+            self.clean_cache.insert((beta, tterm), result);
+        }
         result
     }
 
@@ -895,6 +924,84 @@ impl RegexBuilder {
                 }
             },
         }
+    }
+
+    fn union_terms(
+        &mut self,
+        terms: Vec<TRegexId>,
+        beta: TSetId,
+    ) -> TRegexId {
+        let mut terms: Vec<TRegexId> = terms
+            .into_iter()
+            .map(|mut t| {
+                while beta != TSetId::FULL {
+                    let TRegex::ITE(c, a, b) = self.tr_array[t.0 as usize] else { break };
+                    if self.mb.solver.unsat_id(beta, c) {
+                        t = b;
+                    } else if self.mb.solver.contains_id(c, beta) {
+                        t = a;
+                    } else {
+                        break;
+                    }
+                }
+                t
+            })
+            .collect();
+        terms.sort();
+        terms.dedup();
+        if terms.len() == 1 {
+            return terms[0];
+        }
+        let key = (beta, terms);
+        if let Some(&r) = self.union_terms_cache.get(&key) {
+            return r;
+        }
+        let terms = key.1;
+        let mut top: Option<TSetId> = None;
+        for &t in &terms {
+            if let TRegex::ITE(c, _, _) = self.tr_array[t.0 as usize] {
+                if top.map_or(true, |x| c.0 > x.0) {
+                    top = Some(c);
+                }
+            }
+        }
+        let result = match top {
+            None => {
+                let nodes: Vec<NodeId> = terms
+                    .iter()
+                    .map(|&t| match self.tr_array[t.0 as usize] {
+                        TRegex::Leaf(n) => n,
+                        TRegex::ITE(..) => unreachable!(),
+                    })
+                    .collect();
+                let u = self.mk_unions(nodes.into_iter());
+                self.mk_leaf(u)
+            }
+            Some(c) => {
+                let mut th = Vec::with_capacity(terms.len());
+                let mut el = Vec::with_capacity(terms.len());
+                for &t in &terms {
+                    match self.tr_array[t.0 as usize] {
+                        TRegex::ITE(c2, a, b) if c2 == c => {
+                            th.push(a);
+                            el.push(b);
+                        }
+                        _ => {
+                            th.push(t);
+                            el.push(t);
+                        }
+                    }
+                }
+                let nc = self.mb.solver.not_id(c);
+                let bt = self.mb.solver.and_id(beta, c);
+                let be = self.mb.solver.and_id(beta, nc);
+                let t = self.union_terms(th, bt);
+                let e = self.union_terms(el, be);
+                self.mk_ite(c, t, e)
+            }
+        };
+        self.union_terms_cache.insert((beta, terms), result);
+        result
     }
 
     fn mk_binary(
@@ -1023,7 +1130,6 @@ impl RegexBuilder {
                             self.get_nulls(pending_rel + rel, mask, acc, la_inner);
                         }
                     }
-                    // tail only contributes when body is sat
                     let la_tail = self.get_lookahead_tail(node_id);
                     if la_tail != NodeId::MISSING {
                         self.get_nulls(pending_rel, mask, acc, la_tail);
@@ -1072,8 +1178,6 @@ impl RegexBuilder {
             let kind = self.get_kind(n);
             if kind == Kind::Lookahead {
                 let mut body = self.get_lookahead_inner(n);
-                // mk_lookahead appends TS to body; strip it so we measure actual
-                // consumption length, not the unbounded TS tail.
                 if body.is_concat(self) && body.right(self) == NodeId::TS {
                     body = body.left(self);
                 }
@@ -1125,7 +1229,6 @@ impl RegexBuilder {
             Kind::Concat => min_of(l) + min_of(r),
             Kind::Union => min_of(l).min(min_of(r)),
             Kind::Inter => min_of(l).max(min_of(r)),
-            // fused tail in `right` is a real continuation, not zero-width; must count it
             Kind::Star => 0,
             Kind::Lookbehind | Kind::Lookahead => min_of(r.missing_to_eps()),
             Kind::Ordered => min_of(l),
@@ -1420,12 +1523,38 @@ impl RegexBuilder {
         self.nullability(node_id).0 & mask.0 != Nullability::NEVER.0
     }
 
+    pub fn analyze<T>(&mut self, node_limit: usize, f: impl FnOnce(&mut Self) -> T) -> T {
+        debug_assert!(self.der_analysis.is_none(), "nested analysis");
+        self.der_analysis = Some(DerAnalysis {
+            written: Vec::new(),
+            violated: false,
+            nodes_start: self.num_nodes() as usize,
+            node_limit,
+        });
+        let out = f(self);
+        let scope = self.der_analysis.take().expect("analysis scope");
+        if scope.violated {
+            for (node, mask) in scope.written {
+                let cache = if mask == Nullability::CENTER {
+                    &mut self.tr_der_center
+                } else {
+                    &mut self.tr_der_begin
+                };
+                cache[node.0 as usize] = TRegexId::MISSING;
+            }
+        }
+        out
+    }
+
     pub(crate) fn cache_der(
         &mut self,
         node_id: NodeId,
         result: TRegexId,
         mask: Nullability,
     ) -> TRegexId {
+        if let Some(scope) = self.der_analysis.as_mut() {
+            scope.written.push((node_id, mask));
+        }
         if mask == Nullability::CENTER {
             self.tr_der_center[node_id.0 as usize] = result
         } else {
@@ -1493,6 +1622,26 @@ impl RegexBuilder {
         }
     }
 
+    fn star_then_body(&self, node_id: NodeId) -> Option<(NodeId, NodeId)> {
+        let head = node_id.left(self);
+        let tail = node_id.right(self);
+        if !head.is_star(self) || !tail.is_concat(self) {
+            return None;
+        }
+        let body = head.left(self);
+        if tail.left(self) != body
+            || self.get_min_length_only(body) == 0
+            || self.contains_anchors(body)
+            || body.contains_tags(self)
+            || body.contains_lookaround(self)
+            || tail.contains_tags(self)
+            || tail.contains_lookaround(self)
+        {
+            return None;
+        }
+        Some((body, tail.right(self)))
+    }
+
     pub fn der(&mut self, node_id: NodeId, mask: Nullability) -> Result<TRegexId, ResharpError> {
         debug_assert!(mask != Nullability::ALWAYS, "attempting to derive w always");
         debug_assert!(
@@ -1501,6 +1650,12 @@ impl RegexBuilder {
         );
         if let Some(result) = self.try_cached_der(node_id, mask) {
             return Ok(result);
+        }
+        if let Some(scope) = self.der_analysis.as_ref() {
+            if self.num_nodes() as usize - scope.nodes_start > scope.node_limit {
+                self.der_analysis.as_mut().expect("analysis scope").violated = true;
+                return Err(ResharpError::AnchorLimit);
+            }
         }
         let result = match node_id.kind(self) {
             Kind::Compl => {
@@ -1520,19 +1675,29 @@ impl RegexBuilder {
                 }
             }
             Kind::Union => {
-                let leftd = self.der(node_id.left(self), mask)?;
-                let rightd = self.der(node_id.right(self), mask)?;
-                {
-                    let this = &mut *self;
-                    this.mk_binary(
-                        leftd,
-                        rightd,
-                        &mut (|b, left, right| b.mk_union(left, right)),
-                    )
+                let mut terms = Vec::new();
+                let mut cur = node_id;
+                while cur.kind(self) == Kind::Union {
+                    terms.push(self.der(cur.left(self), mask)?);
+                    cur = cur.right(self);
                 }
+                terms.push(self.der(cur, mask)?);
+                self.union_terms(terms, TSetId::FULL)
+            }
+            Kind::Concat if self.star_then_body(node_id).is_some() => {
+                let (body, rest) = self.star_then_body(node_id).expect("star_then_body");
+                let body_der = self.der(body, mask)?;
+                let star_rest = self.mk_concat(node_id.left(self), rest);
+                let leaf = self.mk_leaf(star_rest);
+                let ldr = self.mk_binary(
+                    body_der,
+                    leaf,
+                    &mut (|b, left, right| b.mk_concat(left, right)),
+                );
+                self.cache_der(node_id, ldr, mask)
             }
             Kind::Concat => {
-                let mut nullable_heads: Vec<(NodeId, TRegexId, TRegexId)> = Vec::new();
+                let mut nullable_heads: Vec<(NodeId, NodeId, TRegexId)> = Vec::new();
                 let mut cur = node_id;
                 let mut acc = loop {
                     if cur.kind(self) != Kind::Concat {
@@ -1543,13 +1708,13 @@ impl RegexBuilder {
                     }
                     let head = cur.left(self);
                     let tail = cur.right(self);
-                    let tail_leaf = self.mk_leaf(tail);
                     let head_der = self.der(head, mask)?;
                     if self.is_nullable(head, mask) {
-                        nullable_heads.push((cur, head_der, tail_leaf));
+                        nullable_heads.push((head, cur, head_der));
                         cur = tail;
                         continue;
                     }
+                    let tail_leaf = self.mk_leaf(tail);
                     let ldr = self.mk_binary(
                         head_der,
                         tail_leaf,
@@ -1557,15 +1722,36 @@ impl RegexBuilder {
                     );
                     break self.cache_der(cur, ldr, mask);
                 };
-                for (n, head_der, tail_leaf) in nullable_heads.into_iter().rev() {
+                let mut end = nullable_heads.len();
+                while end > 0 {
+                    let (head, _, head_der) = nullable_heads[end - 1];
+                    let zed = nullable_heads[end - 1].1.right(self);
+                    let mut start = end - 1;
+                    while start > 0 && nullable_heads[start - 1].0 == head {
+                        start -= 1;
+                    }
+                    let run = end - start;
+                    let mut chain = self
+                        .run_suffix_memo
+                        .remove(&(head, zed))
+                        .unwrap_or_else(|| vec![zed]);
+                    while chain.len() < run {
+                        let last = *chain.last().expect("suffix chain");
+                        let headed = self.mk_concat(head, last);
+                        chain.push(self.mk_union(zed, headed));
+                    }
+                    let suffixes = chain[run - 1];
+                    self.run_suffix_memo.insert((head, zed), chain);
+                    let suffixes_leaf = self.mk_leaf(suffixes);
                     let ldr = self.mk_binary(
                         head_der,
-                        tail_leaf,
+                        suffixes_leaf,
                         &mut (|b, left, right| b.mk_concat(left, right)),
                     );
                     let united =
                         self.mk_binary(ldr, acc, &mut (|b, left, right| b.mk_union(left, right)));
-                    acc = self.cache_der(n, united, mask);
+                    acc = self.cache_der(nullable_heads[start].1, united, mask);
+                    end = start;
                 }
                 acc
             }
@@ -1624,7 +1810,6 @@ impl RegexBuilder {
                     self.is_nullable(la_body, mask),
                 );
                 if self.is_nullable(la_body, mask) {
-                    // nullabilty is taken once, just keep the body
                     let right = node_id.right(self).missing_to_eps();
                     let rder = self.der(right, mask).clone();
                     #[cfg(feature = "debug")]
@@ -1659,7 +1844,6 @@ impl RegexBuilder {
                     }
                 }
 
-                // split only if mk_non_nullable_safe stripped something, else infinite recursion
                 let la_split_applies = la_tail != NodeId::MISSING
                     && self.is_nullable(la_tail, mask)
                     && self.mk_non_nullable_safe(la_tail, mask) != la_tail;
@@ -1701,7 +1885,6 @@ impl RegexBuilder {
                     return self.der(new_union, mask);
                 }
 
-                // la_tail is an unresolved rel countdown, fold its remaining debt into our rel instead of der()'ing it
                 let ambiguous_tail_rel = if la_tail != NodeId::MISSING
                     && la_tail.is_lookahead(self)
                     && self.get_lookahead_tail(la_tail) == NodeId::MISSING
@@ -1713,8 +1896,20 @@ impl RegexBuilder {
                     None
                 };
 
+                let pinned_tail = la_tail != NodeId::MISSING
+                    && self.get_min_max_length(la_tail) == (0, 0)
+                    && self.contains_lookbehind(la_tail)
+                    && !la_tail.contains_lookahead(self);
                 let la_tail_der = if la_tail == NodeId::MISSING || ambiguous_tail_rel.is_some() {
                     TRegexId::MISSING
+                } else if pinned_tail {
+                    if self.is_nullable(la_tail, mask) {
+                        let nulls_mask = self.extract_nulls_mask(la_tail, mask);
+                        let nulls_la = self.mk_lookahead_internal(nulls_mask, NodeId::MISSING, 0);
+                        self.der(nulls_la, mask)?
+                    } else {
+                        TRegexId::BOT
+                    }
                 } else {
                     if self.is_nullable(la_tail, mask) {
                         let nulls_mask = self.extract_nulls_mask(la_tail, mask);
@@ -1729,7 +1924,10 @@ impl RegexBuilder {
                 let la_body_der = self.der(la_body, mask)?;
 
                 if rel != u32::MAX && rel > self.lookahead_context_max {
-                    return Err(ResharpError::AnchorLimit);
+                    match self.der_analysis.as_mut() {
+                        Some(scope) => scope.violated = true,
+                        None => return Err(ResharpError::AnchorLimit),
+                    }
                 }
 
                 let new_rels = if cur_rels.0 == u32::MAX {
@@ -1737,7 +1935,6 @@ impl RegexBuilder {
                 } else {
                     self.mb.nb.add_rel(cur_rels, 1)
                 };
-                // collapse to bare rel only when the run is always masked, a single-valued run can still carry a context restriction like mask=END
                 let single_rel = if let Some(r) = ambiguous_tail_rel {
                     Some(r + 1)
                 } else if new_rels.0 == u32::MAX {
@@ -1941,7 +2138,6 @@ impl RegexBuilder {
                 let left_nullability = inst.left.nullability(self);
                 let nulls_left = self.get_nulls_id(inst.left);
                 let nulls_right_raw = self.get_nulls_id(inst.right);
-                // needs a rel-0 entry in nulls_left, static ALWAYS diverges for a deferred lookahead
                 let nulls_right = if nulls_left != NullsId::EMPTY && self.mb.nb.min_rel(nulls_left) == 0 {
                     nulls_right_raw
                 } else {
@@ -2008,7 +2204,6 @@ impl RegexBuilder {
             Kind::Lookahead => {
                 let left_nullability = inst.left.nullability(self);
                 let nulls = if inst.extra == u32::MAX {
-                    // like Concat(pure_lookahead(la_body), la_tail): la_body's nulls are ours at rel 0, la_tail folds in only when la_body resolves at rel 0.
                     let body_nulls = self.get_nulls_id(inst.left);
                     let tail_nulls_raw = self.get_nulls_id(inst.right);
                     let tail_nulls = if body_nulls != NullsId::EMPTY && self.mb.nb.min_rel(body_nulls) == 0 {
@@ -2016,7 +2211,6 @@ impl RegexBuilder {
                     } else {
                         NullsId::EMPTY
                     };
-                    // body_nulls' rel-0 entries only gate la_body; the whole node also needs la_tail to resolve, unless la_tail is MISSING.
                     let combined = if inst.right.is_missing() {
                         self.mb.nb.or_id(body_nulls, tail_nulls)
                     } else {
@@ -2029,7 +2223,6 @@ impl RegexBuilder {
                 } else {
                     let rels = NullsId(inst.extra);
                     let body_nulls = self.get_nulls_id(inst.left);
-                    // only skip the shift when la_body's rel matches ours exactly (a der()-twin, already counted); a nested independent lookahead still needs shifting
                     let shifted = if inst.left.is_lookahead(self)
                         && self.get_lookahead_rel(inst.left) == self.mb.nb.max_rel(rels)
                     {
@@ -2045,7 +2238,6 @@ impl RegexBuilder {
                         self.mb.nb.nulls_entry_states(rels.0),
                         self.mb.nb.nulls_entry_states(shifted.0),
                     );
-                    // la_tail shares la_body's anchor point, pin it back by the same `rels`
                     let nulls_right = self.get_nulls_id_w_mask(inst.right, left_nullability);
                     let nulls_right_shifted = self.mb.nb.union_shifted(nulls_right, rels);
                     self.mb.nb.or_id(shifted, nulls_right_shifted)
@@ -2100,18 +2292,71 @@ impl RegexBuilder {
         }
     }
 
+    fn lang_subset_pred_star(&mut self, c: TSetId, node: NodeId) -> bool {
+        let mut memo: FxHashMap<NodeId, bool> = FxHashMap::default();
+        self.lang_subset_pred_star_rec(c, node, &mut memo)
+    }
+
+    fn lang_subset_pred_star_rec(
+        &mut self,
+        c: TSetId,
+        node: NodeId,
+        memo: &mut FxHashMap<NodeId, bool>,
+    ) -> bool {
+        if node == NodeId::EPS || node == NodeId::BOT {
+            return true;
+        }
+        if node == NodeId::TS {
+            return self.solver().is_full_id(c);
+        }
+        if let Some(&v) = memo.get(&node) {
+            return v;
+        }
+        let result = match self.get_kind(node) {
+            Kind::Pred => {
+                let p = node.pred_tset(self);
+                let nc = self.solver().not_id(c);
+                let d = self.solver().and_id(p, nc);
+                self.solver().is_empty_id(d)
+            }
+            Kind::Star => {
+                let body = node.left(self);
+                self.lang_subset_pred_star_rec(c, body, memo)
+            }
+            Kind::Concat | Kind::Union => {
+                let l = node.left(self);
+                let r = node.right(self);
+                self.lang_subset_pred_star_rec(c, l, memo)
+                    && self.lang_subset_pred_star_rec(c, r, memo)
+            }
+            Kind::Inter => {
+                let l = node.left(self);
+                let r = node.right(self);
+                self.lang_subset_pred_star_rec(c, l, memo)
+                    || self.lang_subset_pred_star_rec(c, r, memo)
+            }
+            Kind::Begin
+            | Kind::End
+            | Kind::Compl
+            | Kind::Lookbehind
+            | Kind::Lookahead
+            | Kind::Tag
+            | Kind::Ordered => false,
+        };
+        memo.insert(node, result);
+        result
+    }
+
     fn post_init_simplify(&mut self, node_id: NodeId) -> Option<NodeId> {
         match self.get_kind(node_id) {
             Kind::Concat => {
                 let lhs = node_id.left(self);
                 let rhs = node_id.right(self);
-                if let Some(_) = lhs.is_pred_star(self) {
+                if let Some(pred) = lhs.is_pred_star(self) {
                     if let Some(opttail) = rhs.is_opt_v(self) {
-                        let (_, max) = self.get_min_max_length(node_id);
-                        if max < u32::MAX {
-                            if let Some(true) = self.subsumes(lhs, opttail) {
-                                return Some(lhs);
-                            }
+                        let c = pred.pred_tset(self);
+                        if self.lang_subset_pred_star(c, opttail) {
+                            return Some(lhs);
                         }
                     }
                 }
@@ -2191,6 +2436,46 @@ impl RegexBuilder {
 
     pub fn num_nodes(&self) -> u32 {
         self.num_created
+    }
+
+    pub fn compact(&self, roots: &[NodeId]) -> (RegexBuilder, Vec<NodeId>) {
+        debug_assert!(self.der_analysis.is_none());
+        debug_assert!(self.building_reverse_depth == 0 && self.final_ts_depth == 0);
+        let mut nb = RegexBuilder::new();
+        nb.mb = self.mb.clone();
+        nb.flags = self.flags;
+        nb.lookahead_context_max = self.lookahead_context_max;
+        nb.max_node_capacity = self.max_node_capacity;
+        nb.hit_unsupported_lb_fusion = self.hit_unsupported_lb_fusion;
+        let mut map: FxHashMap<NodeId, NodeId> = FxHashMap::default();
+        map.insert(NodeId::MISSING, NodeId::MISSING);
+        let mut stack: Vec<(NodeId, bool)> = roots.iter().map(|&r| (r, false)).collect();
+        while let Some((n, expanded)) = stack.pop() {
+            if map.contains_key(&n) {
+                continue;
+            }
+            let key = &self.array[n.0 as usize];
+            if expanded {
+                let new_key = NodeKey {
+                    kind: key.kind,
+                    left: map[&key.left],
+                    right: map[&key.right],
+                    extra: key.extra,
+                };
+                let id = nb.get_node_id(new_key);
+                map.insert(n, id);
+            } else {
+                stack.push((n, true));
+                stack.push((key.right, false));
+                stack.push((key.left, false));
+            }
+        }
+        let new_roots = roots.iter().map(|r| map[r]).collect();
+        (nb, new_roots)
+    }
+
+    pub fn over_node_capacity(&self) -> bool {
+        self.num_created as usize > self.max_node_capacity
     }
 
     pub fn tree_size(&self, root: NodeId, limit: usize) -> usize {
@@ -2475,6 +2760,163 @@ impl RegexBuilder {
         meta.flags.all_contains_flags()
     }
 
+    pub fn drop_covered_branches(&mut self, node_id: NodeId) -> NodeId {
+        self.drop_covered_inner(node_id, &mut FxHashMap::default())
+    }
+
+    fn drop_covered_inner(
+        &mut self,
+        node_id: NodeId,
+        memo: &mut FxHashMap<NodeId, NodeId>,
+    ) -> NodeId {
+        if !node_id.contains_lookaround(self)
+            && !node_id.contains_tags(self)
+            && !self.contains_anchors(node_id)
+        {
+            return node_id;
+        }
+        if let Some(&r) = memo.get(&node_id) {
+            return r;
+        }
+        let r = match self.get_kind(node_id) {
+            Kind::Union => self.drop_covered_union(node_id, memo),
+            Kind::Concat | Kind::Inter => {
+                let (left, right) = (node_id.left(self), node_id.right(self));
+                let new_left = self.drop_covered_inner(left, memo);
+                let new_right = self.drop_covered_inner(right, memo);
+                if (new_left, new_right) == (left, right) {
+                    node_id
+                } else if self.get_kind(node_id) == Kind::Concat {
+                    self.mk_concat(new_left, new_right)
+                } else {
+                    self.mk_inter(new_left, new_right)
+                }
+            }
+            Kind::Star | Kind::Compl => {
+                let body = node_id.left(self);
+                let new_body = self.drop_covered_inner(body, memo);
+                if new_body == body {
+                    node_id
+                } else if self.get_kind(node_id) == Kind::Star {
+                    self.mk_star(new_body)
+                } else {
+                    self.mk_compl(new_body)
+                }
+            }
+            _ => node_id,
+        };
+        memo.insert(node_id, r);
+        r
+    }
+
+    fn drop_covered_union(
+        &mut self,
+        node_id: NodeId,
+        memo: &mut FxHashMap<NodeId, NodeId>,
+    ) -> NodeId {
+        let mut spine = Vec::new();
+        self.union_spine(node_id, &mut spine);
+        let branches: Vec<NodeId> = spine
+            .iter()
+            .map(|&br| self.drop_covered_inner(br, memo))
+            .collect();
+        let plain: Vec<NodeId> = branches
+            .iter()
+            .copied()
+            .filter(|&x| self.is_plain_branch(x))
+            .collect();
+        let mut kept = Vec::with_capacity(branches.len());
+        for &br in &branches {
+            if self.is_plain_branch(br) || !self.branch_covered(br, &plain) {
+                kept.push(br);
+            }
+        }
+        if kept == spine {
+            return node_id;
+        }
+        kept.into_iter()
+            .reduce(|acc, x| self.mk_union(acc, x))
+            .expect("a plain branch is never dropped, so the union stays non-empty")
+    }
+
+    fn union_spine(&self, node_id: NodeId, out: &mut Vec<NodeId>) {
+        if node_id.is_union(self) {
+            self.union_spine(node_id.left(self), out);
+            self.union_spine(node_id.right(self), out);
+        } else {
+            out.push(node_id);
+        }
+    }
+
+    fn is_plain_branch(&self, node_id: NodeId) -> bool {
+        !node_id.contains_lookaround(self)
+            && !node_id.contains_tags(self)
+            && !self.contains_anchors(node_id)
+    }
+
+    fn branch_covered(&mut self, branch: NodeId, plain: &[NodeId]) -> bool {
+        if plain.is_empty() || branch.contains_tags(self) {
+            return false;
+        }
+        let Some(relaxed) = self.relax_lookarounds(branch, &mut FxHashMap::default()) else {
+            return false;
+        };
+        for &x in plain {
+            let not_x = self.mk_compl(x);
+            let diff = self.mk_inter(relaxed, not_x);
+            if self.is_empty_lang(diff) == Some(true) {
+                return true;
+            }
+        }
+        false
+    }
+
+    fn relax_lookarounds(
+        &mut self,
+        node_id: NodeId,
+        memo: &mut FxHashMap<NodeId, NodeId>,
+    ) -> Option<NodeId> {
+        if let Some(&r) = memo.get(&node_id) {
+            return Some(r);
+        }
+        let r = match self.get_kind(node_id) {
+            Kind::Pred => node_id,
+            Kind::Begin | Kind::End => NodeId::EPS,
+            Kind::Lookahead | Kind::Lookbehind => {
+                let tail = node_id.right(self);
+                if tail.is_missing() {
+                    NodeId::EPS
+                } else {
+                    self.relax_lookarounds(tail, memo)?
+                }
+            }
+            Kind::Concat | Kind::Union | Kind::Inter => {
+                let (left, right) = (node_id.left(self), node_id.right(self));
+                let new_left = self.relax_lookarounds(left, memo)?;
+                let new_right = self.relax_lookarounds(right, memo)?;
+                match self.get_kind(node_id) {
+                    Kind::Concat => self.mk_concat(new_left, new_right),
+                    Kind::Union => self.mk_union(new_left, new_right),
+                    _ => self.mk_inter(new_left, new_right),
+                }
+            }
+            Kind::Star => {
+                let body = self.relax_lookarounds(node_id.left(self), memo)?;
+                self.mk_star(body)
+            }
+            Kind::Compl => {
+                let body = node_id.left(self);
+                if body.contains_lookaround(self) || self.contains_anchors(body) {
+                    return None;
+                }
+                node_id
+            }
+            Kind::Tag | Kind::Ordered => return None,
+        };
+        memo.insert(node_id, r);
+        Some(r)
+    }
+
     pub fn strip_lb(&mut self, node_id: NodeId) -> Result<NodeId, ResharpError> {
         if node_id.is_concat(self) && self.is_begin_only_shape(node_id.left(self)) {
             return self.strip_lb(node_id.right(self));
@@ -2732,6 +3174,37 @@ impl RegexBuilder {
         Ok(result)
     }
 
+    fn split_tail_la_union_arms(&mut self, node: NodeId) -> Option<Vec<NodeId>> {
+        if !node.is_concat(self) {
+            return None;
+        }
+        let mut heads: Vec<NodeId> = Vec::new();
+        let mut last = node;
+        while last.is_concat(self) {
+            heads.push(last.left(self));
+            last = last.right(self);
+        }
+        let fresh_la = |b: &Self, v: NodeId| {
+            v.is_lookahead(b) && matches!(b.get_lookahead_rel(v), 0 | u32::MAX)
+        };
+        let anchored_la = |b: &Self, v: NodeId| {
+            v.is_concat(b) && b.is_pure_anchor_chain(v.left(b)) && fresh_la(b, v.right(b))
+        };
+        if !last.is_union(self)
+            || !last.any_union_component(self, |v| fresh_la(self, v) || anchored_la(self, v))
+        {
+            return None;
+        }
+        let mut arms: Vec<NodeId> = Vec::new();
+        last.iter_union(self, &mut |_, v| arms.push(v));
+        for a in &mut arms {
+            for &h in heads.iter().rev() {
+                *a = self.mk_concat(h, *a);
+            }
+        }
+        Some(arms)
+    }
+
     fn split_leading_lb(&self, node: NodeId) -> Option<(NodeId, NodeId)> {
         if node.is_lookbehind(self) {
             return Some((node, NodeId::EPS));
@@ -2909,7 +3382,7 @@ impl RegexBuilder {
             let mut pending = vec![self.reverse(bottom)?];
             for &n in spine.iter().rev() {
                 let new_right = self.reverse(n.left(self))?;
-                if new_right.is_union(self) || n.right(self).is_union(self) {
+                if !self.reverse_concat_is_plain(n, new_right) {
                     let acc = self.mk_concats(pending.drain(..));
                     let acc = self.reverse_concat(n, new_right, acc)?;
                     self.cache_reversed(n, acc);
@@ -3005,69 +3478,50 @@ impl RegexBuilder {
         }
     }
 
+    fn reverse_concat_is_plain(&self, node_id: NodeId, new_right: NodeId) -> bool {
+        if new_right.is_union(self) {
+            let orig_left = node_id.left(self);
+            let orig_right = node_id.right(self);
+            let is_repeat_duplicate = orig_left == orig_right
+                || (orig_right.is_concat(self) && orig_right.left(self) == orig_left);
+            !(new_right.contains_lookbehind(self)
+                || (is_repeat_duplicate && new_right.contains_lookaround(self)))
+        } else {
+            let orig_right = node_id.right(self);
+            !(orig_right.is_union(self) && orig_right.contains_lookbehind(self))
+        }
+    }
+
     fn reverse_concat(
         &mut self,
         node_id: NodeId,
         new_right: NodeId,
         new_left: NodeId,
     ) -> Result<NodeId, ResharpError> {
-        let out = {
-            if new_right.is_union(self) {
-                let union = new_right;
-                let orig_left = node_id.left(self);
-                let orig_right = node_id.right(self);
-                let is_repeat_duplicate = orig_left == orig_right
-                    || (orig_right.is_concat(self) && orig_right.left(self) == orig_left);
-                if union.left(self).contains_lookbehind(self)
-                    || union.right(self).contains_lookbehind(self)
-                    || (is_repeat_duplicate
-                        && (union.left(self).contains_lookaround(self)
-                            || union.right(self).contains_lookaround(self)))
-                {
-                    if new_left.is_ts() || self.is_zero_width_context_free(new_left) {
-                        let ul = union.left(self);
-                        let ur = union.right(self);
-                        let l = self.distribute_concat_over_union(new_left, ul);
-                        let r = self.distribute_concat_over_union(new_left, ur);
-                        self.mk_union(l, r)
-                    } else {
-                        #[cfg(feature = "debug")]
-                        {
-                            eprintln!(
-                                "left: {:?}, right: {:?}",
-                                self.pp(new_left),
-                                self.pp(union)
-                            );
-                        }
-                        return Err(ResharpError::UnsupportedPattern);
-                    }
-                } else {
-                    self.mk_concat(new_left, new_right)
-                }
-            } else if node_id.right(self).is_union(self) {
-                let union = node_id.right(self);
-                if union.left(self).contains_lookbehind(self)
-                    || union.right(self).contains_lookbehind(self)
-                {
-                    if Some(new_left) == self.cached_reversed(union) {
-                        self.mk_concat(new_left, new_right)
-                    } else if new_left.is_ts() {
-                        let ul = self.reverse(union.left(self))?;
-                        let ur = self.reverse(union.right(self))?;
-                        let l = self.distribute_concat_over_union(new_left, ul);
-                        let r = self.distribute_concat_over_union(new_left, ur);
-                        self.mk_union(l, r)
-                    } else {
-                        return Err(ResharpError::UnsupportedPattern);
-                    }
-                } else {
-                    self.mk_concat(new_left, new_right)
-                }
-            } else {
-                self.mk_concat(new_left, new_right)
+        if self.reverse_concat_is_plain(node_id, new_right) {
+            return Ok(self.mk_concat(new_left, new_right));
+        }
+        if new_right.is_union(self) {
+            if !(new_left.is_ts() || self.is_zero_width_context_free(new_left)) {
+                return Err(ResharpError::UnsupportedPattern);
             }
-        };
-        Ok(out)
+            let (ul, ur) = (new_right.left(self), new_right.right(self));
+            let l = self.distribute_concat_over_union(new_left, ul);
+            let r = self.distribute_concat_over_union(new_left, ur);
+            return Ok(self.mk_union(l, r));
+        }
+        let union = node_id.right(self);
+        if Some(new_left) == self.cached_reversed(union) {
+            return Ok(self.mk_concat(new_left, new_right));
+        }
+        if !new_left.is_ts() {
+            return Err(ResharpError::UnsupportedPattern);
+        }
+        let ul = self.reverse(union.left(self))?;
+        let ur = self.reverse(union.right(self))?;
+        let l = self.distribute_concat_over_union(new_left, ul);
+        let r = self.distribute_concat_over_union(new_left, ur);
+        Ok(self.mk_union(l, r))
     }
 
 
@@ -3173,7 +3627,6 @@ impl RegexBuilder {
                 continue;
             }
 
-            // keep n's own mask, not the calling mask, or a context-restricted entry silently becomes unconditional.
             let eff = if n.is_tail() {
                 let rels = self.mb.nb.single_run(Nullability::ALWAYS, n.rel, u32::MAX);
                 self.mk_lookahead_nid(NodeId::EPS, NodeId::MISSING, rels)
@@ -3268,6 +3721,17 @@ impl RegexBuilder {
         self.get_min_max_length(node) == (0, 0) && !node.contains_lookaround(self)
     }
 
+    fn union_has_pending_tail_lookahead(&self, node: NodeId) -> bool {
+        node.is_union(self)
+            && node.any_union_component(self, |v| {
+                let mut v = v;
+                while v.is_concat(self) {
+                    v = v.right(self);
+                }
+                v.is_lookahead(self) && !self.get_lookahead_tail(v).is_missing()
+            })
+    }
+
     fn union_has_fresh_lookahead(&self, node: NodeId) -> bool {
         if !node.contains_lookahead(self) {
             return false;
@@ -3311,11 +3775,9 @@ impl RegexBuilder {
         }
         if tail.is_lookbehind(self) {
             let tail_prev = self.get_lookbehind_prev(tail);
-            // \z(?<!,) into (?<!,)\z, not much use of it
             if head.is_end() && (tail_prev.is_missing()) {
                 return Some(self.mk_concat(tail, head));
             }
-            // a plain lookahead commutes with a lookbehind; keep it outside prev, don't fold into the opaque unit
             if head.is_lookahead(self)
                 && self.get_lookahead_rel(head) == 0
                 && self.get_min_max_length(head) == (0, 0)
@@ -3364,18 +3826,13 @@ impl RegexBuilder {
                 .ok();
         }
         if head.is_lookahead(self) {
-            // a lookahead is idempotent: head;(EPS|head) == head, else the generic fusion path below treats the self-repeat as an ever-growing rel and underflows fwd_update
             if tail == self.mk_opt(head) {
                 return Some(head);
             }
             if tail == NodeId::BEGIN {
-                // only commute Begin ahead of head if head is entirely zero-width; a fused tail that consumes bytes must keep Begin appended after it via the general fusion path below
                 if self.get_min_max_length(head) == (0, 0) {
                     return Some(self.mk_concat(NodeId::BEGIN, head));
                 }
-                // else: fall through to the general tail-fusion path below,
-                // which appends `Begin` to `head`'s existing fused tail
-                // instead of commuting it.
             }
             let la_tail = self.get_lookahead_tail(head);
             let new_la_tail = self.mk_concat(la_tail.missing_to_eps(), tail);
@@ -3589,20 +4046,44 @@ impl RegexBuilder {
                 let head2 = right.left(self);
 
                 if head1 == head2 {
-                    let t1 = left.right(self);
-                    let t2 = right.right(self);
-                    // opportunistic rewrites
-                    if head1 == NodeId::TS {
-                        if t2.has_concat_tail(self, t1) {
-                            return Some(left);
+                    let mut heads = Vec::new();
+                    let (mut l, mut r) = (left, right);
+                    let mut result = loop {
+                        if l > r {
+                            std::mem::swap(&mut l, &mut r);
                         }
-                        if t1.has_concat_tail(self, t2) {
-                            return Some(right);
+                        if l == r {
+                            break l;
                         }
+                        let key = NodeKey { kind: Union, left: l, right: r, extra: u32::MAX };
+                        if let Some(&cached) = self.key_is_created(&key) {
+                            break cached;
+                        }
+                        if !l.is_kind(self, Concat) || !r.is_kind(self, Concat)
+                            || l.left(self) != r.left(self)
+                        {
+                            break self.mk_union(l, r);
+                        }
+                        let head = l.left(self);
+                        let t1 = l.right(self);
+                        let t2 = r.right(self);
+                        if head == NodeId::TS {
+                            if t2.has_concat_tail(self, t1) {
+                                break l;
+                            }
+                            if t1.has_concat_tail(self, t2) {
+                                break r;
+                            }
+                        }
+                        heads.push((head, key));
+                        l = t1;
+                        r = t2;
+                    };
+                    for (head, key) in heads.into_iter().rev() {
+                        result = self.mk_concat(head, result);
+                        self.merged_optional_prefix_heads.insert(result);
+                        self.init_as(key, result);
                     }
-                    let un = self.mk_union(t1, t2);
-                    let result = self.mk_concat(left.left(self), un);
-                    self.merged_optional_prefix_heads.insert(result);
                     return Some(result);
                 }
 
@@ -3707,11 +4188,9 @@ impl RegexBuilder {
         self.collect_inter_components(left, &mut lc);
         self.collect_inter_components(right, &mut rc);
 
-        // component subset check: fewer constraints = larger language
         if lc.len() <= rc.len() && Self::is_sorted_subset(&lc, &rc) {
             return Some(left);
         }
-        // if rc ⊆ lc then L(right) ⊇ L(left), keep right
         if rc.len() <= lc.len() && Self::is_sorted_subset(&rc, &lc) {
             return Some(right);
         }
@@ -3909,6 +4388,33 @@ impl RegexBuilder {
             if right.is_kind(self, Kind::Concat) {}
         }
 
+        for (u, other) in [(left, right), (right, left)] {
+            let fresh_la = |b: &Self, v: NodeId| {
+                v.is_lookahead(b) && matches!(b.get_lookahead_rel(v), 0 | u32::MAX)
+            };
+            if !other.contains_lookahead(self) && u.is_union(self) && u.any_union_component(self, |v| fresh_la(self, v) || (v.is_concat(self) && fresh_la(self, v.left(self)))) {
+                let mut acc = NodeId::BOT;
+                u.iter_union(self, &mut |b, v| {
+                    let inter = b.mk_inter(v, other);
+                    acc = b.mk_union(inter, acc);
+                });
+                return Some(acc);
+            }
+        }
+
+        for (c, other) in [(left, right), (right, left)] {
+            if !other.contains_lookahead(self) {
+                if let Some(arms) = self.split_tail_la_union_arms(c) {
+                    let mut acc = NodeId::BOT;
+                    for &arm in arms.iter().rev() {
+                        let inter = self.mk_inter(arm, other);
+                        acc = self.mk_union(inter, acc);
+                    }
+                    return Some(acc);
+                }
+            }
+        }
+
         {
             let safe_la_rel = |b: &Self, la: NodeId| {
                 let rel = b.get_lookahead_rel(la);
@@ -3924,18 +4430,31 @@ impl RegexBuilder {
                 && right.is_concat(self)
                 && right.left(self).is_lookahead(self)
                 && safe_la_rel(self, right.left(self));
-            if l_is_la || r_is_la || l_is_cla || r_is_cla {
-                let (la_node, other, concat_body) = if r_is_la {
-                    (right, left, NodeId::MISSING)
+            let anchor_la = |b: &Self, v: NodeId| {
+                v.is_concat(b)
+                    && b.is_pure_anchor_chain(v.left(b))
+                    && v.right(b).is_lookahead(b)
+                    && safe_la_rel(b, v.right(b))
+            };
+            let l_is_ala = !l_is_la && !l_is_cla && anchor_la(self, left);
+            let r_is_ala = !r_is_la && !r_is_cla && anchor_la(self, right);
+            if l_is_la || r_is_la || l_is_cla || r_is_cla || l_is_ala || r_is_ala {
+                let (la_node, other, concat_body, anchors) = if r_is_la {
+                    (right, left, NodeId::MISSING, NodeId::EPS)
                 } else if l_is_la {
-                    (left, right, NodeId::MISSING)
+                    (left, right, NodeId::MISSING, NodeId::EPS)
                 } else if r_is_cla {
-                    (right.left(self), left, right.right(self))
+                    (right.left(self), left, right.right(self), NodeId::EPS)
+                } else if l_is_cla {
+                    (left.left(self), right, left.right(self), NodeId::EPS)
+                } else if r_is_ala {
+                    (right.right(self), left, NodeId::MISSING, right.left(self))
                 } else {
-                    (left.left(self), right, left.right(self))
+                    (left.right(self), right, NodeId::MISSING, left.left(self))
                 };
                 let la_body = la_node.left(self);
                 let la_tail = self.get_lookahead_tail(la_node).missing_to_eps();
+                let la_tail = self.mk_concat(anchors, la_tail);
                 let inter_right = if concat_body.is_missing() {
                     la_tail
                 } else {
@@ -3970,7 +4489,12 @@ impl RegexBuilder {
         }
 
         for (star, other) in [(left, right), (right, left)] {
-            if star.is_pred_star(self).is_some() && other.is_concat(self) && other.right(self).is_lookahead(self) {
+            if star.is_pred_star(self).is_some() && other.is_union(self) && other.contains_lookahead(self) {
+                let l = self.mk_inter(star, other.left(self));
+                let r = self.mk_inter(star, other.right(self));
+                return Some(self.mk_union(l, r));
+            }
+            if star.is_pred_star(self).is_some() && other.is_concat(self) && other.right(self).contains_lookahead(self) {
                 let ol = other.left(self);
                 let or = other.right(self);
                 let nl = self.mk_inter(star, ol);
@@ -4305,7 +4829,6 @@ impl RegexBuilder {
                 break head;
             }
 
-            // normalize concats to right
             if head.is_kind(self, Kind::Concat) {
                 let mut heads: Vec<NodeId> = Vec::new();
                 let mut bottom = head;
@@ -4321,7 +4844,7 @@ impl RegexBuilder {
             }
 
 
-            if head.is_union(self) && head.contains_lookahead(self) && tail.is_lookahead(self) {
+            if head.is_union(self) && head.contains_lookahead(self) && (tail.is_lookahead(self) || (tail.is_union(self) && self.union_has_pending_tail_lookahead(head) && self.union_has_pending_tail_lookahead(tail))) {
                 let (hl, hr) = (head.left(self), head.right(self));
                 let l = self.mk_concat(hl, tail);
                 let r = self.mk_concat(hr, tail);
@@ -4362,7 +4885,6 @@ impl RegexBuilder {
                 }
             }
 
-            // distribute over the union, folding wholesale into the lookbehind's `prev` lets an always-nullable arm mask the other arm's positional requirement
             if head.is_union(self) && tail.is_lookbehind(self) {
                 let (hl, hr) = (head.left(self), head.right(self));
                 let l = self.mk_concat(hl, tail);
@@ -4371,7 +4893,6 @@ impl RegexBuilder {
                 break self.init_as(key, u);
             }
 
-            // same distribution problem as above but with the opaque lookaround node on the left
             if self.building_reverse_depth > 0
                 && head.is_union(self)
                 && head.contains_lookaround(self)
@@ -4468,14 +4989,12 @@ impl RegexBuilder {
             }
 
             match (self.get_kind(head), self.get_kind(tail)) {
-                // merge stars
                 (Kind::Star, Kind::Concat) if head.is_star(self) => {
                     let rl = tail.left(self);
                     if head == rl {
                         break self.init_as(key, tail);
                     }
                 }
-                // attempt longer concat rw
                 (_, Kind::Concat) => {
                     let curr = head;
                     let h2 = self.mk_concat(curr, tail.left(self));
@@ -4509,7 +5028,6 @@ impl RegexBuilder {
                 false => self.mk_concat(NodeId::TS, lb_body),
             }
         };
-        // lb_body starts with TS after normalization above, so EPS case cannot trigger
         self.mk_lookbehind_internal(lb_body, lb_prev).unwrap()
     }
 
@@ -4562,7 +5080,6 @@ impl RegexBuilder {
         } else {
             la_body
         };
-        // LNF: lookahead must end with ts
         let la_body = {
             match self.ends_with_ts(la_body) {
                 true => la_body,
@@ -4637,7 +5154,6 @@ impl RegexBuilder {
         }
     }
 
-    // rel max = carries no nullability, can potentially rw to intersection
     pub fn mk_lookahead_internal(&mut self, la_body: NodeId, la_tail: NodeId, rel: u32) -> NodeId {
         self.mk_lookahead_internal_inner(la_body, la_tail, rel)
     }
@@ -4762,13 +5278,11 @@ impl RegexBuilder {
             };
             if let Some((head, rest)) = union_head {
                 if !head.contains_tags(self) && !rest.contains_tags(self) {
-                    // (?=A|B)tail == (?=A)tail | (?=B)tail: tail fusion distributes over union like it does over Concat/Inter, so a variable-byte-length class head still reaches the single-Pred fusion below instead of getting stuck at rel=u32::MAX
                     let (a, b) = (head.left(self), head.right(self));
                     let body_a = self.mk_concat(a, rest);
                     let body_b = self.mk_concat(b, rest);
                     let la = self.mk_lookahead_internal(body_a, la_tail, rel);
                     let lb = self.mk_lookahead_internal(body_b, la_tail, rel);
-                    // plain mk_union(la, lb) can cycle forever: its union|union rewrite rule re-merges la/lb back into the exact union this branch just split apart. la/lb are already fully reduced, so skip the rewrite pass here.
                     return self.mk_union_no_rewrite(la, lb);
                 }
             }
@@ -5350,7 +5864,7 @@ impl RegexBuilder {
         if let Some(id) = self.key_is_created(&key) {
             return *id;
         }
-        if body_id.is_begin() || body_id.is_end() {
+        if body_id == NodeId::EPS || body_id.is_begin() || body_id.is_end() {
             return NodeId::EPS;
         }
         // _*{500} is still _*
@@ -5795,6 +6309,36 @@ impl RegexBuilder {
         (prefix, false)
     }
 
+    pub fn required_literal_runs(&self, node: NodeId) -> Vec<Vec<u8>> {
+        let mut runs = Vec::new();
+        let mut run = Vec::new();
+        let mut stack = vec![node];
+        while let Some(curr) = stack.pop() {
+            if curr.is_concat(self) {
+                stack.push(curr.right(self));
+                stack.push(curr.left(self));
+                continue;
+            }
+            let byte = if curr.is_pred(self) {
+                self.solver_ref().single_byte(TSetId(self.get_extra(curr)))
+            } else {
+                None
+            };
+            match byte {
+                Some(byte) => run.push(byte),
+                None => {
+                    if !run.is_empty() {
+                        runs.push(std::mem::take(&mut run));
+                    }
+                }
+            }
+        }
+        if !run.is_empty() {
+            runs.push(run);
+        }
+        runs
+    }
+
     #[allow(dead_code)]
     pub(crate) fn mk_bytestring(&mut self, raw_str: &[u8]) -> NodeId {
         let mut result = NodeId::EPS;
@@ -6171,7 +6715,6 @@ impl RegexBuilder {
                 } else if FWD {
                     parts.iter().rev().fold(NodeId::BOT, |acc, &p| self.mk_union(p, acc))
                 } else {
-                    // (body,tail) fully determines accepted bytes regardless of rel/extra, so merge lookaheads keyed by (body, tail).
                     let mut rels_map: FxHashMap<(NodeId, NodeId), NullsId> = FxHashMap::default();
                     for &p in &parts {
                         if p.is_lookahead(self) && self.get_extra(p) != u32::MAX {
@@ -6420,69 +6963,150 @@ impl RegexBuilder {
         if !self.contains_look(node_id) {
             return Some(node_id);
         }
-        match self.get_kind(node_id) {
-            Kind::Pred | Kind::Begin | Kind::End | Kind::Tag => Some(node_id),
-            Kind::Concat => {
-                let left = node_id.left(self);
-                let right = node_id.right(self);
-                let elim_l = self.try_elim_lookarounds(left)?;
-                let elim_r = self.try_elim_lookarounds(right)?;
-                let rw = self.mk_concat(elim_l, elim_r);
-                Some(rw)
+        let terms = self.elim_terms(node_id)?;
+        let mut out = NodeId::BOT;
+        for t in terms {
+            let mut parts = Vec::new();
+            if t.pre != NodeId::TS {
+                parts.push(t.pre);
             }
-            Kind::Union => {
-                let left = node_id.left(self);
-                let right = node_id.right(self);
-                let elim_l = self.try_elim_lookarounds(left)?;
-                let elim_r = self.try_elim_lookarounds(right)?;
-                let rw = self.mk_union(elim_l, elim_r);
-                Some(rw)
+            parts.push(t.body);
+            if t.post != NodeId::TS {
+                parts.push(t.post);
             }
+            let n = self.mk_concats(parts.into_iter());
+            out = self.mk_union(out, n);
+        }
+        Some(out)
+    }
 
-            Kind::Star => {
-                let body = node_id.left(self);
-                let elim_l = self.try_elim_lookarounds(body)?;
-                Some(self.mk_star(elim_l))
+    fn elim_terms(&mut self, node_id: NodeId) -> Option<Vec<ElimTerm>> {
+        const MAX_TERMS: usize = 64;
+        let plain = |n| ElimTerm { pre: NodeId::TS, body: n, post: NodeId::TS, opaque: false };
+        if !self.contains_look(node_id) {
+            return Some(vec![plain(node_id)]);
+        }
+        let terms = match self.get_kind(node_id) {
+            Kind::Pred | Kind::Begin | Kind::End | Kind::Tag => vec![plain(node_id)],
+            Kind::Union => {
+                let mut t = self.elim_terms(node_id.left(self))?;
+                t.extend(self.elim_terms(node_id.right(self))?);
+                t
             }
-            Kind::Compl => {
-                let left = node_id.left(self);
-                let elim_l = self.try_elim_lookarounds(left)?;
-                Some(self.mk_compl(elim_l))
+            Kind::Inter => {
+                let tl = self.elim_terms(node_id.left(self))?;
+                let tr = self.elim_terms(node_id.right(self))?;
+                let mut t = Vec::new();
+                for l in &tl {
+                    for r in &tr {
+                        if l.opaque || r.opaque {
+                            return None;
+                        }
+                        t.push(ElimTerm {
+                            pre: self.mk_inter(l.pre, r.pre),
+                            body: self.mk_inter(l.body, r.body),
+                            post: self.mk_inter(l.post, r.post),
+                            opaque: false,
+                        });
+                    }
+                }
+                t
+            }
+            Kind::Concat => {
+                let tl = self.elim_terms(node_id.left(self))?;
+                let tr = self.elim_terms(node_id.right(self))?;
+                let mut t = Vec::new();
+                for l in &tl {
+                    for r in &tr {
+                        if l.opaque || l.post != NodeId::TS {
+                            return None;
+                        }
+                        let pre = if r.pre == NodeId::TS {
+                            l.pre
+                        } else if self.get_min_max_length(l.body).1 == 0 {
+                            self.mk_inter(l.pre, r.pre)
+                        } else {
+                            return None;
+                        };
+                        t.push(ElimTerm {
+                            pre,
+                            body: self.mk_concat(l.body, r.body),
+                            post: r.post,
+                            opaque: r.opaque,
+                        });
+                    }
+                }
+                t
             }
             Kind::Lookahead => {
                 let rel = self.get_lookahead_rel(node_id);
-                if rel != 0 {
+                if rel != 0 && rel != u32::MAX {
                     return None;
                 }
-                let lbody = self.get_lookahead_inner(node_id);
-                let ltail = self.get_lookahead_tail(node_id).missing_to_eps();
-                let elim_l = self.try_elim_lookarounds(lbody)?;
-                let elim_r = self.try_elim_lookarounds(ltail)?;
-                let lbody_ts = self.mk_concat(elim_l, NodeId::TS);
-                let ltail_ts = self.mk_concat(elim_r, NodeId::TS);
-                let rw = self.mk_inter(lbody_ts, ltail_ts);
-                Some(rw)
+                let inner = self.get_lookahead_inner(node_id);
+                if self.contains_look(inner) {
+                    return None;
+                }
+                let cond = self.mk_concat(inner, NodeId::TS);
+                let tail = self.get_lookahead_tail(node_id).missing_to_eps();
+                let tt = self.elim_terms(tail)?;
+                let mut t = Vec::new();
+                for r in &tt {
+                    if r.pre != NodeId::TS || r.opaque {
+                        return None;
+                    }
+                    if self.get_min_max_length(r.body).1 == 0 {
+                        t.push(ElimTerm {
+                            pre: NodeId::TS,
+                            body: r.body,
+                            post: self.mk_inter(cond, r.post),
+                            opaque: false,
+                        });
+                    } else {
+                        let rest = self.mk_concat(r.body, r.post);
+                        let rest_ts = self.mk_concat(rest, NodeId::TS);
+                        t.push(ElimTerm {
+                            pre: NodeId::TS,
+                            body: self.mk_inter(cond, rest_ts),
+                            post: NodeId::TS,
+                            opaque: true,
+                        });
+                    }
+                }
+                t
             }
             Kind::Lookbehind => {
-                let linner = self.get_lookbehind_inner(node_id);
-                let lprev = self.get_lookbehind_prev(node_id).missing_to_eps();
-                let elim_l = self.try_elim_lookarounds(linner)?;
-                let elim_r = self.try_elim_lookarounds(lprev)?;
-                let lbody_ts = self.mk_concat(NodeId::TS, elim_l);
-                let ltail_ts = self.mk_concat(NodeId::TS, elim_r);
-                let rw = self.mk_inter(lbody_ts, ltail_ts);
-                Some(rw)
+                let inner = self.get_lookbehind_inner(node_id);
+                if self.contains_look(inner) {
+                    return None;
+                }
+                let ctx = self.mk_concat(NodeId::TS, inner);
+                let prev = self.get_lookbehind_prev(node_id);
+                let tp = if prev.is_missing() {
+                    vec![ElimTerm { pre: NodeId::TS, body: NodeId::EPS, post: NodeId::TS, opaque: false }]
+                } else {
+                    self.elim_terms(prev)?
+                };
+                let mut t = Vec::new();
+                for p in &tp {
+                    if p.opaque || p.post != NodeId::TS || self.get_min_max_length(p.body).1 != 0 {
+                        return None;
+                    }
+                    t.push(ElimTerm {
+                        pre: self.mk_inter(p.pre, ctx),
+                        body: p.body,
+                        post: NodeId::TS,
+                        opaque: false,
+                    });
+                }
+                t
             }
-            Kind::Inter => {
-                let left = node_id.left(self);
-                let right = node_id.right(self);
-                let elim_l = self.try_elim_lookarounds(left)?;
-                let elim_r = self.try_elim_lookarounds(right)?;
-                let rw = self.mk_inter(elim_l, elim_r);
-                Some(rw)
-            }
-            Kind::Ordered => None,
+            Kind::Star | Kind::Compl | Kind::Ordered => return None,
+        };
+        if terms.len() > MAX_TERMS {
+            return None;
         }
+        Some(terms)
     }
 
     pub(crate) fn mk_non_nullable_safe(&mut self, node: NodeId, mask: Nullability) -> NodeId {
@@ -6496,7 +7120,6 @@ impl RegexBuilder {
         self.mk_inter(NodeId::TOPPLUS, node)
     }
 
-    // only a chain built purely from EPS/Begin/End/Tag is safe to drop when nullable at `mask`; a Lookahead/Lookbehind can still wrap a real Pred byte-test that must be kept
     fn is_pure_anchor_chain(&self, node: NodeId) -> bool {
         if node == NodeId::EPS {
             return true;
@@ -6518,8 +7141,19 @@ impl RegexBuilder {
             let nr = self.drop_mask_nullable_disjuncts(r, mask);
             return self.mk_union(nl, nr);
         }
-        // Lookbehind: never touch `inner`, only recurse into `prev`.
-        // Concat: if left is an anchor chain nullable at mask, recurse into right alone
+        if self.get_kind(node) == Kind::Inter {
+            let l = node.left(self);
+            let r = node.right(self);
+            let nl = self.drop_mask_nullable_disjuncts(l, mask);
+            if nl != l {
+                return self.mk_inter(nl, r);
+            }
+            let nr = self.drop_mask_nullable_disjuncts(r, mask);
+            if nr != r {
+                return self.mk_inter(l, nr);
+            }
+            return node;
+        }
         if self.get_kind(node) == Kind::Concat {
             let l = node.left(self);
             let r = node.right(self);
@@ -6613,7 +7247,6 @@ impl RegexBuilder {
     }
 
     fn is_empty_lang_internal(&mut self, initial_node: NodeId) -> Result<NodeFlags, ResharpError> {
-        // without inter, no need to check
         if !self.get_meta_flags(initial_node).contains_inter() {
             return Ok(NodeFlags::ZERO);
         }

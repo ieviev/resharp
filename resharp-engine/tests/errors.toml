@@ -152,36 +152,6 @@ expect_error = true
 reason = "same shape via doubled negation"
 
 [[test]]
-name = "quantified_word_boundary_bounded"
-pattern = '\b{1,3}'
-expect_error = true
-reason = "quantified word boundary rejected"
-
-[[test]]
-name = "quantified_word_boundary_after_end_anchor"
-pattern = '\z\b{1,3}'
-expect_error = true
-reason = "quantified word boundary rejected"
-
-[[test]]
-name = "quantified_word_boundary_after_literal_end_anchor"
-pattern = 'a\z\b{1,3}'
-expect_error = true
-reason = "quantified word boundary rejected"
-
-[[test]]
-name = "quantified_non_word_boundary_bounded"
-pattern = '\B{1,3}'
-expect_error = true
-reason = "quantified word boundary rejected"
-
-[[test]]
-name = "quantified_non_word_boundary_after_end_anchor"
-pattern = '\z\B{1,3}'
-expect_error = true
-reason = "quantified word boundary rejected"
-
-[[test]]
 name = "grouped_lookahead_before_non_word_boundary"
 pattern = '(?=c)\B'
 expect_error = true
@@ -315,3 +285,42 @@ ascii = true
 expect_error = true
 reason = "UnsupportedPattern: repeat unrolling duplicates a captured lookahead alternation"
 
+[[test]]
+name = "lookbehind_in_repeated_consuming_body_1"
+pattern = '(?:(?<!a)|a){1,2}b'
+expect_error = true
+
+[[test]]
+name = "lookbehind_in_repeated_consuming_body_2"
+pattern = '(?:(?<!a)|a){2}b'
+expect_error = true
+
+[[test]]
+name = "lookbehind_in_repeated_consuming_body_3"
+pattern = '(?:(?<!a)|a)+b'
+expect_error = true
+
+[[test]]
+name = "lookbehind_in_repeated_consuming_body_4"
+pattern = '(?:(?<=a)b)*'
+expect_error = true
+
+[[test]]
+name = "lookbehind_in_repeated_consuming_body_5"
+pattern = '~([ab]*)&(?:(?<!a)|a){1,3}b{1,3}'
+expect_error = true
+
+[[test]]
+name = "word_boundary_after_complement_in_inter_union_1"
+pattern = '[ab]&(?:~(\w)\b)?'
+expect_error = true
+
+[[test]]
+name = "word_boundary_after_complement_in_inter_union_2"
+pattern = '[ab]{1,3}&(?:~(\w)\b)?'
+expect_error = true
+
+[[test]]
+name = "word_boundary_after_complement_in_inter_union_3"
+pattern = '(?:~(\w)\b)?&[ab]{1,3}'
+expect_error = true

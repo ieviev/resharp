@@ -4,7 +4,7 @@ use resharp_algebra::nulls::{
 use resharp_algebra::RegexBuilder;
 use rustc_hash::FxHashMap;
 
-use crate::ldfa::{context_at, DFA_DEAD, DFA_INITIAL, LDFA};
+use crate::ldfa::{context_at, DFA_DEAD, DFA_INITIAL, LDFA, Sid};
 use crate::{Error, Match};
 
 const NOT_NULLABLE: u32 = u32::MAX;
@@ -24,8 +24,8 @@ struct Action {
 
 pub struct Linear {
     stride: usize,
-    sets: Vec<Box<[u16]>>,
-    set_map: FxHashMap<Box<[u16]>, u32>,
+    sets: Vec<Box<[Sid]>>,
+    set_map: FxHashMap<Box<[Sid]>, u32>,
     actions: Vec<Action>,
     act_tab: Vec<u32>,
     begin_acts: FxHashMap<u32, u32>,
@@ -40,7 +40,7 @@ pub struct Linear {
     buf: Vec<u32>,
 }
 
-fn best_rel(ldfa: &LDFA, sid: u16, ctx: Nullability) -> u32 {
+fn best_rel(ldfa: &LDFA, sid: Sid, ctx: Nullability) -> u32 {
     let eid = ldfa.effects_id[sid as usize] as u32;
     let hit = match eid {
         EID_NONE => false,
@@ -86,7 +86,7 @@ impl Linear {
         lin
     }
 
-    fn register(&mut self, ldfa: &LDFA, set: Box<[u16]>) -> Result<u32, Error> {
+    fn register(&mut self, ldfa: &LDFA, set: Box<[Sid]>) -> Result<u32, Error> {
         if let Some(&id) = self.set_map.get(&set) {
             return Ok(id);
         }
@@ -119,20 +119,20 @@ impl Linear {
         ldfa: &mut LDFA,
         from: u32,
         mt: u32,
-        spawn: Option<u16>,
+        spawn: Option<Sid>,
     ) -> Result<u32, Error> {
         let src = self.sets[from as usize].clone();
-        let mut targets: Vec<u16> = Vec::with_capacity(src.len() + 1);
+        let mut targets: Vec<Sid> = Vec::with_capacity(src.len() + 1);
         for &s in src.iter() {
             targets.push(ldfa.lazy_transition(b, s, mt)?);
         }
-        let mut next: Vec<u16> = targets.iter().copied().filter(|&t| t > DFA_DEAD).collect();
+        let mut next: Vec<Sid> = targets.iter().copied().filter(|&t| t > DFA_DEAD).collect();
         if let Some(s) = spawn.filter(|&s| s > DFA_DEAD) {
             next.push(s);
         }
         next.sort_unstable();
         next.dedup();
-        let slot = |t: u16| -> u16 {
+        let slot = |t: Sid| -> u16 {
             if t > DFA_DEAD { next.binary_search(&t).unwrap() as u16 } else { DIED }
         };
         let map: Box<[u16]> = targets.iter().map(|&t| slot(t)).collect();

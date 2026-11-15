@@ -63,7 +63,7 @@ pub unsafe extern "C" fn resharp_is_match(r: *const Regex, input: *const u8, len
     }
 }
 
-/// Writes up to `cap/2` `(start, end)` pairs into `out`; returns total match count (may exceed pairs written) or -1 on error.
+/// Writes up to `cap/2` `(start, end)` pairs into `out`. Returns the total match count (may exceed pairs written) or -1 on error.
 ///
 /// # Safety
 /// `r` live from `resharp_compile`, `input`/`out` valid for `len`/`cap`.
@@ -128,7 +128,7 @@ pub unsafe extern "C" fn resharp_capture_slots(r: *const Regex) -> usize {
     (*r).capture_names().len()
 }
 
-/// Writes up to `cap / (2 * slots)` rows into `out`, one per match: `resharp_capture_slots(r)` `(start, end)` pairs each, pair 0 the whole match, absent groups `(SIZE_MAX, SIZE_MAX)`. Returns total match count (may exceed rows written) or -1 on error.
+/// Writes up to `cap / (2 * slots)` rows into `out`, one per match, each `resharp_capture_slots(r)` pairs (pair 0 = whole match, absent group = `(SIZE_MAX, SIZE_MAX)`). Returns the total match count or -1 on error.
 ///
 /// # Safety
 /// `r` live from `resharp_compile`, `input`/`out` valid for `len`/`cap`.

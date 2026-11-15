@@ -290,7 +290,7 @@ kind = "AnchoredFwd"
 [[test]]
 name = "query_key_value"
 pattern = '([^/?&]+)=([^?&]+)'
-kind = "PotentialStart"
+kind = "None"
 
 [[test]]
 name = "leading_literal_then_wide_interior_loop_no_fwd"
@@ -335,3 +335,28 @@ conv_literal = "."
 name = "no_convergence_on_unbounded_interior_before_trailing_star"
 pattern = 'x[ax]*c(.|\n)*'
 kind = "None"
+
+[[test]]
+name = "bounded_class_run_before_literal_suffix_prefers_rev_literal"
+pattern = '[0-9A-Fa-f]{64}\.json'
+kind = "AnchoredRev"
+
+[[test]]
+name = "bounded_range_class_run_before_literal_suffix_prefers_rev_literal"
+pattern = '[0-9A-Fa-f]{6,64}\.json'
+kind = "AnchoredRev"
+
+[[test]]
+name = "frequent_single_byte_literal_uses_forward_literal"
+pattern = '>'
+kind = "AnchoredFwd"
+
+[[test]]
+name = "frequent_byte_pair_literal_uses_forward_literal"
+pattern = '=='
+kind = "AnchoredFwd"
+
+[[test]]
+name = "long_literal_potential_fwd_not_truncated"
+pattern = "abcdefghijklmnopqrstuvwxyz"
+potential_fwd = "a;b;c;d;e;f;g;h;i;j;k;l;m;n;o;p;q;r;s;t;u;v;w;x;y;z"

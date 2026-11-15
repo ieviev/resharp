@@ -2047,3 +2047,159 @@ name = "two_optional_neg_lookbehinds_collapse_before_lookahead"
 pattern = '((?<!c))?((?<!c))?(?=a)'
 input = "aca"
 matches = [[0, 0], [2, 2]]
+
+[[test]]
+name = "la_union_star_inter_lookahead_tail_1"
+pattern = 'a(?:(?=b)|c)&.*'
+input = "ab"
+matches = [[0, 1]]
+
+[[test]]
+name = "la_union_star_inter_lookahead_tail_2"
+pattern = 'a(?:(?=b)|c)&.*'
+input = "aab"
+matches = [[1, 2]]
+
+[[test]]
+name = "la_union_star_inter_lookahead_tail_3"
+pattern = 'a(?:(?=\n)|c)&.*'
+input = "a\n"
+matches = [[0, 1]]
+
+[[test]]
+name = "la_union_star_inter_lookahead_tail_4"
+pattern = 'a(?:(?=\n)|c)&.*'
+input = "ab"
+matches = []
+
+[[test]]
+name = "la_union_star_inter_lookahead_tail_5"
+pattern = 'ab(?:(?=c)|d)&.*'
+input = "abc"
+matches = [[0, 2]]
+
+[[test]]
+name = "la_union_star_inter_lookahead_tail_6"
+pattern = '~([ab])a(?:(?=b)|a)&.*'
+input = "ab"
+matches = [[0, 1]]
+
+[[test]]
+name = "la_tail_inter_nullable_only_at_begin_lookahead"
+pattern = 'x*(?=\n)(?:\A?&(?:\A|a))'
+input = "\n"
+matches = [[0, 0]]
+
+[[test]]
+name = "la_tail_inter_nullable_only_at_begin_end_anchor"
+pattern = 'x*$(?:\A?&(?:\A|a))'
+input = "\n"
+matches = [[0, 0]]
+
+[[test]]
+name = "star_optional_lookbehind_inter_union_lookahead"
+pattern = '(?=b)(?:(?<=a)?)*&(?:(?=b)|b)'
+input = "b"
+matches = [[0, 0]]
+
+[[test]]
+name = "optional_union_lookbehind_before_literal"
+pattern = '(?:(?<!a)|a)?b'
+input = "b"
+matches = [[0, 1]]
+
+[[test]]
+name = "star_optional_lookbehind_before_literal"
+pattern = '(?:(?<=[ab])?)*c'
+input = "c"
+matches = [[0, 1]]
+
+[[test]]
+name = "begin_anchor_nonword_boundary_repeat_inter_1"
+pattern = '\A\B\A\B&\A'
+input = "\n"
+matches = [[0, 0]]
+
+[[test]]
+name = "begin_anchor_nonword_boundary_repeat_inter_2"
+pattern = '(?:\B\A){1,3}&\A'
+input = "\n"
+matches = [[0, 0]]
+
+[[test]]
+name = "begin_anchor_nonword_boundary_repeat_inter_3"
+pattern = '(?:\B\A){1,3}&\A?'
+input = "\n"
+matches = [[0, 0]]
+
+[[test]]
+name = "begin_anchor_nonword_boundary_repeat_inter_4"
+pattern = '(?:b{1,3}|(?:\B\A){1,3}&(?:\Ab)?)'
+input = "\n"
+matches = [[0, 0]]
+
+[[test]]
+name = "lookahead_union_arm_inter_nullable_span_1"
+pattern = 'x*(?:(?=b)|c)&(?:|y)'
+input = "b"
+matches = [[0, 0]]
+
+[[test]]
+name = "lookahead_union_arm_inter_nullable_span_2"
+pattern = 'x*(?:(?!a)\A|c)&(?:|y)'
+input = "b"
+matches = [[0, 0]]
+
+[[test]]
+name = "lookahead_union_arm_inter_nullable_span_3"
+pattern = 'x*(?:(?!a)\A|\w$)&~(.)'
+input = "b"
+matches = [[0, 0]]
+
+[[test]]
+name = "lookahead_union_arm_inter_nullable_span_4"
+pattern = 'x*(?:(?=b)|c)&(?:|y)'
+input = "bb"
+matches = [[0, 0], [1, 1]]
+
+[[test]]
+name = "lookahead_union_arm_inter_nullable_span_5"
+pattern = 'x*(?:(?!a)|c)&(?:|y)'
+input = "b"
+matches = [[0, 0], [1, 1]]
+
+[[test]]
+name = "lookahead_union_arm_inter_nullable_span_6"
+pattern = 'x*(?:(?!a)\A|c)&~(bb)'
+input = "b"
+matches = [[0, 0]]
+
+[[test]]
+name = "lookahead_union_arm_inter_nullable_span_7"
+pattern = '(?:(?:a)*\w\w){1,3}&(?:(?:\z|b){1,3}|~(\w)(?:(?!a)|\A))'
+input = "ab\n"
+matches = [[0, 2]]
+
+[[test]]
+name = "concat_of_lookahead_unions_zero_width_match_1"
+pattern = '(?:(?:(?!a)|(?<=\A))(?:(?:\A&\B)&(?<!\w)\B))(?:(?:(?!a)|(?<=\A))(?:(?:\A&\B)&(?<!\w)\B))'
+input = "\n"
+matches = [[0, 0]]
+
+[[test]]
+name = "concat_of_lookahead_unions_zero_width_match_2"
+pattern = '(?:(?:(?:(?!a)|(?<=\A))&(?:\z)*)(?:(?:\A&\B)&(?<!\w)\B)){2}'
+input = "\n"
+matches = [[0, 0]]
+
+[[test]]
+name = "zero_width_lookahead_tail_lookbehind_no_match_1"
+pattern = '(?<=\n)&(?:\A(?!a)\A){2}'
+input = "\n"
+matches = []
+
+[[test]]
+name = "zero_width_lookahead_tail_lookbehind_no_match_2"
+pattern = '(?:(?<=_*\n)&(?:(?<=\A)(?!a)\A){2})'
+input = "\n"
+matches = []

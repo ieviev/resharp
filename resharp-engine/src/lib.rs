@@ -80,6 +80,9 @@ pub use bdfa::BDFA;
 #[cfg(feature = "serialize")]
 #[allow(missing_docs)]
 pub use ldfa::LDFA;
+use ldfa::{DEFAULT_MAX_STATES, MAX_STATES};
+#[cfg(feature = "diag")]
+use ldfa::Sid;
 #[cfg(feature = "serialize")]
 #[allow(missing_docs)]
 pub use prefix::{NegLb, NegLbTerm, PrefixKind};
@@ -126,6 +129,10 @@ pub enum Error {
     Algebra(resharp_algebra::ResharpError),
     /// DFA state cache exceeded `max_dfa_capacity`.
     CapacityExceeded,
+    /// `max_dfa_capacity` is above the largest state id this build supports.
+    CapacityTooLarge(usize),
+    /// pattern size exceeded `max_node_capacity`.
+    NodeCapacityExceeded(usize),
     /// pattern produced more algebra nodes than the engine supports.
     PatternTooLarge,
     /// serialization or deserialization failure.
@@ -143,6 +150,14 @@ impl std::fmt::Display for Error {
             Error::Parse(e) => write!(f, "parse error: {}", e),
             Error::Algebra(e) => write!(f, "{}", e),
             Error::CapacityExceeded => write!(f, "DFA state capacity exceeded"),
+            Error::CapacityTooLarge(n) => write!(
+                f,
+                "max_dfa_capacity {n} exceeds the supported maximum {MAX_STATES}; enable the `wide_state` feature to raise it"
+            ),
+            Error::NodeCapacityExceeded(max) => write!(
+                f,
+                "pattern too complex: more than {max} nodes; raise RegexOptions::max_node_capacity to allow it"
+            ),
             Error::PatternTooLarge => write!(f, "pattern too large"),
             Error::Serialize(ref s) => write!(f, "serialization error: {}", s),
             Error::InternalError(msg) => write!(f, "internal error: {}", msg),
@@ -158,6 +173,8 @@ impl std::error::Error for Error {
             Error::Parse(e) => Some(e),
             Error::Algebra(e) => Some(e),
             Error::CapacityExceeded => None,
+            Error::CapacityTooLarge(_) => None,
+            Error::NodeCapacityExceeded(_) => None,
             Error::PatternTooLarge => None,
             Error::Serialize(_) => None,
             Error::InternalError(_) => None,
@@ -196,6 +213,18 @@ pub enum UnicodeMode {
     Javascript,
 }
 
+/// when the hardened forward scan is used (see [`RegexOptions::hardening`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum HardeningMode {
+    /// never harden; can be O(n^2) on adversarial patterns.
+    Off,
+    /// analyse the pattern and harden it when the analysis says so (default).
+    #[default]
+    Auto,
+    /// always use the hardened forward scan. the analysis still runs for prefix selection.
+    Always,
+}
+
 /// regex configuration, passed to [`Regex::with_options`].
 ///
 /// defaults via [`Default`], override with the builder methods:
@@ -209,8 +238,10 @@ pub enum UnicodeMode {
 ///     .dot_matches_new_line(true);
 /// ```
 pub struct RegexOptions {
-    /// max cached DFA states, clamped to `u16::MAX` (default: `u16::MAX`).
+    /// max cached DFA states (default: 65,535; 1,048,576 with `wide_state`). Larger values return `Error::CapacityTooLarge`.
     pub max_dfa_capacity: usize,
+    /// max AST nodes, checked while building the matcher (default: 1,000,000, about 1 s).
+    pub max_node_capacity: usize,
     /// max lookahead context distance (default: 800).
     pub lookahead_context_max: u32,
     /// Unicode coverage for `\w`/`\d`/`\s` and width of `.` / negated classes
@@ -230,9 +261,8 @@ pub struct RegexOptions {
     /// `capture_names()`; use `(?<name>...)` for a name you can look up.
     #[cfg(feature = "experimental_capture_groups")]
     pub implicit_captures: bool,
-    /// use hardened forward scan (default: false).
-    /// slower, but prevents O(n^2) all-matches blowup on adversarial combinations.
-    pub hardened: bool,
+    /// when the hardened forward scan is used (default: [`HardeningMode::Auto`]).
+    pub hardening: HardeningMode,
     /// remove the default pattern size limit for very large regexes (default: false).
     pub unbounded_size: bool,
     #[doc(hidden)]
@@ -248,7 +278,8 @@ pub struct RegexOptions {
 impl Default for RegexOptions {
     fn default() -> Self {
         Self {
-            max_dfa_capacity: u16::MAX as usize,
+            max_dfa_capacity: DEFAULT_MAX_STATES,
+            max_node_capacity: 1_000_000,
             lookahead_context_max: 800,
             unicode: UnicodeMode::Default,
             case_insensitive: false,
@@ -257,7 +288,7 @@ impl Default for RegexOptions {
             ignore_whitespace: false,
             #[cfg(feature = "experimental_capture_groups")]
             implicit_captures: false,
-            hardened: false,
+            hardening: HardeningMode::Auto,
             unbounded_size: false,
             force_convergence: false,
             disable_prefixes: false,
@@ -298,9 +329,9 @@ impl RegexOptions {
         self.implicit_captures = yes;
         self
     }
-    /// enable hardened mode for untrusted patterns: uses only O(N·S) forward scan, slower.
-    pub fn hardened(mut self, yes: bool) -> Self {
-        self.hardened = yes;
+    /// select when the hardened forward scan is used (default: [`HardeningMode::Auto`]).
+    pub fn hardening(mut self, mode: HardeningMode) -> Self {
+        self.hardening = mode;
         self
     }
     #[doc(hidden)]
@@ -368,10 +399,15 @@ impl Captures<'_> {
 pub(crate) struct RegexInner {
     pub(crate) b: RegexBuilder,
     pub(crate) fwd: ldfa::LDFA,
+    #[cfg(feature = "stream")]
     pub(crate) fwd_ts: ldfa::LDFA,
     #[cfg_attr(not(feature = "stream"), allow(dead_code))]
     pub(crate) rev: Option<ldfa::LDFA>,
-    pub(crate) rev_ts: ldfa::LDFA,
+    pub(crate) rev_ts: Option<ldfa::LDFA>,
+    pub(crate) is_match_dfa: ismatch::IsMatchDfa,
+    pub(crate) ism_elim: Option<Option<NodeId>>,
+    pub(crate) ism_elim_fwd: Option<ldfa::LDFA>,
+    pub(crate) max_cap: usize,
     #[cfg(feature = "convergence_prefix")]
     pub(crate) conv_b: Option<ldfa::LDFA>,
     #[cfg(feature = "stream")]
@@ -436,6 +472,7 @@ pub struct Regex {
     pub(crate) inner: Mutex<RegexInner>,
     pub(crate) prefix: Option<prefix::PrefixKind>,
     pub(crate) fixed_length: Option<u32>,
+    pub(crate) min_length: u32,
     pub(crate) empty_nullable: bool,
     pub(crate) always_nullable: bool,
     pub(crate) star_loop: bool,
@@ -455,12 +492,14 @@ pub struct Regex {
     pub(crate) hardened: bool,
     #[allow(dead_code)]
     pub(crate) has_bounded: bool,
-    pub(crate) bounded_safe_find_all: bool,
     pub(crate) lb_check_bytes: u8,
     pub(crate) fwd_lb_begin_nullable: bool,
     pub(crate) fwd_lb_begin_len: u8,
     pub(crate) fwd_lb_begin_classes: Vec<crate::accel::TSet>,
     pub(crate) fwd_lb_body_nullable: bool,
+    pub(crate) is_match_prefix: Option<accel::FwdPrefixSearch>,
+    pub(crate) is_match_extra: Vec<accel::FwdPrefixSearch>,
+    pub(crate) is_match_fwd: Option<accel::FwdPrefixSearch>,
     pub(crate) init_flags: InitialNodeFlags,
     #[cfg(feature = "convergence_prefix")]
     pub(crate) conv_prefix: bool,
@@ -501,6 +540,14 @@ pub enum FindAll {
     ClassPlus,
 }
 
+const REV_TS_NOT_BUILT: &str = "rev_ts is not built for this FindAll";
+
+impl FindAll {
+    fn uses_rev_ts(self) -> bool {
+        matches!(self, FindAll::Dfa | FindAll::Hardened)
+    }
+}
+
 // not a security measure. only flags obvious cases where hardening results in better performance
 #[derive(Clone, Copy, Default)]
 struct Hardening {
@@ -510,16 +557,21 @@ struct Hardening {
 
 /// auto-hardening heuristic, flags some patterns for hardened forward scan.
 fn auto_harden(b: &mut RegexBuilder, start: NodeId, has_anchors: bool) -> Hardening {
-    const NODE_BUDGET: usize = 128;
+    const NODE_BUDGET: usize = 96;
     const LARGE_COVER: u32 = 128;
-    let opener = opener_class(b, start);
+    let Some(graph) = b.analyze(BUILD_PARTIAL_GRAPH_CREATION_BUDGET, |b| {
+        build_partial_graph(b, start, NODE_BUDGET)
+    }) else {
+        return Hardening::default();
+    };
+    let opener = graph.edges[0]
+        .iter()
+        .filter(|e| graph.nodes[e.dst].0 > NodeId::BOT.0)
+        .fold(TSetId::EMPTY, |acc, e| b.solver().or_id(acc, e.set));
     if opener == TSetId::EMPTY {
         return Hardening::default();
     }
     let opener_full = b.solver().is_full_id(opener);
-    let Some(graph) = build_partial_graph(b, start, NODE_BUDGET) else {
-        return Hardening::default();
-    };
     if graph
         .nodes
         .iter()
@@ -550,8 +602,7 @@ fn auto_harden(b: &mut RegexBuilder, start: NodeId, has_anchors: bool) -> Harden
         return Hardening::default();
     }
 
-    let reach = transitive_closure(&graph);
-    let sccs = sccs_from_reach(&reach);
+    let sccs = tarjan_sccs(&graph);
     let mut node_scc: Vec<usize> = vec![0; graph.nodes.len()];
     for (sid, scc) in sccs.iter().enumerate() {
         for &n in scc {
@@ -584,10 +635,9 @@ fn auto_harden(b: &mut RegexBuilder, start: NodeId, has_anchors: bool) -> Harden
         if !scc_non_trivial {
             continue;
         }
-        let scc_set: std::collections::HashSet<usize> = scc.iter().copied().collect();
         let in_scc_cov = graph.edges[i]
             .iter()
-            .filter(|e| scc_set.contains(&e.dst))
+            .filter(|e| node_scc[e.dst] == node_scc[i])
             .fold(TSetId::EMPTY, |acc, e| b.solver().or_id(acc, e.set));
         if b.solver().byte_count(in_scc_cov) < LARGE_COVER {
             continue;
@@ -613,7 +663,7 @@ fn auto_harden(b: &mut RegexBuilder, start: NodeId, has_anchors: bool) -> Harden
     }
     let mut no_fwd_prefix = false;
     let opener_wide = opener_full || b.solver().byte_count(opener) >= LARGE_COVER;
-    for scc in sccs {
+    for (sid, scc) in sccs.iter().enumerate() {
         let non_trivial = scc.len() > 1 || graph.edges[scc[0]].iter().any(|e| e.dst == scc[0]);
         if !non_trivial {
             continue;
@@ -621,8 +671,7 @@ fn auto_harden(b: &mut RegexBuilder, start: NodeId, has_anchors: bool) -> Harden
         if scc.iter().all(|&n| pure_star[n]) {
             continue;
         }
-        let scc_set: std::collections::HashSet<usize> = scc.iter().copied().collect();
-        if scc_set.contains(&0) {
+        if node_scc[0] == sid {
             continue; // (3b) start in SCC
         }
         let sticky = scc.iter().all(|&n| {
@@ -632,11 +681,10 @@ fn auto_harden(b: &mut RegexBuilder, start: NodeId, has_anchors: bool) -> Harden
             b.solver().is_full_id(cover)
         });
         const SPIN_FREQ_THRESHOLD: u64 = crate::prefix::TOTAL_BYTE_FREQ / 2;
-        let scc_set_local: std::collections::HashSet<usize> = scc.iter().copied().collect();
         let has_wide_spin = scc.iter().any(|&n| {
             let in_scc_cover = graph.edges[n]
                 .iter()
-                .filter(|e| scc_set_local.contains(&e.dst))
+                .filter(|e| node_scc[e.dst] == sid)
                 .fold(TSetId::EMPTY, |acc, e| b.solver().or_id(acc, e.set));
             let freq: u64 = b
                 .solver()
@@ -652,7 +700,7 @@ fn auto_harden(b: &mut RegexBuilder, start: NodeId, has_anchors: bool) -> Harden
         let restartable = scc.iter().any(|&n| {
             graph.edges[n]
                 .iter()
-                .any(|e| scc_set.contains(&e.dst) && b.solver().is_sat_id(e.set, opener))
+                .any(|e| node_scc[e.dst] == sid && b.solver().is_sat_id(e.set, opener))
         });
         if !restartable {
             continue;
@@ -668,13 +716,13 @@ fn auto_harden(b: &mut RegexBuilder, start: NodeId, has_anchors: bool) -> Harden
         let start_escapes_scc = if has_anchors {
             let start_into_scc = graph.edges[0]
                 .iter()
-                .filter(|e| scc_set.contains(&e.dst))
+                .filter(|e| node_scc[e.dst] == sid)
                 .count();
             graph.edges[0].len() > start_into_scc
         } else {
             let cover = graph.edges[0]
                 .iter()
-                .filter(|e| scc_set.contains(&e.dst) || scc.iter().any(|&s| reach[e.dst][s]))
+                .filter(|e| node_scc[e.dst] == sid || reaches_any(&graph, e.dst, &node_scc, sid))
                 .fold(TSetId::EMPTY, |acc, e| b.solver().or_id(acc, e.set));
             !b.solver().is_full_id(cover)
         };
@@ -707,7 +755,7 @@ struct Graph {
     nodes: Vec<NodeId>,
 }
 
-const BUILD_PARTIAL_GRAPH_CREATION_BUDGET: u32 = 100_000;
+const BUILD_PARTIAL_GRAPH_CREATION_BUDGET: usize = 512;
 
 fn build_partial_graph(b: &mut RegexBuilder, start: NodeId, budget: usize) -> Option<Graph> {
     use std::collections::HashMap;
@@ -715,15 +763,13 @@ fn build_partial_graph(b: &mut RegexBuilder, start: NodeId, budget: usize) -> Op
     let mut edges: Vec<Vec<Edge>> = vec![Vec::new()];
     let mut nodes: Vec<NodeId> = vec![start];
     let mut queue: Vec<(usize, NodeId)> = vec![(0, start)];
+    let mut pmemo: rustc_hash::FxHashMap<(NodeId, bool), NodeId> = Default::default();
     let mut overflow = false;
-    let node_budget_start = b.num_nodes();
     while let Some((u, node)) = queue.pop() {
-        if b.num_nodes().wrapping_sub(node_budget_start) > BUILD_PARTIAL_GRAPH_CREATION_BUDGET {
-            return None;
-        }
         let sder = b.der(node, Nullability::CENTER).ok()?;
         let mut stack = vec![(sder, TSetId::FULL)];
-        b.iter_sat(&mut stack, &mut |_, next, set| {
+        b.iter_sat(&mut stack, &mut |b, next, set| {
+            let next = b.prune_fwd(next, &mut pmemo);
             let dst = *idx.entry(next).or_insert_with(|| {
                 if edges.len() >= budget {
                     overflow = true;
@@ -746,67 +792,81 @@ fn build_partial_graph(b: &mut RegexBuilder, start: NodeId, budget: usize) -> Op
     Some(Graph { edges, nodes })
 }
 
-fn transitive_closure(graph: &Graph) -> Vec<Vec<bool>> {
-    let n = graph.edges.len();
-    let mut r = vec![vec![false; n]; n];
-    for i in 0..n {
-        for e in &graph.edges[i] {
-            r[i][e.dst] = true;
-        }
-    }
-    for k in 0..n {
-        for i in 0..n {
-            if !r[i][k] {
-                continue;
-            }
-            for j in 0..n {
-                if r[k][j] {
-                    r[i][j] = true;
-                }
-            }
-        }
-    }
-    r
-}
-
-// extract SCCs from a reach matrix: i,j share an SCC iff each reaches the other.
-fn sccs_from_reach(reach: &[Vec<bool>]) -> Vec<Vec<usize>> {
-    let n = reach.len();
-    let mut visited = vec![false; n];
-    let mut sccs: Vec<Vec<usize>> = Vec::new();
-    for i in 0..n {
-        if visited[i] {
+fn reaches_any(graph: &Graph, from: usize, node_scc: &[usize], sid: usize) -> bool {
+    let mut seen = vec![false; graph.nodes.len()];
+    let mut stack: Vec<usize> = graph.edges[from].iter().map(|e| e.dst).collect();
+    while let Some(v) = stack.pop() {
+        if std::mem::replace(&mut seen[v], true) {
             continue;
         }
-        visited[i] = true;
-        let mut scc = vec![i];
-        for j in (i + 1)..n {
-            if !visited[j] && reach[i][j] && reach[j][i] {
-                visited[j] = true;
-                scc.push(j);
-            }
+        if node_scc[v] == sid {
+            return true;
         }
-        sccs.push(scc);
+        stack.extend(graph.edges[v].iter().map(|e| e.dst));
     }
-    sccs
+    false
 }
 
-fn opener_class(b: &mut RegexBuilder, start: NodeId) -> TSetId {
-    let sder = match b.der(start, Nullability::CENTER) {
-        Ok(d) => d,
-        Err(_) => return TSetId::EMPTY,
-    };
-    let mut stack = vec![(sder, TSetId::FULL)];
-    let mut acc = TSetId::EMPTY;
-    b.iter_sat(
-        &mut stack,
-        &mut (|bb, next, set| {
-            if next.0 > NodeId::BOT.0 {
-                acc = bb.solver().or_id(acc, set);
+const UNVISITED: usize = usize::MAX;
+
+struct Tarjan<'a> {
+    graph: &'a Graph,
+    index: Vec<usize>,
+    low: Vec<usize>,
+    on_stack: Vec<bool>,
+    stack: Vec<usize>,
+    next: usize,
+    out: Vec<Vec<usize>>,
+}
+
+impl Tarjan<'_> {
+    fn visit(&mut self, v: usize) {
+        self.index[v] = self.next;
+        self.low[v] = self.next;
+        self.next += 1;
+        self.stack.push(v);
+        self.on_stack[v] = true;
+        for k in 0..self.graph.edges[v].len() {
+            let w = self.graph.edges[v][k].dst;
+            if self.index[w] == UNVISITED {
+                self.visit(w);
+                self.low[v] = self.low[v].min(self.low[w]);
+            } else if self.on_stack[w] {
+                self.low[v] = self.low[v].min(self.index[w]);
             }
-        }),
-    );
-    acc
+        }
+        if self.low[v] == self.index[v] {
+            let mut scc = Vec::new();
+            loop {
+                let w = self.stack.pop().expect("tarjan stack underflow");
+                self.on_stack[w] = false;
+                scc.push(w);
+                if w == v {
+                    break;
+                }
+            }
+            self.out.push(scc);
+        }
+    }
+}
+
+fn tarjan_sccs(graph: &Graph) -> Vec<Vec<usize>> {
+    let n = graph.nodes.len();
+    let mut t = Tarjan {
+        graph,
+        index: vec![UNVISITED; n],
+        low: vec![0; n],
+        on_stack: vec![false; n],
+        stack: Vec::new(),
+        next: 0,
+        out: Vec::new(),
+    };
+    for v in 0..n {
+        if t.index[v] == UNVISITED {
+            t.visit(v);
+        }
+    }
+    t.out
 }
 
 fn collect_union_branches(b: &RegexBuilder, node: NodeId, out: &mut Vec<NodeId>) {
@@ -828,7 +888,7 @@ fn first_lb_in_branch(b: &RegexBuilder, node: NodeId) -> Option<NodeId> {
     None
 }
 
-// mk_neg_lookbehind's shape for (?<!body) is Concat(BEGIN, Compl(Concat(TS, body))); recognize it so lookback bound is body's max length, not the unbounded-looking Compl wrapper
+// (?<!body) is Concat(BEGIN, Compl(Concat(TS, body))); bound lookback by body, not the Compl
 fn neg_lookbehind_body(b: &RegexBuilder, inner: NodeId) -> Option<NodeId> {
     if !inner.is_concat(b) || inner.left(b) != NodeId::BEGIN {
         return None;
@@ -890,7 +950,7 @@ fn union_branches_distinguishable(b: &mut RegexBuilder, union_node: NodeId) -> b
 }
 
 fn union_branches_distinguishable_list(b: &mut RegexBuilder, branches: &[NodeId]) -> bool {
-    // a BOT branch never matches anything; drop it before the geometric disambiguation below or its dead length still gets folded in
+    // drop BOT branches; their dead length would still be folded in
     let branches: Vec<NodeId> = branches.iter().copied().filter(|&n| n != NodeId::BOT).collect();
     if branches.len() <= 1 {
         return true;
@@ -1049,11 +1109,15 @@ fn ensure_supported_rec(
                     if !union_branches_distinguishable_list(b, &distributed_branches) {
                         return Err(resharp_algebra::ResharpError::UnsupportedPattern);
                     }
-                    let other_compatibility =
+                    let mut compat =
                         ensure_supported_rec(b, other, at_start, strict_lb_start, memo)?;
+                    for &br in &branches {
+                        let c = ensure_supported_rec(b, br, at_start, strict_lb_start, memo)?;
+                        compat = combine_compatibility(compat, c);
+                    }
                     return Ok(combine_compatibility(
                         Some(Compatibility::LookaroundUnion),
-                        other_compatibility,
+                        compat,
                     ));
                 }
             }
@@ -1322,7 +1386,7 @@ impl Regex {
         skeleton: Option<resharp_parser::Skeleton>,
         set_tags: bool,
     ) -> Result<Regex, Error> {
-        // sanity check
+        b.max_node_capacity = opts.max_node_capacity;
         let node_limit = if opts.unbounded_size {
             usize::MAX
         } else {
@@ -1331,6 +1395,7 @@ impl Regex {
         if b.tree_size(node, node_limit) >= node_limit {
             return Err(Error::PatternTooLarge);
         }
+        let node = b.drop_covered_branches(node);
         let _compatibility = ensure_supported(&mut b, node, &group_names, set_tags)?;
 
         let empty_nullable = b
@@ -1369,15 +1434,17 @@ impl Regex {
         } else {
             None
         };
-        let max_cap = opts.max_dfa_capacity.min(u16::MAX as usize);
-        let mut opts = opts;
+        let max_cap = ldfa::checked_capacity(opts.max_dfa_capacity)?;
         let has_anchors_pre = b.contains_anchors(node_fwd_simpl);
-        let ah = auto_harden(&mut b, fwd_start, has_anchors_pre);
-        if ah.full {
-            opts.hardened = true;
-        }
-        let (selected, rev_skip, _fwd_prefix_wins) = if opts.disable_prefixes {
-            (None, None, false)
+        let ah = match opts.hardening {
+            HardeningMode::Off => Hardening::default(),
+            HardeningMode::Auto | HardeningMode::Always => {
+                auto_harden(&mut b, fwd_start, has_anchors_pre)
+            }
+        };
+        let hardened_opt = opts.hardening == HardeningMode::Always || ah.full;
+        let (selected, rev_skip, is_match_fwd) = if opts.disable_prefixes {
+            (None, None, None)
         } else {
             prefix::select_prefix(
                 &mut b,
@@ -1387,7 +1454,7 @@ impl Regex {
                 min_len,
                 max_cap,
                 ah.no_fwd_prefix,
-                opts.hardened || opts.force_linear,
+                hardened_opt || opts.force_linear,
                 opts.force_convergence,
             )?
         };
@@ -1411,56 +1478,6 @@ impl Regex {
         );
         let fwd = ldfa::LDFA::new_fwd(&mut b, fwd_start, max_cap)?;
 
-        let ts_fwd_start = {
-            let with_ts = b.mk_concat(NodeId::TS, node);
-            // b.simplify_fwd_initial(with_ts)
-            with_ts
-        };
-        #[allow(unused_mut)]
-        let mut ts_fwd = ldfa::LDFA::new_fwd(&mut b, ts_fwd_start, max_cap)?;
-
-        let mut rev_ts = ldfa::LDFA::new_rev(&mut b, ts_rev_start, max_cap)?;
-        #[cfg(feature = "convergence_prefix")]
-        let mut conv_b: Option<ldfa::LDFA> = None;
-        #[cfg(feature = "convergence_prefix")]
-        let mut conv_prefix = false;
-        if let Some((search, resume_node, b_node)) = rev_skip {
-            #[cfg(not(feature = "convergence_prefix"))]
-            let _ = b_node;
-            #[cfg(feature = "debug")]
-            eprintln!("[conv split] resume_node={:?} b_node={:?}", resume_node.map(|n| b.pp(n)), b_node.map(|n| b.pp(n)));
-            let resume = match resume_node {
-                Some(node) => {
-                    let pruned_node = rev_ts.state_nodes[rev_ts.pruned as usize];
-                    let union = b.mk_union(node, pruned_node);
-                    #[cfg(feature = "debug")]
-                    eprintln!("[conv resume build] node={} pruned_node={} union={}", b.pp(node), b.pp(pruned_node), b.pp(union));
-                    rev_ts.get_or_register(&mut b, union)
-                }
-                None => 0,
-            };
-            #[allow(unused_mut)]
-            let mut window = 0u32;
-            #[cfg(feature = "convergence_prefix")]
-            if resume != 0 {
-                let b_node = b_node.expect(
-                    "convergence prefix (resume != 0) must carry its right-side `b` node",
-                );
-                let b_max = b.get_min_max_length(b_node).1;
-                let fwd_window = if b_max == u32::MAX { 0 } else { b_max };
-                let rev_b_node = b.reverse(b_node)?;
-                let rev_b_node = b.normalize_rev(rev_b_node, 0)?;
-                let rev_window = b.get_min_max_length(rev_b_node).0;
-                window = fwd_window.max(rev_window);
-                conv_b = Some(ldfa::LDFA::new_fwd(&mut b, b_node, max_cap)?);
-                conv_prefix = true;
-            }
-            rev_ts.install_prefix(&mut b, search, resume as u32, window)?;
-        }
-        if !b.starts_with_ts(ts_rev_start) {
-            rev_ts.ensure_dead_skip();
-        }
-
         let rev_anchored = if rev_end_anchored {
             let rev_no_ts = b.normalize_rev(rev_node, 0)?;
             Some(ldfa::LDFA::new_rev(&mut b, rev_no_ts, max_cap)?)
@@ -1468,17 +1485,63 @@ impl Regex {
             None
         };
 
-        #[cfg(feature = "stream")]
-        let stream_init = {
-            let fwd_pruned = b.prune_begin_eps(ts_fwd_start);
-            let rev_pruned = b.prune_begin_eps(ts_rev_start);
-            stream::StreamInit {
-                start_node: node_fwd_simpl,
-                seek_fwd: ts_fwd.get_or_register(&mut b, fwd_pruned).into(),
-                seek_rev: rev_ts.get_or_register(&mut b, rev_pruned).into(),
+        let (is_match_prefix, mut is_match_extra) = {
+            let is_lb = matches!(selected, Some(prefix::PrefixKind::AnchoredFwdLb(_)));
+            let body = if is_lb { node_fwd_simpl.right(&b) } else { node_fwd_simpl };
+            let (mut literal, _) = b.extract_literal_prefix(body);
+            if !is_lb && (literal.is_empty() || matches!(selected, Some(prefix::PrefixKind::AnchoredFwd(_)))) {
+                literal = if literal.is_empty() {
+                    b.required_literal_runs(body)
+                        .into_iter()
+                        .filter(|run| {
+                            let rare = run.iter().map(|&x| simd::BYTE_FREQ[x as usize]).min().unwrap();
+                            run.len() >= 2 || rare < prefix::RARE_BYTE_FREQ_LIMIT
+                        })
+                        .max_by_key(|run| {
+                            let rare = run.iter().map(|&x| simd::BYTE_FREQ[x as usize]).min().unwrap();
+                            (run.len(), std::cmp::Reverse(rare))
+                        })
+                        .unwrap_or_default()
+                } else {
+                    Vec::new()
+                };
+            }
+            if literal.is_empty() {
+                (None, Vec::new())
+            } else {
+                let mut extra: Vec<Vec<u8>> = if is_lb {
+                    Vec::new()
+                } else {
+                    b.required_literal_runs(body)
+                        .into_iter()
+                        .filter(|run| {
+                            let rare = run.iter().map(|&x| simd::BYTE_FREQ[x as usize]).min().unwrap();
+                            *run != literal && (run.len() >= 2 || rare < prefix::RARE_BYTE_FREQ_LIMIT)
+                        })
+                        .collect()
+                };
+                extra.sort_by_key(|run| std::cmp::Reverse(run.len()));
+                extra.dedup();
+                extra.truncate(2);
+                (
+                    Some(accel::FwdPrefixSearch::Literal(simd::FwdLiteralSearch::new(&literal))),
+                    extra
+                        .iter()
+                        .map(|run| accel::FwdPrefixSearch::Literal(simd::FwdLiteralSearch::new(run)))
+                        .collect(),
+                )
             }
         };
-
+        if min_len > 0
+            && !has_look
+            && !b.contains_anchors(node_fwd_simpl)
+            && !matches!(selected, Some(prefix::PrefixKind::AnchoredFwd(_)))
+            && is_match_prefix.as_ref().is_none_or(|p| p.len() < 2)
+        {
+            if let Some(fp) = prefix::build_fwd_prefix(&mut b, node_fwd_simpl)? {
+                is_match_extra.push(fp);
+            }
+        }
         let mut lb_verify: Option<ldfa::LDFA> = None;
         let (
             fwd_lb_begin_nullable,
@@ -1498,7 +1561,7 @@ impl Regex {
                         prefix::BeginInfo::None => (false, 0, Vec::new()),
                         prefix::BeginInfo::Node(_, 0) => (true, 0, Vec::new()),
                         prefix::BeginInfo::Node(began, len) => {
-                            let classes = prefix::fwd_lb_begin_classes(&mut b, began, len).ok_or(
+                            let classes = prefix::fwd_lb_begin_classes(&mut b, began, len)?.ok_or(
                                 Error::InternalError("AnchoredFwdLb begin path has no byte classes"),
                             )?;
                             (
@@ -1548,27 +1611,13 @@ impl Regex {
         };
 
         let has_bounded = bounded.is_some();
-        let bounded_safe_find_all = if has_bounded {
-            if always_nullable {
-                true
-            } else if max_len < min_len.saturating_add(2) {
-                true
-            } else {
-                let inner_match = b.mk_concat(node_fwd_simpl, resharp_algebra::NodeId::TOPPLUS);
-                let interior = b.mk_concat(resharp_algebra::NodeId::TOPPLUS, inner_match);
-                let overlap = b.mk_inter(node_fwd_simpl, interior);
-                b.is_empty_lang(overlap) == Some(true)
-            }
-        } else {
-            false
-        };
         let has_anchors = b.contains_anchors(node_fwd_simpl);
         let has_lb = b.contains_lookbehind(node_fwd_simpl);
         let has_la = node_fwd_simpl.contains_lookahead(&b);
 
         const CLASS_PLUS_FREQ: u64 = 65_535;
         let class_plus = if !has_lb && !has_la && !has_anchors && !has_look && fixed_length.is_none() {
-            detect_class_plus(&mut b, fwd_start)
+            detect_class_plus(&mut b, fwd_start)?
                 .filter(|&c| {
                     let class = class_freq_sum(&mut b, c);
                     let compl = total_byte_freq().saturating_sub(class);
@@ -1585,11 +1634,85 @@ impl Regex {
             None
         };
 
-        let need_nn_cycle = (opts.hardened && !has_bounded && fixed_length.is_none() && max_cap >= 64)
+        let need_nn_cycle = (hardened_opt && !has_bounded && fixed_length.is_none() && max_cap >= 64)
             || initial_nullability == Nullability::ALWAYS;
         let nn_cycle = need_nn_cycle && fwd.has_nonnullable_cycle(&mut b, 256);
         let hardened = opts.force_linear
-            || (opts.hardened && !has_bounded && fixed_length.is_none() && max_cap >= 64 && nn_cycle);
+            || (hardened_opt && !has_bounded && fixed_length.is_none() && max_cap >= 64 && nn_cycle);
+        let find_all = compute_find_all(
+            is_empty_lang,
+            fwd_begin_anchored,
+            rev_end_anchored,
+            hardened,
+            has_bounded,
+            class_plus.is_some(),
+            &selected,
+        );
+        let build_rev_ts = cfg!(any(feature = "stream", feature = "diag")) || find_all.uses_rev_ts();
+        #[cfg(feature = "stream")]
+        let ts_fwd_start = {
+            let with_ts = b.mk_concat(NodeId::TS, node);
+            with_ts
+        };
+        #[cfg(feature = "stream")]
+        let mut ts_fwd = ldfa::LDFA::new_fwd(&mut b, ts_fwd_start, max_cap)?;
+        let mut rev_ts = if build_rev_ts {
+            Some(ldfa::LDFA::new_rev(&mut b, ts_rev_start, max_cap)?)
+        } else {
+            None
+        };
+        #[cfg(feature = "convergence_prefix")]
+        let mut conv_b: Option<ldfa::LDFA> = None;
+        #[cfg(feature = "convergence_prefix")]
+        let mut conv_prefix = false;
+        if let (Some(rev_ts), Some((search, resume_node, b_node))) = (rev_ts.as_mut(), rev_skip) {
+            #[cfg(not(feature = "convergence_prefix"))]
+            let _ = b_node;
+            #[cfg(feature = "debug")]
+            eprintln!("[conv split] resume_node={:?} b_node={:?}", resume_node.map(|n| b.pp(n)), b_node.map(|n| b.pp(n)));
+            let resume = match resume_node {
+                Some(node) => {
+                    let pruned_node = rev_ts.state_nodes[rev_ts.pruned as usize];
+                    let union = b.mk_union(node, pruned_node);
+                    #[cfg(feature = "debug")]
+                    eprintln!("[conv resume build] node={} pruned_node={} union={}", b.pp(node), b.pp(pruned_node), b.pp(union));
+                    rev_ts.get_or_register(&mut b, union)
+                }
+                None => 0,
+            };
+            #[allow(unused_mut)]
+            let mut window = 0u32;
+            #[cfg(feature = "convergence_prefix")]
+            if resume != 0 {
+                let b_node = b_node.expect(
+                    "convergence prefix (resume != 0) must carry its right-side `b` node",
+                );
+                let b_max = b.get_min_max_length(b_node).1;
+                let fwd_window = if b_max == u32::MAX { 0 } else { b_max };
+                let rev_b_node = b.reverse(b_node)?;
+                let rev_b_node = b.normalize_rev(rev_b_node, 0)?;
+                let rev_window = b.get_min_max_length(rev_b_node).0;
+                window = fwd_window.max(rev_window);
+                conv_b = Some(ldfa::LDFA::new_fwd(&mut b, b_node, max_cap)?);
+                conv_prefix = true;
+            }
+            rev_ts.install_prefix(&mut b, search, resume as u32, window)?;
+        }
+        if let Some(rev) = rev_ts.as_mut().filter(|_| !b.starts_with_ts(ts_rev_start)) {
+            rev.ensure_dead_skip();
+        }
+
+        #[cfg(feature = "stream")]
+        let stream_init = {
+            let fwd_pruned = b.prune_begin_eps(ts_fwd_start);
+            let rev_pruned = b.prune_begin_eps(ts_rev_start);
+            stream::StreamInit {
+                start_node: node_fwd_simpl,
+                seek_fwd: ts_fwd.get_or_register(&mut b, fwd_pruned).into(),
+                seek_rev: rev_ts.as_mut().expect("stream builds rev_ts").get_or_register(&mut b, rev_pruned).into(),
+            }
+        };
+
         let star_loop =
             initial_nullability == Nullability::ALWAYS && !has_lb && !nn_cycle;
 
@@ -1614,9 +1737,14 @@ impl Regex {
             inner: Mutex::new(RegexInner {
                 b,
                 fwd,
+                #[cfg(feature = "stream")]
                 fwd_ts: ts_fwd,
                 rev: rev_anchored,
                 rev_ts,
+                is_match_dfa: ismatch::IsMatchDfa::Pending(rev_basis),
+                ism_elim: None,
+                ism_elim_fwd: None,
+                max_cap,
                 #[cfg(feature = "stream")]
                 stream: stream_init,
                 nulls: StartPositions::new(),
@@ -1632,19 +1760,12 @@ impl Regex {
                 capture_dfa: pparse::PosixParser::new(max_cap),
                 skeleton,
             }),
-            find_all: compute_find_all(
-                is_empty_lang,
-                fwd_begin_anchored,
-                rev_end_anchored,
-                hardened,
-                has_bounded,
-                class_plus.is_some(),
-                &selected,
-            ),
+            find_all,
             fwd_lb_stripped: lb_stripped,
             class_plus,
             prefix: selected,
             fixed_length,
+            min_length: min_len,
             empty_nullable,
             always_nullable: initial_nullability == Nullability::ALWAYS,
             star_loop,
@@ -1656,12 +1777,14 @@ impl Regex {
             rev_end_nullable,
             hardened,
             has_bounded,
-            bounded_safe_find_all,
             lb_check_bytes,
             fwd_lb_begin_nullable,
             fwd_lb_begin_len,
             fwd_lb_begin_classes,
             fwd_lb_body_nullable,
+            is_match_prefix,
+            is_match_extra,
+            is_match_fwd,
             init_flags: InitialNodeFlags::new(has_anchors, has_lb, has_la),
             #[cfg(feature = "convergence_prefix")]
             conv_prefix,
@@ -1683,7 +1806,7 @@ impl Regex {
     #[allow(missing_docs)]
     pub fn dfa_stats(&self) -> (usize, usize) {
         let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-        (inner.fwd.state_nodes.len(), inner.rev_ts.state_nodes.len())
+        (inner.fwd.state_nodes.len(), inner.rev_ts.as_ref().map_or(0, |d| d.state_nodes.len()))
     }
 
     #[cfg(feature = "diag")]
@@ -1693,13 +1816,13 @@ impl Regex {
         let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         let RegexInner { ref mut b, ref mut fwd, .. } = *inner;
         let num_mt = fwd.minterms.len();
-        let mut edges: Vec<(u16, u16, Vec<u8>)> = Vec::new();
+        let mut edges: Vec<(Sid, Sid, Vec<u8>)> = Vec::new();
         let mut order = vec![DFA_INITIAL];
         let mut i = 0;
         while i < order.len() {
             let s = order[i];
             i += 1;
-            let mut by_target: Vec<(u16, Vec<u8>)> = Vec::new();
+            let mut by_target: Vec<(Sid, Vec<u8>)> = Vec::new();
             for byte in 0..=255u8 {
                 let mt = fwd.mt_lookup[byte as usize] as u32;
                 if mt as usize >= num_mt {
@@ -1721,7 +1844,7 @@ impl Regex {
                 edges.push((s, t, bs));
             }
         }
-        let name = |s: u16| order.iter().position(|&x| x == s).unwrap();
+        let name = |s: Sid| order.iter().position(|&x| x == s).unwrap();
         let mut out = String::from("digraph G {\n  rankdir=LR;\n  node [shape=circle];\n");
         for &s in &order {
             let node = fwd.state_nodes[s as usize];
@@ -1764,6 +1887,8 @@ impl Regex {
         let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         inner
             .rev_ts
+            .as_ref()
+            .expect(REV_TS_NOT_BUILT)
             .skip_searchers
             .iter()
             .map(|s| match s {
@@ -1876,7 +2001,7 @@ impl Regex {
         let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         let fwd = self.prefix.as_ref().is_some_and(|p| p.is_fwd());
         let rev = self.prefix.as_ref().is_some_and(|p| p.is_rev())
-            || inner.rev_ts.can_skip();
+            || inner.rev_ts.as_ref().is_some_and(|d| d.can_skip());
         (fwd, rev)
     }
 
@@ -1898,6 +2023,9 @@ impl Regex {
         if input.is_empty() {
             return Ok(self.empty_input_match().into_iter().collect());
         }
+        if input.len() < self.min_length as usize {
+            return Ok(Vec::new());
+        }
 
         #[cfg(all(feature = "debug", debug_assertions))]
         eprintln!("[algorithm] {:?} input={:?}", self.find_all, input);
@@ -1907,14 +2035,13 @@ impl Regex {
             FindAll::ClassPlus => Ok(self.find_all_class_plus(input)),
             FindAll::Anchored => Ok(self.find_anchored(input)?.into_iter().collect()),
             FindAll::EndAnchored => Ok(self.find_end_anchored(input)?.into_iter().collect()),
-            FindAll::Hardened | FindAll::Dfa => self.find_all_dfa(input),
-            FindAll::Bounded => {
-                if self.bounded_safe_find_all {
-                    self.find_all_fwd_bounded(input)
-                } else {
-                    self.find_all_dfa(input)
-                }
+            FindAll::Dfa if self.required_literal_absent(input) => Ok(Vec::new()),
+            FindAll::Dfa if self.forward_rejects(input)? => Ok(Vec::new()),
+            FindAll::FwdPrefix | FindAll::FwdLbPrefix if self.required_literal_absent(input) => {
+                Ok(Vec::new())
             }
+            FindAll::Hardened | FindAll::Dfa => self.find_all_dfa(input),
+            FindAll::Bounded => self.find_all_fwd_bounded(input),
             FindAll::FwdPrefix => match &self.prefix {
                 Some(prefix::PrefixKind::AnchoredFwd(fp)) => {
                     self.find_all_fwd_prefix(fp, self.neg_lb.as_ref(), input)
@@ -2025,31 +2152,40 @@ fn push_end_zero_width(matches: &mut Vec<Match>, len: usize) {
     }
 }
 
-fn single_sat_target(b: &mut RegexBuilder, node: NodeId) -> Option<(NodeId, TSetId)> {
-    let der = b.der(node, Nullability::CENTER).ok()?;
+fn single_sat_target(
+    b: &mut RegexBuilder,
+    node: NodeId,
+) -> Result<Option<(NodeId, TSetId)>, Error> {
+    let der = b.der(node, Nullability::CENTER).map_err(Error::Algebra)?;
     let mut targets: Vec<(NodeId, TSetId)> = Vec::new();
     b.collect_der_targets(der, TSetId::FULL, &mut targets);
     let mut live = targets.into_iter().filter(|(t, _)| *t != NodeId::BOT);
-    let first = live.next()?;
+    let Some(first) = live.next() else {
+        return Ok(None);
+    };
     if live.next().is_some() {
-        return None;
+        return Ok(None);
     }
-    Some(first)
+    Ok(Some(first))
 }
 
-fn detect_class_plus(b: &mut RegexBuilder, node: NodeId) -> Option<TSetId> {
+fn detect_class_plus(b: &mut RegexBuilder, node: NodeId) -> Result<Option<TSetId>, Error> {
     if b.nullability(node).has(Nullability::CENTER) {
-        return None;
+        return Ok(None);
     }
-    let (t1, c1) = single_sat_target(b, node)?;
+    let Some((t1, c1)) = single_sat_target(b, node)? else {
+        return Ok(None);
+    };
     if !b.nullability(t1).has(Nullability::CENTER) {
-        return None;
+        return Ok(None);
     }
-    let (t2, c2) = single_sat_target(b, t1)?;
+    let Some((t2, c2)) = single_sat_target(b, t1)? else {
+        return Ok(None);
+    };
     if t2 != t1 || c2 != c1 {
-        return None;
+        return Ok(None);
     }
-    Some(c1)
+    Ok(Some(c1))
 }
 
 fn class_freq_sum(b: &mut RegexBuilder, set: TSetId) -> u64 {
@@ -2234,24 +2370,24 @@ pub(crate) fn find_inner_literal(
 
 #[cfg(feature = "convergence_prefix")]
 #[doc(hidden)]
-pub fn detect_inner_literal_bytes(pattern: &str) -> Option<Vec<u8>> {
+pub fn detect_inner_literal_bytes(pattern: &str) -> Result<Option<Vec<u8>>, Error> {
     let mut b = resharp_algebra::RegexBuilder::new();
     let pflags = resharp_parser::PatternFlags::default();
-    let node = resharp_parser::parse_ast_with(&mut b, pattern, &pflags).ok()?;
+    let node = resharp_parser::parse_ast_with(&mut b, pattern, &pflags)?;
     let node_fwd_simpl = b.simplify_fwd_initial(node);
     let rev_basis = b
         .strip_trailing_redundant_lookahead(node_fwd_simpl)
         .unwrap_or(node_fwd_simpl);
-    let ts_rev_start = b.ts_rev_start(rev_basis).ok()?;
-    let rev_stripped = crate::prefix::PrefixSets::compute(&mut b, node_fwd_simpl, ts_rev_start)
-        .ok()?
-        .rev_stripped;
-    let (_c, run, _l) = find_inner_literal(&mut b, rev_stripped)?;
+    let ts_rev_start = b.ts_rev_start(rev_basis).map_err(Error::Algebra)?;
+    let rev_stripped = crate::prefix::rev_stripped(&mut b, ts_rev_start);
+    let Some((_c, run, _l)) = find_inner_literal(&mut b, rev_stripped) else {
+        return Ok(None);
+    };
     let mut bytes: Vec<u8> = Vec::new();
     for &s in run.iter().rev() {
         bytes.extend(b.solver().collect_bytes(s));
     }
-    Some(bytes)
+    Ok(Some(bytes))
 }
 
 impl Regex {
@@ -2259,7 +2395,7 @@ impl Regex {
     #[allow(missing_docs)]
     pub fn rev_state_dump(&self) -> String {
         let inner = &mut *self.inner.lock().unwrap_or_else(|e| e.into_inner());
-        let rev = &inner.rev_ts;
+        let rev = inner.rev_ts.as_ref().expect(REV_TS_NOT_BUILT);
         let mut out = String::new();
         for (i, &node) in rev.state_nodes.iter().enumerate() {
             let eid = rev.effects_id.get(i).copied().unwrap_or(0);
@@ -2308,7 +2444,7 @@ impl Regex {
     #[allow(missing_docs)]
     pub fn effects_debug(&self) -> String {
         let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-        let rev = &inner.rev_ts;
+        let rev = inner.rev_ts.as_ref().expect(REV_TS_NOT_BUILT);
         let mut out = String::new();
         for (i, &eid) in rev.effects_id.iter().enumerate() {
             if eid != 0 {
@@ -2331,12 +2467,16 @@ impl Regex {
         {
             let RegexInner { rev_ts, b, nulls, conv_b, .. } = &mut *inner;
             rev_ts
+                .as_mut()
+                .expect(REV_TS_NOT_BUILT)
                 .collect_rev(b, input.len() - 1, input, nulls, conv_b.as_mut())
                 .unwrap();
         }
         #[cfg(not(feature = "convergence_prefix"))]
         inner
             .rev_ts
+            .as_mut()
+            .expect(REV_TS_NOT_BUILT)
             .collect_rev(&mut inner.b, input.len() - 1, input, &mut inner.nulls, None)
             .unwrap();
         inner.nulls.positions_desc().collect()
@@ -2370,7 +2510,7 @@ impl Regex {
     pub fn rev_walk_trace(&self, input: &[u8]) -> String {
         use std::fmt::Write;
         let inner = &mut *self.inner.lock().unwrap_or_else(|e| e.into_inner());
-        let rev = &mut inner.rev_ts;
+        let rev = inner.rev_ts.as_mut().expect(REV_TS_NOT_BUILT);
         let b = &mut inner.b;
         let mut out = String::new();
         if input.is_empty() {
@@ -2460,7 +2600,7 @@ impl Regex {
         out: &mut String,
         b: &mut resharp_algebra::RegexBuilder,
         fwd: &ldfa::LDFA,
-        sid: u16,
+        sid: Sid,
     ) {
         use std::fmt::Write;
         if (sid as usize) >= fwd.state_nodes.len() {
@@ -2501,7 +2641,7 @@ impl Regex {
         out: &mut String,
         b: &mut resharp_algebra::RegexBuilder,
         rev: &ldfa::LDFA,
-        sid: u16,
+        sid: Sid,
     ) {
         use std::fmt::Write;
         if (sid as usize) >= rev.state_nodes.len() {
@@ -2634,12 +2774,12 @@ impl Regex {
             #[cfg(feature = "convergence_prefix")]
             {
                 let RegexInner { rev_ts, b, nulls, conv_b, .. } = &mut *inner;
-                rev_ts.collect_rev(b, input.len() - 1, input, nulls, conv_b.as_mut())?;
+                rev_ts.as_mut().expect(REV_TS_NOT_BUILT).collect_rev(b, input.len() - 1, input, nulls, conv_b.as_mut())?;
             }
             #[cfg(not(feature = "convergence_prefix"))]
             {
                 let RegexInner { rev_ts, b, nulls, .. } = &mut *inner;
-                rev_ts.collect_rev(b, input.len() - 1, input, nulls, None)?;
+                rev_ts.as_mut().expect(REV_TS_NOT_BUILT).collect_rev(b, input.len() - 1, input, nulls, None)?;
             }
         }
 
@@ -2699,11 +2839,14 @@ impl Regex {
         if input.is_empty() {
             return Ok(self.empty_input_match());
         }
-        let inner = &mut *self.inner.lock().unwrap_or_else(|e| e.into_inner());
         if self.fwd_lb_stripped {
             // ugly scenario for find_anchored, easier to reject it than to special case it
             return Err(Error::Algebra(resharp_algebra::ResharpError::UnsupportedPattern))
         }
+        if input.len() < self.min_length as usize {
+            return Ok(None);
+        }
+        let inner = &mut *self.inner.lock().unwrap_or_else(|e| e.into_inner());
         Ok(inner.fwd.scan_fwd_optional(&mut inner.b, 0, input)?.map(|end| Match { start: 0, end }))
     }
 
@@ -2735,3 +2878,100 @@ impl Regex {
 
 }
 
+#[cfg(test)]
+mod hardening_tests {
+    use super::*;
+
+    fn harden_at(pattern: &str, budget: u32) -> (bool, bool) {
+        let mut b = RegexBuilder::new();
+        b.lookahead_context_max = budget;
+        let flags = resharp_parser::PatternFlags::default();
+        let node = resharp_parser::parse_ast_with(&mut b, pattern, &flags).unwrap();
+        let node = b.simplify_fwd_initial(node);
+        let anchors = b.contains_anchors(node);
+        let start = b.strip_lb(node).unwrap();
+        let h = auto_harden(&mut b, start, anchors);
+        (h.full, h.no_fwd_prefix)
+    }
+
+    #[test]
+    fn auto_harden_independent_of_lookahead_budget() {
+        for pat in [r"[a-z ]+(?=abc)", r"(\w+\s)+(?=abcd)"] {
+            assert_eq!(harden_at(pat, 1), harden_at(pat, 800), "{pat}");
+        }
+    }
+
+    fn oracle_sccs(graph: &Graph) -> Vec<Vec<usize>> {
+        let n = graph.edges.len();
+        let mut r = vec![vec![false; n]; n];
+        for i in 0..n {
+            for e in &graph.edges[i] {
+                r[i][e.dst] = true;
+            }
+        }
+        for k in 0..n {
+            for i in 0..n {
+                if r[i][k] {
+                    for j in 0..n {
+                        if r[k][j] {
+                            r[i][j] = true;
+                        }
+                    }
+                }
+            }
+        }
+        let mut visited = vec![false; n];
+        let mut out = Vec::new();
+        for i in 0..n {
+            if visited[i] {
+                continue;
+            }
+            visited[i] = true;
+            let mut scc = vec![i];
+            for j in (i + 1)..n {
+                if !visited[j] && r[i][j] && r[j][i] {
+                    visited[j] = true;
+                    scc.push(j);
+                }
+            }
+            out.push(scc);
+        }
+        out
+    }
+
+    #[test]
+    fn tarjan_sccs_match_reachability_oracle() {
+        let mut seed: u64 = 0x9e37_79b9_7f4a_7c15;
+        let mut next = |m: usize| {
+            seed = seed
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            ((seed >> 33) as usize) % m
+        };
+        for _ in 0..500 {
+            let n = 1 + next(12);
+            let mut edges: Vec<Vec<Edge>> = (0..n).map(|_| Vec::new()).collect();
+            for u in 0..n {
+                for _ in 0..next(4) {
+                    let dst = next(n);
+                    edges[u].push(Edge {
+                        dst,
+                        set: TSetId::EMPTY,
+                    });
+                }
+            }
+            let graph = Graph {
+                edges,
+                nodes: vec![NodeId::BOT; n],
+            };
+            let mut want = oracle_sccs(&graph);
+            let mut got = tarjan_sccs(&graph);
+            for s in want.iter_mut().chain(got.iter_mut()) {
+                s.sort();
+            }
+            want.sort();
+            got.sort();
+            assert_eq!(got, want);
+        }
+    }
+}
