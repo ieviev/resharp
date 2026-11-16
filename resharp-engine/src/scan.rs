@@ -174,7 +174,7 @@ fn skip_rev(
                     Some(skip_pos) if skip_pos >= *prev_entry => {
                         #[cfg(feature = "debug")]
                         eprintln!("[skip_rev Inner] branch A skip_pos={skip_pos}");
-                        if *pos > skip_pos {
+                        if *pos > skip_pos || skip_pos > *prev_entry {
                             return Ok(SkipStep::Fall);
                         }
                         *prev_entry = usize::MAX;
@@ -294,10 +294,11 @@ pub(crate) fn collect_rev<const EARLY_EXIT: bool, const SKIP: bool>(
         if SKIP {
             let sid = skip_ids[curr as usize];
             if sid != 0 {
+                let sk = skipper(skip_searchers, sid);
                 let before = (curr, pos);
                 match skip_rev(
                     t,
-                    skipper(skip_searchers, sid),
+                    sk,
                     data,
                     &mut curr,
                     &mut pos,
@@ -432,7 +433,8 @@ pub(crate) fn scan_fwd_verify<const SKIP: bool>(
                 let sid = skip_ids[curr as usize];
                 if sid != 0 {
                     let searcher = state_searcher(skip_searchers, sid);
-                    match unsafe { skip_find_fwd(searcher, data, pos, end) } {
+                    let found = unsafe { skip_find_fwd(searcher, data, pos, end) };
+                    match found {
                         Some(offset) => {
                             if offset > 0 {
                                 unsafe {
@@ -543,7 +545,8 @@ pub(crate) fn scan_fwd_first_null<const SKIP: bool>(
             let sid = skip_ids[curr as usize];
             if sid != 0 {
                 let searcher = state_searcher(skip_searchers, sid);
-                match unsafe { skip_find_fwd(searcher, data, pos, end) } {
+                let found = unsafe { skip_find_fwd(searcher, data, pos, end) };
+                match found {
                     Some(offset) => {
                         pos += offset;
                     }
@@ -614,7 +617,8 @@ pub(crate) fn scan_fwd<const SKIP: bool>(
                     let sid = skip_ids[l_state as usize];
                     if sid != 0 {
                         let searcher = state_searcher(skip_searchers, sid);
-                        match skip_find_fwd(searcher, data, l_pos, end) {
+                        let found = skip_find_fwd(searcher, data, l_pos, end);
+                        match found {
                             Some(offset) => {
                                 if offset > 0 {
                                     max_end = fwd_update::<false>(

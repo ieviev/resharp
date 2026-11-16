@@ -134,6 +134,7 @@ fn precompile_bdfa(bdfa: &mut BDFA, b: &mut RegexBuilder) -> Result<(), Error> {
 fn empty_ldfa() -> LDFA {
     LDFA {
         pruned: DFA_DEAD,
+        dead_skip: false,
         prune_memo: Default::default(),
         begin_table: Vec::new(),
         center_table: Vec::new(),

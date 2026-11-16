@@ -61,6 +61,9 @@ function label(name: string, patterns: Map<string, PatternPair>): string {
 }
 
 function run(): string {
+    if (process.env.BENCH_OUT) {
+        return process.env.BENCH_OUT.split(",").map((f) => readFileSync(f, "utf8")).join("\n");
+    }
     const args = [
         "run", "--quiet", "--release", "--features", "pcre2-bench",
         "--example", "popular-crates", "--", "--bench", "--noplot",

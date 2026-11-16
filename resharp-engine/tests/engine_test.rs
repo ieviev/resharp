@@ -3077,7 +3077,7 @@ fn hardened_bare_lookahead_zero_width_dot_hash() {
 #[test]
 fn leading_literal_prefers_fwd_over_convergence() {
     use resharp::UnicodeMode;
-    let fwd: &[&str] = &[r"<([/]?)([^ >]+)", r"[^\x08]\x08"];
+    let fwd: &[&str] = &[r"<([/]?)([^ >]+)"];
     for p in fwd {
         let opts = RegexOptions::default().unicode(UnicodeMode::Javascript);
         let re = Regex::with_options(p, opts).unwrap();
@@ -3104,7 +3104,7 @@ fn leading_literal_prefers_fwd_over_convergence() {
              must pick a linear-safe prefix instead",
         );
     }
-    let no_conv: &[&str] = &[r"[^.!?:]+[.!?:]+", "\\s*([^=]+)=\"([^\"]*)\",?"];
+    let no_conv: &[&str] = &[r"[^.!?:]+[.!?:]+", "\\s*([^=]+)=\"([^\"]*)\",?", r"[^\x08]\x08"];
     for p in no_conv {
         let opts = RegexOptions::default().unicode(UnicodeMode::Javascript);
         let re = Regex::with_options(p, opts).unwrap();
@@ -11007,4 +11007,85 @@ fn full_mode_line_start_collapse_keeps_spans() {
     assert_eq!(spans(b"a1b1\xff\n\xff1\x801\n"), Vec::<(usize, usize)>::new());
     assert!(re.is_match(b"x1y1z").unwrap());
     assert!(!re.is_match(b"a1b1c\xff").unwrap());
+}
+
+fn spans_in(mode: resharp::UnicodeMode, pat: &str, hay: &[u8]) -> Vec<(usize, usize)> {
+    let re = Regex::with_options(pat, RegexOptions::default().unicode(mode)).unwrap();
+    re.find_all(hay).unwrap().iter().map(|m| (m.start, m.end)).collect()
+}
+
+#[test]
+fn negated_class_repeat_is_codepoint_wide_on_invalid_utf8() {
+    use resharp::UnicodeMode::{Default, Full};
+    for mode in [Default, Full] {
+        assert_eq!(spans_in(mode, "[^,]+", b"a\xffb,c"), vec![(0, 1), (2, 3), (4, 5)]);
+        assert_eq!(spans_in(mode, "[^,]*,", b"a\xffb,c"), vec![(2, 4)]);
+        assert_eq!(spans_in(mode, "[^,]{1,}", b"a\xffb"), vec![(0, 1), (2, 3)]);
+    }
+}
+
+fn lcg(state: &mut u64) -> u64 {
+    *state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+    *state >> 33
+}
+
+fn random_utf8(state: &mut u64, len: usize) -> String {
+    const ALPHABET: [char; 17] = [
+        'a', 'b', 'x', ',', ',', '\n', ' ', '1', '%', 'õ', 'ä', 'ü', 'š', 'ž', '中', '😀', '\u{10FFFF}',
+    ];
+    (0..len).map(|_| ALPHABET[lcg(state) as usize % ALPHABET.len()]).collect()
+}
+
+#[test]
+fn negated_class_default_matches_full_on_random_valid_utf8() {
+    use resharp::UnicodeMode::{Default, Full};
+    let pats = [
+        "[^,]+", "[^,]*", "[^,]+,", "[^\\n]+\\n", "[^\\n]*\\n", "x[^,]*", "[^,]*x", "[^,]+x[^,]+",
+        "[^,\\n]+", "[^ a]+", "[^a-z]+", "[^a-z]*1", "[^%]+%", "^[^,]+", "[^,]+$", "(?:[^,]+,)+",
+        "[^,]+|x+", "[^,]*&~(_*x_*)", "([^,]+),([^,]+)", "a[^,]{0,}b", "[^,]+(?=,)", "(?<=,)[^,]+",
+        "[^\\n]*\\n[^\\n]*", "[^1]+1[^1]+",
+    ];
+    let mut st = 0x5eed_u64;
+    for pat in pats {
+        let fast = Regex::with_options(pat, RegexOptions::default().unicode(Default)).unwrap();
+        let full = Regex::with_options(pat, RegexOptions::default().unicode(Full)).unwrap();
+        for _ in 0..60 {
+            let len = (lcg(&mut st) % 40) as usize;
+            let hay = random_utf8(&mut st, len);
+            let spans = |re: &Regex| -> Vec<(usize, usize)> {
+                re.find_all(hay.as_bytes()).unwrap().iter().map(|m| (m.start, m.end)).collect()
+            };
+            let want = spans(&full);
+            assert_eq!(spans(&fast), want, "default vs full: {pat} on {hay:?}");
+            assert_eq!(
+                fast.is_match(hay.as_bytes()).unwrap(),
+                !want.is_empty(),
+                "is_match: {pat} on {hay:?}"
+            );
+        }
+    }
+}
+
+#[cfg(feature = "convergence_prefix")]
+#[test]
+fn convergence_variable_width_right_part_keeps_overlapping_matches() {
+    let cases: &[(&str, &str, &[(usize, usize)])] = &[
+        (r"(?<=\w)\.\w", "٣.٣.٣. ", &[(2, 5), (5, 8)]),
+        (r"(?<=\w)\.\w", "٣.٣.٣.. 1.59٣", &[(2, 5), (5, 8), (12, 14)]),
+        (r"\w+\.\w", ":: ab.٣..", &[(3, 8)]),
+    ];
+    for (pat, hay, want) in cases {
+        let opts = RegexOptions::default()
+            .unicode(resharp::UnicodeMode::Full)
+            .force_convergence(true);
+        let re = Regex::with_options(pat, opts).unwrap();
+        assert!(re.uses_convergence_prefix(), "{pat}");
+        let got: Vec<(usize, usize)> = re
+            .find_all(hay.as_bytes())
+            .unwrap()
+            .into_iter()
+            .map(|m| (m.start, m.end))
+            .collect();
+        assert_eq!(got, *want, "pat={pat} hay={hay:?}");
+    }
 }

@@ -224,7 +224,7 @@ fn dispatch_literal() {
 }
 
 #[test]
-fn dispatch_word_boundary_the() {
-    let (_bdfa, _fwd, rev) = dispatch_info(r"\bthe\b");
-    assert!(rev, r"\bthe\b should have rev accel via strip_lb fallback");
+fn dispatch_word_boundary_literal() {
+    let (_bdfa, _fwd, rev) = dispatch_info(r"\bSherlock\b");
+    assert!(rev, r"\bSherlock\b should have rev accel via strip_lb fallback");
 }

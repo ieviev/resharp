@@ -897,3 +897,105 @@ pattern = '[ac]a|(?:a*dd)*'
 javascript = true
 input = "caad"
 matches = [[0, 2], [2, 2], [3, 3], [4, 4]]
+
+[[test]]
+name = "negated_ascii_class_repeat_1_default"
+pattern = '[^,]+'
+input = "õä,ab\nä😀,x"
+matches = [[0, 4], [5, 14], [15, 16]]
+
+[[test]]
+name = "negated_ascii_class_repeat_1_full"
+pattern = '[^,]+'
+input = "õä,ab\nä😀,x"
+matches = [[0, 4], [5, 14], [15, 16]]
+full = true
+
+[[test]]
+name = "negated_ascii_class_repeat_2_default"
+pattern = '[^,\n]+'
+input = "õä,ab\nä😀,x"
+matches = [[0, 4], [5, 7], [8, 14], [15, 16]]
+
+[[test]]
+name = "negated_ascii_class_repeat_2_full"
+pattern = '[^,\n]+'
+input = "õä,ab\nä😀,x"
+matches = [[0, 4], [5, 7], [8, 14], [15, 16]]
+full = true
+
+[[test]]
+name = "negated_ascii_class_repeat_3_default"
+pattern = '[^,]+,'
+input = "õä,ab\nä😀,x"
+matches = [[0, 5], [5, 15]]
+
+[[test]]
+name = "negated_ascii_class_repeat_3_full"
+pattern = '[^,]+,'
+input = "õä,ab\nä😀,x"
+matches = [[0, 5], [5, 15]]
+full = true
+
+[[test]]
+name = "negated_ascii_class_repeat_4_default"
+pattern = '[^\n]*\n'
+input = "õä,ab\nä😀,x"
+matches = [[0, 8]]
+
+[[test]]
+name = "negated_ascii_class_repeat_4_full"
+pattern = '[^\n]*\n'
+input = "õä,ab\nä😀,x"
+matches = [[0, 8]]
+full = true
+
+[[test]]
+name = "negated_ascii_class_repeat_5_default"
+pattern = '[^a-z]{2,}x'
+input = "õä,ab\nä😀,x"
+matches = [[7, 16]]
+
+[[test]]
+name = "negated_ascii_class_repeat_5_full"
+pattern = '[^a-z]{2,}x'
+input = "õä,ab\nä😀,x"
+matches = [[7, 16]]
+full = true
+
+[[test]]
+name = "negated_ascii_class_repeat_6_default"
+pattern = 'x[^,]*'
+input = "õä,ab\nä😀,x"
+matches = [[15, 16]]
+
+[[test]]
+name = "negated_ascii_class_repeat_6_full"
+pattern = 'x[^,]*'
+input = "õä,ab\nä😀,x"
+matches = [[15, 16]]
+full = true
+
+[[test]]
+name = "negated_non_ascii_class_star_default"
+pattern = '[^õ]+'
+input = "abõcd"
+matches = [[0, 2], [4, 6]]
+
+[[test]]
+name = "negated_ascii_class_bounded_exact_default"
+pattern = '[^,]{2}'
+input = "õõ"
+matches = [[0, 4]]
+
+[[test]]
+name = "negated_ascii_class_bounded_min3_default"
+pattern = '[^,]{3,}'
+input = "õõ"
+matches = []
+
+[[test]]
+name = "negated_ascii_class_bounded_min2_default"
+pattern = '[^,]{2,}'
+input = "õõ"
+matches = [[0, 4]]

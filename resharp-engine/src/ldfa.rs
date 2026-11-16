@@ -179,6 +179,7 @@ fn skip_is_profitable(bytes: &[u8]) -> bool {
     }
     let freq_sum: u32 = bytes
         .iter()
+        .filter(|&&b| b < 0x80)
         .map(|&b| crate::simd::BYTE_FREQ[b as usize] as u32)
         .sum();
     freq_sum < SKIP_FREQ_THRESHOLD
@@ -187,6 +188,8 @@ fn skip_is_profitable(bytes: &[u8]) -> bool {
 #[cfg_attr(feature = "serialize", allow(missing_docs))]
 pub struct LDFA {
     pub pruned: Sid,
+    #[cfg_attr(feature = "serialize", serde(skip))]
+    pub dead_skip: bool,
     #[cfg_attr(feature = "serialize", serde(skip))]
     pub prune_memo: FxHashMap<(NodeId, bool), NodeId>,
     pub begin_table: Vec<Sid>,
@@ -324,6 +327,7 @@ impl LDFA {
         let skip_ids = vec![0u8; state_nodes.len()];
         let mut dfa = LDFA {
             pruned: pruned_sid,
+            dead_skip: false,
             prune_memo,
             begin_table,
             center_table,
@@ -583,6 +587,9 @@ impl LDFA {
             self.ensure_capacity(next_sid);
             let delta = self.dfa_delta(state_id, mt_idx as u32);
             self.center_table[delta] = next_sid;
+            if next_sid == DFA_DEAD && self.dead_skip {
+                self.ensure_dead_skip();
+            }
         }
         if crate::simd::has_simd() {
             self.try_build_skip_simd(b, state_id as usize);
@@ -725,7 +732,15 @@ impl LDFA {
         Some(self.get_or_create_skip_range(ranges))
     }
 
-    pub(crate) fn ensure_dead_skip(&mut self) {
+    pub(crate) fn enable_dead_skip(&mut self) {
+        self.dead_skip = true;
+        let first = (DFA_DEAD as usize + 1) << self.mt_log;
+        if self.center_table[first..].contains(&DFA_DEAD) {
+            self.ensure_dead_skip();
+        }
+    }
+
+    fn ensure_dead_skip(&mut self) {
         if self.skip_ids.len() > DFA_DEAD as usize && self.skip_ids[DFA_DEAD as usize] == 0 {
             self.skip_ids[DFA_DEAD as usize] = self.get_or_create_skip_all();
         }
@@ -833,6 +848,19 @@ impl LDFA {
         end: usize,
         max_end: usize,
     ) -> (u32, usize, usize, bool) {
+        let r = self.dispatch_scan_fwd_raw(tables, curr, pos, end, max_end);
+        r
+    }
+
+    #[inline(always)]
+    fn dispatch_scan_fwd_raw(
+        &self,
+        tables: &ScanTables,
+        curr: u32,
+        pos: usize,
+        end: usize,
+        max_end: usize,
+    ) -> (u32, usize, usize, bool) {
         if self.can_skip() {
             scan_fwd::<true>(
                 tables,
@@ -860,6 +888,19 @@ impl LDFA {
 
     #[inline(always)]
     fn dispatch_scan_fwd_verify(
+        &self,
+        tables: &ScanTables,
+        curr: u32,
+        pos: usize,
+        end: usize,
+        max_end: usize,
+    ) -> (u32, usize, usize, bool) {
+        let r = self.dispatch_scan_fwd_verify_raw(tables, curr, pos, end, max_end);
+        r
+    }
+
+    #[inline(always)]
+    fn dispatch_scan_fwd_verify_raw(
         &self,
         tables: &ScanTables,
         curr: u32,
@@ -895,6 +936,26 @@ impl LDFA {
     #[inline(always)]
     #[allow(clippy::too_many_arguments)]
     fn dispatch_collect_rev<const EARLY_EXIT: bool>(
+        &self,
+        tables: &ScanTables,
+        curr: u32,
+        pos: usize,
+        data: &[u8],
+        nulls: &mut StartPositions,
+        b: &mut RegexBuilder,
+        conv_b: Option<&mut LDFA>,
+        prev_entry: &mut usize,
+        pending_entry: &mut usize,
+    ) -> Result<(u32, usize, bool), Error> {
+        let r = self.dispatch_collect_rev_raw::<EARLY_EXIT>(
+            tables, curr, pos, data, nulls, b, conv_b, prev_entry, pending_entry,
+        )?;
+        Ok(r)
+    }
+
+    #[inline(always)]
+    #[allow(clippy::too_many_arguments)]
+    fn dispatch_collect_rev_raw<const EARLY_EXIT: bool>(
         &self,
         tables: &ScanTables,
         curr: u32,
@@ -1491,6 +1552,19 @@ impl LDFA {
         pos: usize,
         end: usize,
     ) -> (u32, usize, bool, bool) {
+        let r = self.dispatch_scan_fwd_first_null_raw(tables, curr, pos, end);
+        r
+    }
+
+    #[inline(always)]
+    #[cfg_attr(not(feature = "stream"), allow(dead_code))]
+    fn dispatch_scan_fwd_first_null_raw(
+        &self,
+        tables: &ScanTables,
+        curr: u32,
+        pos: usize,
+        end: usize,
+    ) -> (u32, usize, bool, bool) {
         if self.can_skip() {
             scan_fwd_first_null::<true>(
                 tables,
@@ -1750,6 +1824,10 @@ impl LDFA {
         }
 
         if EARLY_EXIT && !nulls.is_empty() {
+            return Ok(());
+        }
+
+        if curr == DFA_DEAD as u32 {
             return Ok(());
         }
 

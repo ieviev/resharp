@@ -1711,7 +1711,7 @@ impl Regex {
             rev_ts.install_prefix(&mut b, search, resume as u32, window)?;
         }
         if let Some(rev) = rev_ts.as_mut().filter(|_| !b.starts_with_ts(ts_rev_start)) {
-            rev.ensure_dead_skip();
+            rev.enable_dead_skip();
         }
 
         #[cfg(feature = "stream")]
