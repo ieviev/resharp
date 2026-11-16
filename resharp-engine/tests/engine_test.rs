@@ -10978,3 +10978,33 @@ fn max_dfa_capacity_above_u16_is_accepted_with_wide_state() {
     };
     assert!(Regex::with_options("a+", opts).unwrap().is_match(b"aa").unwrap());
 }
+
+#[test]
+fn trailing_line_star_after_literals_is_not_hardened() {
+    for p in [r"(?m)^.*1.*1.*$", r"(?m)^.*(1.*){5}$", r"(?m)^.*[éá].*[éá].*$"] {
+        let re = Regex::with_options(p, RegexOptions::default().multiline(true)).unwrap();
+        assert_eq!(re.find_all_kind_name(), "Dfa", "{p}");
+    }
+    let re = Regex::with_options(r"(?m)^.*1.*1.*$", RegexOptions::default().multiline(true)).unwrap();
+    let got: Vec<(usize, usize)> = re
+        .find_all(b"a1b1c\nxx1\n11\n")
+        .unwrap()
+        .iter()
+        .map(|m| (m.start, m.end))
+        .collect();
+    assert_eq!(got, vec![(0, 5), (10, 12)]);
+}
+
+#[test]
+fn full_mode_line_start_collapse_keeps_spans() {
+    let opts = RegexOptions::default().multiline(true).unicode(resharp::UnicodeMode::Full);
+    let re = Regex::with_options(r"(?m)^.*1.*1.*$", opts).unwrap();
+    let spans = |h: &[u8]| -> Vec<(usize, usize)> {
+        re.find_all(h).unwrap().iter().map(|m| (m.start, m.end)).collect()
+    };
+    assert_eq!(spans("é1é\n1é1\nx\n".as_bytes()), vec![(6, 10)]);
+    assert_eq!(spans(b"a1b1c\xff\nx1y1z\n"), vec![(7, 12)]);
+    assert_eq!(spans(b"a1b1\xff\n\xff1\x801\n"), Vec::<(usize, usize)>::new());
+    assert!(re.is_match(b"x1y1z").unwrap());
+    assert!(!re.is_match(b"a1b1c\xff").unwrap());
+}

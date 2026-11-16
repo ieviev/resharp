@@ -680,6 +680,18 @@ fn auto_harden(b: &mut RegexBuilder, start: NodeId, has_anchors: bool) -> Harden
                 .fold(TSetId::EMPTY, |acc, e| b.solver().or_id(acc, e.set));
             b.solver().is_full_id(cover)
         });
+        let cannot_fail = sticky
+            && scc.iter().all(|&n| {
+                graph.nodes[n].nullability(b).has(resharp_algebra::nulls::Nullability::END)
+                    && graph.edges[n].iter().all(|e| {
+                        node_scc[e.dst] == sid
+                            || graph.nodes[e.dst].nullability(b)
+                                == resharp_algebra::nulls::Nullability::ALWAYS
+                    })
+            });
+        if cannot_fail {
+            continue;
+        }
         const SPIN_FREQ_THRESHOLD: u64 = crate::prefix::TOTAL_BYTE_FREQ / 2;
         let has_wide_spin = scc.iter().any(|&n| {
             let in_scc_cover = graph.edges[n]
