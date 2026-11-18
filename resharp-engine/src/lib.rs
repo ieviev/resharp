@@ -1823,7 +1823,7 @@ impl Regex {
 
     #[cfg(feature = "diag")]
     #[allow(missing_docs)]
-    pub fn fwd_dot(&self) -> Result<String, Error> {
+    pub fn fwd_dot(&self, max_states: usize) -> Result<String, Error> {
         use crate::ldfa::{DFA_DEAD, DFA_INITIAL};
         let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         let RegexInner { ref mut b, ref mut fwd, .. } = *inner;
@@ -1851,6 +1851,9 @@ impl Regex {
             }
             for (t, bs) in by_target {
                 if !order.contains(&t) {
+                    if order.len() == max_states {
+                        return Err(Error::CapacityExceeded);
+                    }
                     order.push(t);
                 }
                 edges.push((s, t, bs));
@@ -1870,23 +1873,41 @@ impl Regex {
             out += &format!("  {} [shape={shape}, label=\"{}\"{tags}];\n", name(s), b.pp(node).replace('"', "\\\""));
         }
         for (s, t, bs) in edges {
-            let label: String = if bs.len() > 200 {
-                "_".to_string()
-            } else {
-                let mut parts = Vec::new();
+            let esc = |c: u8| match c {
+                b'"' => "\\\"".to_string(),
+                b'\\' => "\\\\".to_string(),
+                b'\n' => "\\\\n".to_string(),
+                b'\r' => "\\\\r".to_string(),
+                b'\t' => "\\\\t".to_string(),
+                b' ' => " ".to_string(),
+                c if c.is_ascii_graphic() => (c as char).to_string(),
+                c => format!("\\\\x{c:02x}"),
+            };
+            let ranges = |bs: &[u8]| -> (usize, String) {
+                let mut parts = 0;
+                let mut out = String::new();
                 let mut j = 0;
                 while j < bs.len() {
                     let mut k = j;
                     while k + 1 < bs.len() && bs[k + 1] == bs[k] + 1 {
                         k += 1;
                     }
-                    let esc = |c: u8| if c.is_ascii_graphic() { (c as char).to_string() } else { format!("\\\\x{c:02x}") };
-                    parts.push(if k > j + 1 { format!("{}-{}", esc(bs[j]), esc(bs[k])) } else if k == j + 1 { format!("{}{}", esc(bs[j]), esc(bs[k])) } else { esc(bs[j]) });
+                    parts += 1;
+                    out += &if k > j + 1 { format!("{}-{}", esc(bs[j]), esc(bs[k])) } else if k == j + 1 { format!("{}{}", esc(bs[j]), esc(bs[k])) } else { esc(bs[j]) };
                     j = k + 1;
                 }
-                let s = parts.join("");
-                if parts.len() > 1 || s.contains('-') { format!("[{s}]") } else { s }
+                (parts, out)
             };
+            let label: String = if bs.len() == 256 {
+                "_".to_string()
+            } else if bs.len() > 128 {
+                let rest: Vec<u8> = (0..=255u8).filter(|c| !bs.contains(c)).collect();
+                format!("[^{}]", ranges(&rest).1)
+            } else {
+                let (parts, s) = ranges(&bs);
+                if parts > 1 || s.contains('-') { format!("[{s}]") } else { s }
+            };
+            let label = if label.len() > 40 { format!("{{{} bytes}}", bs.len()) } else { label };
             out += &format!("  {} -> {} [label=\"{label}\"];\n", name(s), name(t));
         }
         out += "}\n";
@@ -2829,6 +2850,9 @@ impl Regex {
                 }
             }
         } else {
+            if self.init_flags.has_la() {
+                inner.fwd.enable_verified(&mut inner.b)?;
+            }
             inner
                 .fwd
                 .scan_fwd_all(&mut inner.b, &inner.nulls, input, &mut inner.matches)?;

@@ -2203,3 +2203,27 @@ name = "zero_width_lookahead_tail_lookbehind_no_match_2"
 pattern = '(?:(?<=_*\n)&(?:(?<=\A)(?!a)\A){2})'
 input = "\n"
 matches = []
+
+[[test]]
+name = "lone_lookahead_shorter_arm_end_kept"
+pattern = '\w+@\w|\w+@\w\w(?=cdef)'
+input = "xx@abcx"
+matches = [[0, 4]]
+
+[[test]]
+name = "lone_lookahead_longer_arm_when_lookahead_holds"
+pattern = '\w+@\w|\w+@\w\w(?=cdef)'
+input = "xx@abcdef"
+matches = [[0, 5]]
+
+[[test]]
+name = "lone_lookahead_far_context_satisfied"
+pattern = '.+@.+(?=[^—]*— Invalid)'
+input = "a@b\nc@d\n— Invalid\ne@f\n"
+matches = [[0, 3], [4, 7]]
+
+[[test]]
+name = "lone_lookahead_far_context_missing"
+pattern = '.+@.+(?=[^—]*— Invalid)'
+input = "a@b\nc@d\n"
+matches = []

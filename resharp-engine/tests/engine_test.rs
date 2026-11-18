@@ -996,6 +996,33 @@ fn opts_unicode_false() {
 }
 
 #[test]
+fn inline_u_flag_switches_between_full_and_ascii() {
+    use resharp::UnicodeMode;
+    let ms = |p: &str, h: &str, mode: UnicodeMode| -> Vec<(usize, usize)> {
+        Regex::with_options(p, RegexOptions::default().unicode(mode))
+            .unwrap()
+            .find_all(h.as_bytes())
+            .unwrap()
+            .iter()
+            .map(|m| (m.start, m.end))
+            .collect()
+    };
+    let deva = "\u{967}\u{968}\u{969}";
+    for mode in [UnicodeMode::Ascii, UnicodeMode::Default, UnicodeMode::Full] {
+        assert_eq!(ms(r"(?u)\d+", deva, mode), vec![(0, 9)], "(?u)\\d+ in {mode:?}");
+        assert_eq!(ms(r"(?-u)\w+", "caf\u{e9}", mode), vec![(0, 3)], "(?-u)\\w+ in {mode:?}");
+    }
+    assert!(ms(r"\d+", deva, UnicodeMode::Default).is_empty());
+    assert_eq!(ms(r"\d+", deva, UnicodeMode::Full), vec![(0, 9)]);
+    assert!(ms(r"(?-u)\d+", deva, UnicodeMode::Full).is_empty());
+    assert_eq!(ms(r"(?u).", "\u{e9}", UnicodeMode::Ascii), vec![(0, 2)]);
+    assert_eq!(ms(r"(?-u).", "\u{e9}", UnicodeMode::Full), vec![(0, 1), (1, 2)]);
+    assert_eq!(ms(r"(?u:\d)\d", "\u{967}1", UnicodeMode::Default), vec![(0, 4)]);
+    assert!(ms(r"(?u:\d)\d", "\u{967}\u{967}", UnicodeMode::Default).is_empty());
+    assert_eq!(ms(r"(?u:\w)(?-u:\w)", "\u{e9}a", UnicodeMode::Default), vec![(0, 3)]);
+}
+
+#[test]
 fn opts_case_insensitive() {
     let re = Regex::with_options("hello", RegexOptions::default().case_insensitive(true)).unwrap();
     let m = re.find_all(b"Hello HELLO hello").unwrap();
@@ -11087,5 +11114,51 @@ fn convergence_variable_width_right_part_keeps_overlapping_matches() {
             .map(|m| (m.start, m.end))
             .collect();
         assert_eq!(got, *want, "pat={pat} hay={hay:?}");
+    }
+}
+
+#[test]
+fn lookahead_dfa_agrees_with_hardened_on_random_inputs() {
+    fn next(s: &mut u64) -> u64 {
+        *s ^= *s << 13;
+        *s ^= *s >> 7;
+        *s ^= *s << 17;
+        *s
+    }
+    let pats = [
+        r".+@.+(?=[^—]*— Invalid)",
+        r"\w+@\w|\w+@\w\w(?=cdef)",
+        r"a+b(?=c)|a+bc?d",
+        r"a.*b(?=[^x]*x)",
+        r"a+(?=b*c)|a",
+        r"(ab)+(?=a)|ab",
+        r"a[^c]*(?=c)|ab",
+        r".+(?=x)|.",
+        r".*a(?=.*b)",
+        r"a.+b.+(?=[^c]*c)",
+        r"\w+(?=\s*\d)",
+        r"x.*y(?=z*w)|x",
+    ];
+    let alpha = b"abcdxyzw @\n";
+    let mut seed = 0x9e3779b97f4a7c15u64;
+    for pat in pats {
+        let dfa = Regex::new(pat).unwrap();
+        let hard = Regex::with_options(
+            pat,
+            RegexOptions::default().hardening(resharp::HardeningMode::Always),
+        )
+        .unwrap();
+        for _ in 0..1000 {
+            let len = (next(&mut seed) % 24) as usize + 1;
+            let hay: Vec<u8> = (0..len)
+                .map(|_| alpha[(next(&mut seed) % alpha.len() as u64) as usize])
+                .collect();
+            assert_eq!(
+                dfa.find_all(&hay).unwrap(),
+                hard.find_all(&hay).unwrap(),
+                "pat={pat} hay={:?}",
+                String::from_utf8_lossy(&hay)
+            );
+        }
     }
 }

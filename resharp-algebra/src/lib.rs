@@ -49,6 +49,26 @@ impl std::fmt::Display for ResharpError {
 
 impl std::error::Error for ResharpError {}
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MinState {
+    pub repr: NodeId,
+    pub accepting: bool,
+    pub accepting_at_end: bool,
+    pub edges: Vec<(usize, TSetId)>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MinDfa {
+    pub reachable: usize,
+    pub states: Vec<MinState>,
+}
+
+impl MinDfa {
+    pub fn minimal(&self) -> usize {
+        self.states.len()
+    }
+}
+
 mod id {
     pub const MISSING: u32 = 0;
     pub const BOT: u32 = 1;
@@ -1621,6 +1641,138 @@ impl RegexBuilder {
                 }
             }
         }
+    }
+
+    fn block_edges(&mut self, edges: &[(usize, TSetId)], block_of: &[usize]) -> Vec<(usize, TSetId)> {
+        let mut by_block: FxHashMap<usize, TSetId> = FxHashMap::default();
+        for &(t, set) in edges {
+            let merged = match by_block.get(&block_of[t]) {
+                Some(&old) => self.solver().or_id(old, set),
+                None => set,
+            };
+            by_block.insert(block_of[t], merged);
+        }
+        let mut out: Vec<(usize, TSetId)> = by_block.into_iter().collect();
+        out.sort();
+        out
+    }
+
+    fn der_edges(&mut self, der: TRegexId) -> Vec<(NodeId, TSetId)> {
+        let full = self.solver().get_id(Solver::full());
+        let mut out: FxHashMap<NodeId, TSetId> = FxHashMap::default();
+        let mut stack = vec![(der, full)];
+        while let Some((t, path)) = stack.pop() {
+            match *self.get_tregex(t) {
+                TRegex::Leaf(n) => {
+                    assert_ne!(n, NodeId::MISSING, "derivative leaf is missing");
+                    let set = match out.get(&n) {
+                        Some(&old) => self.solver().or_id(old, path),
+                        None => path,
+                    };
+                    out.insert(n, set);
+                }
+                TRegex::ITE(cond, th, el) => {
+                    let s = self.solver();
+                    let yes = s.and_id(path, cond);
+                    let not_cond = s.not_id(cond);
+                    let no = s.and_id(path, not_cond);
+                    if !s.is_empty_id(yes) {
+                        stack.push((th, yes));
+                    }
+                    if !s.is_empty_id(no) {
+                        stack.push((el, no));
+                    }
+                }
+            }
+        }
+        out.into_iter().collect()
+    }
+
+    pub fn minimize_dfa(&mut self, initial: NodeId, max_states: usize) -> Result<MinDfa, ResharpError> {
+        if initial.contains_lookaround(self) || initial.contains_tags(self) {
+            return Err(ResharpError::UnsupportedPattern);
+        }
+        let sig = |b: &RegexBuilder, n: NodeId, at_begin: bool| -> u8 {
+            if at_begin {
+                let es = b.nullability_emptystring(n);
+                b.nullability(n).has(Nullability::BEGIN) as u8
+                    | ((es.has(Nullability::BEGIN) || es.has(Nullability::END)) as u8) << 1
+            } else {
+                let nl = b.nullability(n);
+                nl.has(Nullability::CENTER) as u8 | (nl.has(Nullability::END) as u8) << 1
+            }
+        };
+        let start_is_special = initial != NodeId::BOT && {
+            let d_begin = self.der(initial, Nullability::BEGIN)?;
+            let d_center = self.der(initial, Nullability::CENTER)?;
+            d_begin != d_center || sig(self, initial, true) != sig(self, initial, false)
+        };
+
+        let mut index: FxHashMap<(NodeId, bool), usize> = FxHashMap::default();
+        let mut nodes = vec![(initial, start_is_special)];
+        index.insert((initial, start_is_special), 0);
+        let mut edges: Vec<Vec<(usize, TSetId)>> = Vec::new();
+        let mut i = 0;
+        while i < nodes.len() {
+            let (node, at_begin) = nodes[i];
+            let mut row = Vec::new();
+            let mask = if at_begin { Nullability::BEGIN } else { Nullability::CENTER };
+            let der = self.der(node, mask)?;
+            for (next, set) in self.der_edges(der) {
+                let id = match index.get(&(next, false)) {
+                    Some(&id) => id,
+                    None => {
+                        if nodes.len() >= max_states {
+                            return Err(ResharpError::StateSpaceExplosion);
+                        }
+                        nodes.push((next, false));
+                        index.insert((next, false), nodes.len() - 1);
+                        nodes.len() - 1
+                    }
+                };
+                row.push((id, set));
+            }
+            edges.push(row);
+            i += 1;
+        }
+        let n = nodes.len();
+
+        let mut sig_block: FxHashMap<u8, usize> = FxHashMap::default();
+        let mut block_of: Vec<usize> = nodes
+            .iter()
+            .map(|&(node, at_begin)| {
+                let next = sig_block.len();
+                *sig_block.entry(sig(self, node, at_begin)).or_insert(next)
+            })
+            .collect();
+        let mut count = sig_block.len();
+        loop {
+            let mut seen: FxHashMap<(usize, Vec<(usize, TSetId)>), usize> = FxHashMap::default();
+            let mut next_block = vec![0usize; n];
+            for s in 0..n {
+                let key = (block_of[s], self.block_edges(&edges[s], &block_of));
+                let next = seen.len();
+                next_block[s] = *seen.entry(key).or_insert(next);
+            }
+            block_of = next_block;
+            if seen.len() == count {
+                break;
+            }
+            count = seen.len();
+        }
+        let mut states: Vec<MinState> = Vec::with_capacity(count);
+        for s in 0..n {
+            if block_of[s] < states.len() {
+                continue;
+            }
+            assert_eq!(block_of[s], states.len());
+            let (node, at_begin) = nodes[s];
+            let bits = sig(self, node, at_begin);
+            let es = self.block_edges(&edges[s], &block_of);
+            states.push(MinState { repr: node, accepting: bits & 1 != 0, accepting_at_end: bits & 2 != 0, edges: es });
+        }
+        assert_eq!(states.len(), count);
+        Ok(MinDfa { reachable: n, states })
     }
 
     fn star_then_body(&self, node_id: NodeId) -> Option<(NodeId, NodeId)> {
@@ -6031,6 +6183,47 @@ impl RegexBuilder {
         }
     }
 
+    pub fn pp_top(&self, node_id: NodeId) -> String {
+        let mut s = String::new();
+        if node_id.is_inter(self) || node_id.is_union(self) {
+            self.ppw_chain(&mut s, node_id, false).unwrap();
+        } else {
+            self.ppw(&mut s, node_id).unwrap();
+        }
+        s
+    }
+
+    fn ppw_chain(&self, s: &mut String, node_id: NodeId, paren: bool) -> Result<(), std::fmt::Error> {
+        let is_inter = node_id.is_inter(self);
+        let mut ops = Vec::new();
+        let mut stack = vec![node_id];
+        while let Some(n) = stack.pop() {
+            if (is_inter && n.is_inter(self)) || (!is_inter && n.is_union(self)) {
+                stack.push(n.right(self));
+                stack.push(n.left(self));
+            } else {
+                ops.push(n);
+            }
+        }
+        if paren {
+            write!(s, "(")?;
+        }
+        for (i, &n) in ops.iter().enumerate() {
+            if i > 0 {
+                write!(s, "{}", if is_inter { "&" } else { "|" })?;
+            }
+            if !is_inter && n.is_inter(self) {
+                self.ppw_chain(s, n, false)?;
+            } else {
+                self.ppw(s, n)?;
+            }
+        }
+        if paren {
+            write!(s, ")")?;
+        }
+        Ok(())
+    }
+
     fn ppw(&self, s: &mut String, node_id: NodeId) -> Result<(), std::fmt::Error> {
         if cfg!(feature = "graphviz") {
             match node_id {
@@ -6066,36 +6259,7 @@ impl RegexBuilder {
                     write!(s, "{}", self.solver_ref().pp(psi))
                 }
             }
-            Kind::Inter => {
-                write!(s, "(")?;
-                self.ppw(s, node_id.left(self))?;
-                write!(s, "&")?;
-                let mut curr = node_id.right(self);
-                while curr.is_inter(self) {
-                    let n = curr.left(self);
-                    self.ppw(s, n)?;
-                    write!(s, "&")?;
-                    curr = curr.right(self);
-                }
-                self.ppw(s, curr)?;
-                write!(s, ")")
-            }
-            Kind::Union => {
-                let left = node_id.left(self);
-                let right = node_id.right(self);
-                write!(s, "(")?;
-                self.ppw(s, left)?;
-                write!(s, "|")?;
-                let mut curr = right;
-                while curr.is_union(self) {
-                    let n = curr.left(self);
-                    self.ppw(s, n)?;
-                    write!(s, "|")?;
-                    curr = curr.right(self);
-                }
-                self.ppw(s, curr)?;
-                write!(s, ")")
-            }
+            Kind::Inter | Kind::Union => self.ppw_chain(s, node_id, true),
             Kind::Concat => {
                 let left = node_id.left(self);
                 let right = node_id.right(self);
@@ -6352,6 +6516,16 @@ impl RegexBuilder {
 
     pub fn prune_fwd(&mut self, node_id: NodeId, memo: &mut FxHashMap<(NodeId, bool), NodeId>) -> NodeId {
         self.prune_rec::<true>(node_id, memo, false)
+    }
+
+    pub fn accept_lone_lookahead(&mut self, node_id: NodeId) -> NodeId {
+        if node_id.is_lookahead(self) && self.get_lookahead_tail(node_id).is_missing() {
+            let rel = self.get_lookahead_rel(node_id);
+            if rel != u32::MAX && rel == self.get_lookahead_rel_lo(node_id) {
+                return self.mk_lookahead_internal(NodeId::TS, NodeId::MISSING, rel);
+            }
+        }
+        node_id
     }
 
     pub fn prune_rev(&mut self, node_id: NodeId, memo: &mut FxHashMap<(NodeId, bool), NodeId>) -> NodeId {

@@ -24,6 +24,14 @@ use resharp_algebra::{Kind, NodeId};
 type TB<'s> = resharp_algebra::RegexBuilder;
 type WbBranches = Vec<(NodeId, Option<NodeId>)>;
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Uni {
+    Ascii = 0,
+    Default = 1,
+    Full = 2,
+    Javascript = 3,
+}
+
 /// global pattern-level flags, set from `RegexOptions`.
 pub struct PatternFlags {
     /// `\w`/`\d`/`\s` match full Unicode (true) or ASCII only (false).
@@ -439,8 +447,9 @@ enum ClassState {
 
 /// RE# syntax parser based on the regex-syntax crate.
 pub struct ResharpParser<'s> {
-    perl_classes: Vec<(bool, regex_syntax::ast::ClassPerlKind, NodeId)>,
-    unicode_classes: resharp_algebra::UnicodeClassCache,
+    perl_classes: Vec<(Uni, bool, regex_syntax::ast::ClassPerlKind, NodeId)>,
+    unicode_classes: [resharp_algebra::UnicodeClassCache; 4],
+    uni: Cell<Uni>,
     pub translator: regex_syntax::hir::translate::Translator,
     pub pattern: &'s str,
     pos: Cell<Position>,
@@ -452,8 +461,6 @@ pub struct ResharpParser<'s> {
     dot_all: Cell<bool>,
     multiline: Cell<bool>,
     global_unicode: bool,
-    global_full_unicode: bool,
-    global_ascii_perl: bool,
     global_case_insensitive: bool,
     expanded_ast_limit: u64,
     max_list_len: usize,
@@ -664,7 +671,16 @@ impl<'s> ResharpParser<'s> {
             translator: trb.build(),
             pattern,
             perl_classes: vec![],
-            unicode_classes: resharp_algebra::UnicodeClassCache::default(),
+            unicode_classes: std::array::from_fn(|_| resharp_algebra::UnicodeClassCache::default()),
+            uni: Cell::new(if flags.ascii_perl_classes {
+                Uni::Javascript
+            } else if flags.full_unicode {
+                Uni::Full
+            } else if flags.unicode {
+                Uni::Default
+            } else {
+                Uni::Ascii
+            }),
             pos: Cell::new(Position::new(0, 0, 0)),
             capture_index: Cell::new(0),
             lookaround_depth: Cell::new(0),
@@ -674,8 +690,6 @@ impl<'s> ResharpParser<'s> {
             dot_all: Cell::new(flags.dot_matches_new_line),
             multiline: Cell::new(flags.multiline),
             global_unicode: flags.unicode || flags.full_unicode || flags.ascii_perl_classes,
-            global_full_unicode: flags.full_unicode,
-            global_ascii_perl: flags.ascii_perl_classes,
             global_case_insensitive: flags.case_insensitive,
             expanded_ast_limit: flags.expanded_ast_limit,
             max_list_len: flags.max_list_len,
@@ -688,6 +702,18 @@ impl<'s> ResharpParser<'s> {
             capture_names: RefCell::new(vec![]),
             scratch: RefCell::new(String::new()),
         }
+    }
+
+    fn uc(&mut self) -> &mut resharp_algebra::UnicodeClassCache {
+        &mut self.unicode_classes[self.uni.get() as usize]
+    }
+
+    fn ascii_perl(&self) -> bool {
+        self.uni.get() == Uni::Javascript
+    }
+
+    fn full_unicode(&self) -> bool {
+        self.uni.get() == Uni::Full
     }
 
     fn parser(&'_ self) -> &'_ ResharpParser<'_> {
@@ -1337,11 +1363,11 @@ impl<'s> ResharpParser<'s> {
         let w = self
             .perl_classes
             .iter()
-            .find(|(c_neg, c_kind, _)| *c_kind == kind && *c_neg == negated);
+            .find(|(c_uni, c_neg, c_kind, _)| *c_uni == self.uni.get() && *c_kind == kind && *c_neg == negated);
         match w {
-            Some((_, _, value)) => Ok(*value),
+            Some((_, _, _, value)) => Ok(*value),
             None => {
-                let translated = if self.global_ascii_perl {
+                let translated = if self.ascii_perl() {
                     let pos = match kind {
                         regex_syntax::ast::ClassPerlKind::Word => {
                             let az = tb.mk_range_u8(b'a', b'z');
@@ -1366,42 +1392,42 @@ impl<'s> ResharpParser<'s> {
                     } else {
                         pos
                     }
-                } else if self.global_unicode {
+                } else if self.uni.get() != Uni::Ascii {
                     match kind {
                         regex_syntax::ast::ClassPerlKind::Word => {
-                            if self.global_full_unicode {
-                                self.unicode_classes.ensure_word_full(tb);
+                            if self.full_unicode() {
+                                self.uc().ensure_word_full(tb);
                             } else {
-                                self.unicode_classes.ensure_word(tb);
+                                self.uc().ensure_word(tb);
                             }
                             if negated {
-                                self.unicode_classes.non_word
+                                self.uc().non_word
                             } else {
-                                self.unicode_classes.word
+                                self.uc().word
                             }
                         }
                         regex_syntax::ast::ClassPerlKind::Digit => {
-                            if self.global_full_unicode {
-                                self.unicode_classes.ensure_digit_full(tb);
+                            if self.full_unicode() {
+                                self.uc().ensure_digit_full(tb);
                             } else {
-                                self.unicode_classes.ensure_digit(tb);
+                                self.uc().ensure_digit(tb);
                             }
                             if negated {
-                                self.unicode_classes.non_digit
+                                self.uc().non_digit
                             } else {
-                                self.unicode_classes.digit
+                                self.uc().digit
                             }
                         }
                         regex_syntax::ast::ClassPerlKind::Space => {
-                            if self.global_full_unicode {
-                                self.unicode_classes.ensure_space_full(tb);
+                            if self.full_unicode() {
+                                self.uc().ensure_space_full(tb);
                             } else {
-                                self.unicode_classes.ensure_space(tb);
+                                self.uc().ensure_space(tb);
                             }
                             if negated {
-                                self.unicode_classes.non_space
+                                self.uc().non_space
                             } else {
-                                self.unicode_classes.space
+                                self.uc().space
                             }
                         }
                     }
@@ -1432,7 +1458,7 @@ impl<'s> ResharpParser<'s> {
                         pos
                     }
                 };
-                self.perl_classes.push((negated, kind, translated));
+                self.perl_classes.push((self.uni.get(), negated, kind, translated));
                 Ok(translated)
             }
         }
@@ -1571,8 +1597,8 @@ impl<'s> ResharpParser<'s> {
         tb: &mut TB<'s>,
     ) -> Result<WordCharKind> {
         use WordCharKind::*;
-        let word_id = self.unicode_classes.word;
-        let not_word_id = self.unicode_classes.non_word;
+        let word_id = self.uc().word;
+        let not_word_id = self.uc().non_word;
         let fast = Self::concat_neighbor_kind(asts, idx, dir);
         if fast != Unknown {
             return Ok(fast);
@@ -1769,13 +1795,13 @@ impl<'s> ResharpParser<'s> {
         children: &mut [NodeId],
         tb: &mut TB<'s>,
     ) -> Result<()> {
-        let wb = self.unicode_classes.wb;
-        let non_wb = self.unicode_classes.non_wb;
+        let wb = self.uc().wb;
+        let non_wb = self.uc().non_wb;
         if wb == NodeId::MISSING {
             return Ok(());
         }
-        let word = self.unicode_classes.word;
-        let non_word = self.unicode_classes.non_word;
+        let word = self.uc().word;
+        let non_word = self.uc().non_word;
         if word == NodeId::MISSING {
             return Ok(());
         }
@@ -1901,14 +1927,12 @@ impl<'s> ResharpParser<'s> {
     }
 
     fn ensure_word_class(&mut self, tb: &mut TB<'s>) -> NodeId {
-        if self.global_full_unicode {
-            self.unicode_classes.ensure_word_full(tb);
-        } else if self.global_unicode && !self.global_ascii_perl {
-            self.unicode_classes.ensure_word(tb);
-        } else {
-            self.unicode_classes.ensure_word_ascii(tb);
+        match self.uni.get() {
+            Uni::Full => self.uc().ensure_word_full(tb),
+            Uni::Default => self.uc().ensure_word(tb),
+            Uni::Ascii | Uni::Javascript => self.uc().ensure_word_ascii(tb),
         }
-        self.unicode_classes.word
+        self.uc().word
     }
 
     fn absorb_word_boundary_into_left(
@@ -2090,11 +2114,11 @@ impl<'s> ResharpParser<'s> {
             //   \B = (?<=\w)(?=\w)  | (?<!\w)(?!\w)
             //   TODO: expensive and the cost could be reduced further
             _ => {
-                self.unicode_classes.ensure_wb(tb);
+                self.uc().ensure_wb(tb);
                 let node = if boundary_match {
-                    self.unicode_classes.wb
+                    self.uc().wb
                 } else {
-                    self.unicode_classes.non_wb
+                    self.uc().non_wb
                 };
                 Ok((node, idx + 1))
             }
@@ -2147,6 +2171,9 @@ impl<'s> ResharpParser<'s> {
                 if let Some(state) = f.flags.flag_state(ast::Flag::DotMatchesNewLine) {
                     self.dot_all.set(state);
                 }
+                if let Some(state) = f.flags.flag_state(ast::Flag::Unicode) {
+                    self.uni.set(if state { Uni::Full } else { Uni::Ascii });
+                }
                 if let Some(state) = f.flags.flag_state(ast::Flag::MultiLine) {
                     self.multiline.set(state);
                 }
@@ -2160,7 +2187,7 @@ impl<'s> ResharpParser<'s> {
             }
             Ast::Top(_) => Ok(NodeId::TOP),
             Ast::Dot(_) => {
-                let codepoint_dot = self.global_ascii_perl || self.global_full_unicode;
+                let codepoint_dot = self.ascii_perl() || self.full_unicode();
                 let hirv = match (codepoint_dot, self.dot_all.get()) {
                     (true, true) => hir::Hir::dot(hir::Dot::AnyChar),
                     (true, false) => hir::Hir::dot(hir::Dot::AnyCharExceptLF),
@@ -2256,7 +2283,7 @@ impl<'s> ResharpParser<'s> {
             Ast::ClassBracketed(c) => match &c.kind {
                 regex_syntax::ast::ClassSet::Item(item) => {
                     if !c.negated && is_universal_perl_pair(item) {
-                        if self.global_ascii_perl || self.global_full_unicode {
+                        if self.ascii_perl() || self.full_unicode() {
                             return Ok(self.any_codepoint_node(tb));
                         }
                         return Ok(NodeId::TOP);
@@ -2264,7 +2291,7 @@ impl<'s> ResharpParser<'s> {
                     if let regex_syntax::ast::ClassSetItem::Perl(p) = item {
                         return self.get_class(c.negated ^ p.negated, p.kind.clone(), tb);
                     }
-                    let kind = if self.global_ascii_perl {
+                    let kind = if self.ascii_perl() {
                         rewrite_ascii_perl_set(&c.kind)
                     } else {
                         c.kind.clone()
@@ -2393,8 +2420,12 @@ impl<'s> ResharpParser<'s> {
                             translator_builder.unicode(state);
                         }
                         let saved_dot_all = self.dot_all.get();
+                        let saved_uni = self.uni.get();
                         if let Some(state) = flags.flag_state(ast::Flag::DotMatchesNewLine) {
                             self.dot_all.set(state);
+                        }
+                        if let Some(state) = flags.flag_state(ast::Flag::Unicode) {
+                            self.uni.set(if state { Uni::Full } else { Uni::Ascii });
                         }
                         let saved_multiline = self.multiline.get();
                         if let Some(state) = flags.flag_state(ast::Flag::MultiLine) {
@@ -2403,6 +2434,7 @@ impl<'s> ResharpParser<'s> {
                         let mut scoped = Some(translator_builder.build());
                         let result = self.ast_to_node_id(&g.ast, &mut scoped, tb);
                         self.dot_all.set(saved_dot_all);
+                        self.uni.set(saved_uni);
                         self.multiline.set(saved_multiline);
                         return result;
                     }
@@ -2416,10 +2448,12 @@ impl<'s> ResharpParser<'s> {
                     return Err(self.error(g.span, ast::ErrorKind::CaptureGroupInLookaround));
                 }
                 let saved_dot_all = self.dot_all.get();
+                let saved_uni = self.uni.get();
                 let saved_multiline = self.multiline.get();
                 let mut scoped = translator.clone();
                 let body = self.ast_to_node_id(&g.ast, &mut scoped, tb);
                 self.dot_all.set(saved_dot_all);
+                self.uni.set(saved_uni);
                 self.multiline.set(saved_multiline);
                 let body = body?;
                 if captures {
@@ -2465,6 +2499,9 @@ impl<'s> ResharpParser<'s> {
                             }
                             if let Some(state) = f.flags.flag_state(ast::Flag::DotMatchesNewLine) {
                                 self.dot_all.set(state);
+                            }
+                            if let Some(state) = f.flags.flag_state(ast::Flag::Unicode) {
+                                self.uni.set(if state { Uni::Full } else { Uni::Ascii });
                             }
                             if let Some(state) = f.flags.flag_state(ast::Flag::MultiLine) {
                                 self.multiline.set(state);
@@ -2611,10 +2648,12 @@ impl<'s> ResharpParser<'s> {
             return Err(self.error(span, ast::ErrorKind::UnsupportedResharpRegex));
         }
         let saved_dot_all = self.dot_all.get();
+        let saved_uni = self.uni.get();
         let saved_multiline = self.multiline.get();
         let node = self.ast_to_node_id(&ast, &mut None, tb)?;
         let sk = if self.ast_has_capture(&ast) {
             self.dot_all.set(saved_dot_all);
+            self.uni.set(saved_uni);
             self.multiline.set(saved_multiline);
             let mut nodes = Vec::new();
             let root = self.ast_to_sk(&ast, &mut None, tb, &mut nodes)?;
@@ -2845,8 +2884,12 @@ impl<'s> ResharpParser<'s> {
                             translator_builder.unicode(state);
                         }
                         let saved_dot_all = self.dot_all.get();
+                        let saved_uni = self.uni.get();
                         if let Some(state) = flags.flag_state(ast::Flag::DotMatchesNewLine) {
                             self.dot_all.set(state);
+                        }
+                        if let Some(state) = flags.flag_state(ast::Flag::Unicode) {
+                            self.uni.set(if state { Uni::Full } else { Uni::Ascii });
                         }
                         let saved_multiline = self.multiline.get();
                         if let Some(state) = flags.flag_state(ast::Flag::MultiLine) {
@@ -2855,6 +2898,7 @@ impl<'s> ResharpParser<'s> {
                         let mut scoped = Some(translator_builder.build());
                         let result = self.ast_to_sk(&g.ast, &mut scoped, tb, out);
                         self.dot_all.set(saved_dot_all);
+                        self.uni.set(saved_uni);
                         self.multiline.set(saved_multiline);
                         return result;
                     }
@@ -2868,10 +2912,12 @@ impl<'s> ResharpParser<'s> {
                     return Err(self.error(g.span, ast::ErrorKind::CaptureGroupInLookaround));
                 }
                 let saved_dot_all = self.dot_all.get();
+                let saved_uni = self.uni.get();
                 let saved_multiline = self.multiline.get();
                 let mut scoped = translator.clone();
                 let child = self.ast_to_sk(&g.ast, &mut scoped, tb, out);
                 self.dot_all.set(saved_dot_all);
+                self.uni.set(saved_uni);
                 self.multiline.set(saved_multiline);
                 let child = child?;
                 if captures {
@@ -2935,6 +2981,9 @@ impl<'s> ResharpParser<'s> {
                             }
                             if let Some(state) = f.flags.flag_state(ast::Flag::DotMatchesNewLine) {
                                 self.dot_all.set(state);
+                            }
+                            if let Some(state) = f.flags.flag_state(ast::Flag::Unicode) {
+                                self.uni.set(if state { Uni::Full } else { Uni::Ascii });
                             }
                             if let Some(state) = f.flags.flag_state(ast::Flag::MultiLine) {
                                 self.multiline.set(state);

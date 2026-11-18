@@ -212,6 +212,14 @@ pub struct LDFA {
     pub is_forward: bool,
     pub has_anchors: bool,
     pub initial_nullability: Nullability,
+    #[cfg_attr(feature = "serialize", serde(skip))]
+    pub ver: Vec<bool>,
+    #[cfg_attr(feature = "serialize", serde(skip))]
+    pub node_to_state_ver: HashMap<NodeId, Sid>,
+    #[cfg_attr(feature = "serialize", serde(skip))]
+    pub ver_initial: Sid,
+    #[cfg_attr(feature = "serialize", serde(skip))]
+    pub ver_begin: Vec<Sid>,
 }
 
 #[cfg_attr(feature = "serialize", allow(missing_docs))]
@@ -345,6 +353,10 @@ impl LDFA {
             is_forward,
             has_anchors: b.contains_anchors(initial),
             initial_nullability: b.nullability(initial),
+            ver: Vec::new(),
+            node_to_state_ver: HashMap::new(),
+            ver_initial: DFA_MISSING,
+            ver_begin: Vec::new(),
         };
         dfa.ensure_capacity(pruned_sid);
 
@@ -392,6 +404,50 @@ impl LDFA {
         );
         self.ensure_capacity(sid);
         sid
+    }
+
+    fn get_or_register_ver(&mut self, b: &mut RegexBuilder, node: NodeId) -> Sid {
+        let known = self.state_nodes.len();
+        let sid = register_state(
+            &mut self.state_nodes,
+            &mut self.node_to_state_ver,
+            &mut self.effects_id,
+            &mut self.center_effect_id,
+            &mut self.effects,
+            b,
+            node,
+            false,
+        );
+        if sid as usize >= known {
+            if self.ver.len() <= sid as usize {
+                self.ver.resize(sid as usize + 1, false);
+            }
+            self.ver[sid as usize] = true;
+        }
+        self.ensure_capacity(sid);
+        sid
+    }
+
+    pub fn enable_verified(&mut self, b: &mut RegexBuilder) -> Result<(), Error> {
+        if self.ver_initial != DFA_MISSING
+            || !self.is_forward
+            || self.initial_nullability != Nullability::NEVER
+        {
+            return Ok(());
+        }
+        self.node_to_state_ver.insert(NodeId::BOT, DFA_DEAD);
+        let initial = self.state_nodes[DFA_INITIAL as usize];
+        let der0 = b.der(initial, Nullability::BEGIN)?;
+        let mut begin = Vec::with_capacity(self.minterms.len());
+        for idx in 0..self.minterms.len() {
+            let mut t = transition_term(b, der0, self.minterms[idx]);
+            t = b.prune_fwd(t, &mut self.prune_memo);
+            t = b.accept_lone_lookahead(t);
+            begin.push(self.get_or_register_ver(b, t));
+        }
+        self.ver_initial = self.get_or_register_ver(b, initial);
+        self.ver_begin = begin;
+        Ok(())
     }
 
     fn try_create(&mut self, b: &mut RegexBuilder, curr: u32) {
@@ -565,6 +621,8 @@ impl LDFA {
             return Ok(());
         }
         let sder = b.der(node, Nullability::CENTER).map_err(Error::Algebra)?;
+        let src_ver = self.ver.get(state_id as usize).copied().unwrap_or(false)
+            && self.center_effect_id[state_id as usize] == EID_NONE as u16;
         for mt_idx in 0..self.minterms.len() {
             let delta = self.dfa_delta(state_id, mt_idx as u32);
             if self.center_table[delta] != DFA_MISSING {
@@ -574,6 +632,9 @@ impl LDFA {
             let mut next_node = transition_term(b, sder, mt);
             if self.is_forward {
                 next_node = b.prune_fwd(next_node, &mut self.prune_memo);
+                if src_ver {
+                    next_node = b.accept_lone_lookahead(next_node);
+                }
             } else {
                 next_node = b.prune_rev(next_node, &mut self.prune_memo);
             }
@@ -583,7 +644,11 @@ impl LDFA {
             if b.over_node_capacity() {
                 return Err(Error::NodeCapacityExceeded(b.max_node_capacity));
             }
-            let next_sid = self.get_or_register(b, next_node);
+            let next_sid = if src_ver {
+                self.get_or_register_ver(b, next_node)
+            } else {
+                self.get_or_register(b, next_node)
+            };
             self.ensure_capacity(next_sid);
             let delta = self.dfa_delta(state_id, mt_idx as u32);
             self.center_table[delta] = next_sid;
@@ -1312,7 +1377,11 @@ impl LDFA {
 
             // manually take first step
             let mt = self.mt_lookup[data[l_pos] as usize] as u32;
-            let mut l_state = self.begin_table[mt as usize] as _;
+            let mut l_state = if self.ver_initial != DFA_MISSING {
+                self.ver_begin[mt as usize]
+            } else {
+                self.begin_table[mt as usize]
+            } as _;
             l_pos = 1;
 
             loop {
@@ -1376,7 +1445,11 @@ impl LDFA {
                 }
 
                 let mut l_pos = start;
-                let mut l_state = DFA_INITIAL as u32;
+                let mut l_state = if self.ver_initial != DFA_MISSING {
+                    self.ver_initial
+                } else {
+                    DFA_INITIAL
+                } as u32;
                 let mut l_max_end = NO_MATCH;
                 loop {
                     let tables = self.scan_tables(data);

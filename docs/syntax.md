@@ -201,6 +201,8 @@ Lookarounds combine with intersection as expected:
 | `(?s)` | dot matches newline |
 | `(?m)` | multiline anchors |
 | `(?x)` | extended (ignore whitespace) |
+| `(?u)` | full Unicode: `\w`/`\d`/`\s` cover all scripts, `.` and negated classes match one codepoint (like `UnicodeMode::Full`) |
+| `(?-u)` | ASCII: `\w`/`\d`/`\s` are ASCII, `.` and negated classes step byte by byte (like `UnicodeMode::Ascii`) |
 
 Flags apply from the point they appear until the end of the enclosing group.
 

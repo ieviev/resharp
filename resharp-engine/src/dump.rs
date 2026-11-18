@@ -152,6 +152,10 @@ fn empty_ldfa() -> LDFA {
         is_forward: true,
         has_anchors: false,
         initial_nullability: resharp_algebra::nulls::Nullability::NEVER,
+        ver: Vec::new(),
+        node_to_state_ver: Default::default(),
+        ver_initial: crate::ldfa::DFA_MISSING,
+        ver_begin: Vec::new(),
     }
 }
 
