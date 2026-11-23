@@ -430,6 +430,7 @@ impl LDFA {
 
     pub fn enable_verified(&mut self, b: &mut RegexBuilder) -> Result<(), Error> {
         if self.ver_initial != DFA_MISSING
+            || self.state_nodes.is_empty()
             || !self.is_forward
             || self.initial_nullability != Nullability::NEVER
         {
