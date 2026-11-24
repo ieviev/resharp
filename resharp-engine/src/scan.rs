@@ -158,14 +158,18 @@ fn skip_rev(
                 if *pos > *pending_entry {
                     return Ok(SkipStep::Fall);
                 }
-                *pos = *pending_entry;
+                if *pos > *prev_entry {
+                    *pos = *pending_entry;
+                    *pending_entry = usize::MAX;
+                    *curr = resume;
+                    return Ok(if *prev_entry == 0 {
+                        SkipStep::Continue
+                    } else {
+                        SkipStep::Fall
+                    });
+                }
                 *pending_entry = usize::MAX;
-                *curr = resume;
-                return Ok(if *prev_entry == 0 {
-                    SkipStep::Continue
-                } else {
-                    SkipStep::Fall
-                });
+                *prev_entry = usize::MAX;
             }
             loop {
                 #[cfg(feature = "debug")]

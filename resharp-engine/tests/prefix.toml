@@ -5,7 +5,7 @@ description = "prefix set and potential_start computation tests"
 [[test]]
 name = "convergence_picks_cheap_right_part"
 pattern = '<(g|mi) (xlink[^> ]+) (xml[^> ]+)'
-kind = "Convergence"
+kind = "AnchoredFwd"
 conv_literal = " xml"
 
 
@@ -290,7 +290,8 @@ kind = "AnchoredFwd"
 [[test]]
 name = "query_key_value"
 pattern = '([^/?&]+)=([^?&]+)'
-kind = "None"
+kind = "Convergence"
+conv_literal = "="
 
 [[test]]
 name = "leading_literal_then_wide_interior_loop_no_fwd"

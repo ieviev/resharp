@@ -10275,10 +10275,68 @@ fn order_dependent_anchor_concat_b_a_caret() {
 }
 
 #[test]
+fn trailing_lookahead_over_long_context_is_linear() {
+    use resharp::Regex;
+    let re = Regex::new(".+@.+(?=[^—]*— Invalid)").unwrap();
+    let unit = |n: usize| {
+        "— Valid\n".to_string()
+            + &"email@example.com\n".repeat(n)
+            + "— Invalid\n"
+            + &"email@-example.com\n".repeat(n)
+    };
+    for n in [10usize, 50, 200] {
+        let input = unit(n).repeat(100);
+        let found = re.find_all(input.as_bytes()).unwrap();
+        assert_eq!(found.len(), 100 * n, "n={n}");
+    }
+    let time_it = |n: usize| -> f64 {
+        let input = unit(n).repeat(400);
+        let mut best = f64::INFINITY;
+        for _ in 0..3 {
+            let t = std::time::Instant::now();
+            re.find_all(input.as_bytes()).unwrap();
+            best = best.min(t.elapsed().as_secs_f64() / input.len() as f64);
+        }
+        best.max(1e-12)
+    };
+    let ratio = time_it(200) / time_it(10);
+    assert!(ratio < 4.0, "per-byte cost grew {ratio}x for 20x context");
+}
+
+#[test]
+#[cfg(feature = "convergence_prefix")]
+fn convergence_prefix_find_all_no_quadratic_over_long_spans() {
+    use resharp::Regex;
+    let re = Regex::new("([^/?&]+)=([^?&]+)").unwrap();
+    assert!(re.uses_convergence_prefix());
+
+    let unit = "GET /health HTTP/1.1 host=localhost status=204 bytes=17\nplain text line here\n".repeat(20) + "&";
+    let time_it = |n: usize| -> f64 {
+        let input = unit.repeat(n);
+        let mut best = f64::INFINITY;
+        for _ in 0..3 {
+            let t = std::time::Instant::now();
+            assert_eq!(re.find_all(input.as_bytes()).unwrap().len(), n);
+            best = best.min(t.elapsed().as_secs_f64());
+        }
+        best.max(1e-9)
+    };
+
+    let small_elapsed = time_it(50);
+    let large_elapsed = time_it(800);
+
+    let ratio = large_elapsed / small_elapsed;
+    assert!(
+        ratio < 40.0,
+        "expected roughly linear scaling, got {ratio}x for 16x input (small={small_elapsed}s large={large_elapsed}s)"
+    );
+}
+
+#[test]
 #[cfg(feature = "convergence_prefix")]
 fn convergence_prefix_is_match_no_quadratic() {
     use resharp::{Regex, RegexOptions};
-    let re = Regex::with_options("a*:[^b]+", RegexOptions::default()).unwrap();
+    let re = Regex::with_options("a*:[^b]+", RegexOptions::default().force_convergence(true)).unwrap();
     assert!(re.uses_convergence_prefix());
 
     let build = |n: usize| -> Vec<u8> {
