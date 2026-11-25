@@ -322,6 +322,17 @@ fn normal_anchors() {
 }
 
 #[test]
+fn normal_unicode() {
+    run_file("unicode.toml");
+}
+
+#[cfg(feature = "unicode-props")]
+#[test]
+fn normal_unicode_props() {
+    run_file("unicode_props.toml");
+}
+
+#[test]
 #[ignore = "takes a long time; run only for releases"]
 fn is_match_and_find_anchored_agree_with_find_all() {
     let files = [
@@ -4576,6 +4587,29 @@ fn multi_byte_literal_scan_matches_naive_at_every_length() {
             }
         }
     }
+}
+
+#[cfg(feature = "diag")]
+#[test]
+fn literal_prefix_exposes_bytes() {
+    let re = Regex::new("abc").unwrap();
+    assert_eq!(re.fwd_prefix_kind(), Some(("Literal", 3)));
+    assert_eq!(re.fwd_prefix_needle(), Some(&b"abc"[..]));
+}
+
+#[cfg(feature = "diag")]
+#[test]
+fn non_literal_prefix_has_no_bytes() {
+    let re = Regex::new("[a-z]{3}\\d+").unwrap();
+    assert_eq!(re.fwd_prefix_needle(), None);
+}
+
+#[cfg(feature = "diag")]
+#[test]
+fn range_prefix_has_no_bytes() {
+    let re = Regex::new("(a|b)*c").unwrap();
+    assert_eq!(re.fwd_prefix_kind(), Some(("Range", 1)));
+    assert_eq!(re.fwd_prefix_needle(), None);
 }
 
 #[test]

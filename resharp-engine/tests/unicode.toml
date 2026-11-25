@@ -1,0 +1,21 @@
+description = '''
+unicode classes and case folding that need no generated tables.
+'''
+
+[[test]]
+name = "native_ascii_prop"
+pattern = '\p{ascii}+'
+input = "abc"
+matches = [[0, 3]]
+
+[[test]]
+name = "native_hex_prop"
+pattern = '\p{hex}+'
+input = "fF09"
+matches = [[0, 4]]
+
+[[test]]
+name = "case_insensitive_non_ascii"
+pattern = '(?i)é'
+input = "É"
+matches = [[0, 2]]

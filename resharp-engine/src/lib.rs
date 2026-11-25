@@ -2028,6 +2028,16 @@ impl Regex {
         }
     }
 
+    /// Literal prefix bytes, if any.
+    #[cfg(feature = "diag")]
+    pub fn fwd_prefix_needle(&self) -> Option<&[u8]> {
+        match &self.prefix {
+            Some(prefix::PrefixKind::AnchoredFwd(fp))
+            | Some(prefix::PrefixKind::AnchoredFwdLb(fp)) => fp.literal_needle(),
+            _ => None,
+        }
+    }
+
     #[cfg(feature = "diag")]
     #[allow(missing_docs)]
     pub fn has_accel(&self) -> (bool, bool) {

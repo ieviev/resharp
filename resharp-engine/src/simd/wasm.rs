@@ -74,6 +74,11 @@ impl FwdLiteralSearch {
         self.needle.len()
     }
 
+    #[cfg(feature = "diag")]
+    pub fn needle(&self) -> &[u8] {
+        &self.needle
+    }
+
     pub fn rare_byte(&self) -> u8 {
         self.rare_byte
     }

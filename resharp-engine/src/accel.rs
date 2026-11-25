@@ -123,6 +123,14 @@ impl FwdPrefixSearch {
         }
     }
 
+    #[cfg(feature = "diag")]
+    pub fn literal_needle(&self) -> Option<&[u8]> {
+        match self {
+            FwdPrefixSearch::Literal(s) => Some(s.needle()),
+            _ => None,
+        }
+    }
+
     #[inline(always)]
     pub fn find_fwd(&self, haystack: &[u8], start: usize) -> Option<usize> {
         match self {

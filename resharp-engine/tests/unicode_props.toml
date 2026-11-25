@@ -1,0 +1,27 @@
+description = '''
+\p{Name} families backed by the unicode-props feature tables.
+'''
+
+[[test]]
+name = "greek_script_matches"
+pattern = '\p{Greek}+'
+input = "αβγ"
+matches = [[0, 6]]
+
+[[test]]
+name = "greek_script_rejects_latin"
+pattern = '\p{Greek}+'
+input = "abc"
+matches = []
+
+[[test]]
+name = "uppercase_gencat_matches"
+pattern = '\p{Lu}'
+input = "xYz"
+matches = [[1, 2]]
+
+[[test]]
+name = "uppercase_gencat_rejects_lower"
+pattern = '\p{Lu}'
+input = "xyz"
+matches = []

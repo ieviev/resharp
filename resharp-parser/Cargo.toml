@@ -15,6 +15,33 @@ readme = "../README.md"
 doctest = false
 test = false
 
+[features]
+default = ["unicode-props"]
+unicode-props = [
+    "unicode-case",
+    "unicode-gencat",
+    "unicode-script",
+    "unicode-bool",
+    "unicode-age",
+    "unicode-segment",
+]
+# (?i) folding; else generated table
+unicode-case = ["regex-syntax/unicode-case"]
+# \p{Lu}, \p{Nd}: ~77 KB wasm
+unicode-gencat = ["regex-syntax/unicode-gencat"]
+# \p{Greek}: ~46 KB
+unicode-script = ["regex-syntax/unicode-script"]
+# \p{Alphabetic}: ~120 KB
+unicode-bool = ["regex-syntax/unicode-bool"]
+# \p{Age:..}: ~38 KB
+unicode-age = ["regex-syntax/unicode-age"]
+# \p{Word_Break}: ~64 KB
+unicode-segment = ["regex-syntax/unicode-segment"]
+
 [dependencies]
-regex-syntax = "0.8.5"
+regex-syntax = { version = "0.8.5", default-features = false, features = ["std"] }
 resharp-algebra.workspace = true
+
+[dev-dependencies]
+# generator example needs regex-syntax tables
+regex-syntax = { version = "0.8.5", features = ["unicode"] }

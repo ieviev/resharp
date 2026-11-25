@@ -2,56 +2,81 @@ use regex_syntax::utf8::Utf8Sequences;
 use resharp_algebra::{Kind, NodeId, RegexBuilder};
 use std::collections::HashMap;
 
+type ByteSeq = Vec<(u8, u8)>;
+
+/// UTF-8 sequences as a shared byte automaton.
+fn build_seqs(
+    b: &mut RegexBuilder,
+    seqs: &[ByteSeq],
+    cache: &mut HashMap<Vec<ByteSeq>, NodeId>,
+) -> NodeId {
+    let accept = seqs.iter().any(|s| s.is_empty());
+    let mut key: Vec<ByteSeq> = seqs.to_vec();
+    key.sort();
+    key.dedup();
+    if let Some(&n) = cache.get(&key) {
+        return n;
+    }
+    let mut buckets: Vec<Vec<ByteSeq>> = vec![Vec::new(); 256];
+    for s in seqs.iter().filter(|s| !s.is_empty()) {
+        for byte in s[0].0..=s[0].1 {
+            buckets[byte as usize].push(s[1..].to_vec());
+        }
+    }
+    let mut groups: HashMap<NodeId, Vec<u8>> = HashMap::new();
+    for (byte, bucket) in buckets.iter().enumerate() {
+        if bucket.is_empty() {
+            continue;
+        }
+        let child = build_seqs(b, bucket, cache);
+        groups.entry(child).or_default().push(byte as u8);
+    }
+    let mut parts: Vec<(u8, NodeId, NodeId)> = groups
+        .into_iter()
+        .map(|(child, bytes)| {
+            let ranges = byte_runs(&bytes);
+            let pred = b.mk_ranges_u8(&ranges);
+            (bytes[0], pred, child)
+        })
+        .collect();
+    parts.sort_by_key(|p| p.0);
+    let mut node = if accept { NodeId::EPS } else { NodeId::BOT };
+    for (_, pred, child) in parts {
+        let branch = b.mk_concat(pred, child);
+        node = b.mk_union(node, branch);
+    }
+    cache.insert(key, node);
+    node
+}
+
+fn byte_runs(bytes: &[u8]) -> Vec<(u8, u8)> {
+    let mut runs: Vec<(u8, u8)> = Vec::new();
+    for &x in bytes {
+        match runs.last_mut() {
+            Some(r) if r.1 + 1 == x => r.1 = x,
+            _ => runs.push((x, x)),
+        }
+    }
+    runs
+}
+
 fn build_class_from_ranges(
     b: &mut RegexBuilder,
     ranges: &[(char, char)],
     max_seq_len: usize,
 ) -> NodeId {
-    let mut s1 = NodeId::BOT;
-    let mut s2 = NodeId::BOT;
-    let mut s3 = NodeId::BOT;
+    let mut seqs: Vec<ByteSeq> = Vec::new();
     for &(start, end) in ranges {
         for seq in Utf8Sequences::new(start, end) {
             let sl = seq.as_slice();
             if sl.len() > max_seq_len {
                 continue;
             }
-            let bytes: Vec<_> = sl.iter().map(|s| (s.start, s.end)).collect();
-            match bytes.len() {
-                1 => {
-                    let node = b.mk_range_u8(bytes[0].0, bytes[0].1);
-                    s1 = b.mk_union(s1, node);
-                }
-                2 => {
-                    let n1 = b.mk_range_u8(bytes[0].0, bytes[0].1);
-                    let n2 = b.mk_range_u8(bytes[1].0, bytes[1].1);
-                    let conc = b.mk_concat(n1, n2);
-                    s2 = b.mk_union(s2, conc);
-                }
-                3 => {
-                    let n1 = b.mk_range_u8(bytes[0].0, bytes[0].1);
-                    let n2 = b.mk_range_u8(bytes[1].0, bytes[1].1);
-                    let n3 = b.mk_range_u8(bytes[2].0, bytes[2].1);
-                    let conc2 = b.mk_concat(n2, n3);
-                    let conc1 = b.mk_concat(n1, conc2);
-                    s3 = b.mk_union(s3, conc1);
-                }
-                4 if max_seq_len >= 4 => {
-                    let n1 = b.mk_range_u8(bytes[0].0, bytes[0].1);
-                    let n2 = b.mk_range_u8(bytes[1].0, bytes[1].1);
-                    let n3 = b.mk_range_u8(bytes[2].0, bytes[2].1);
-                    let n4 = b.mk_range_u8(bytes[3].0, bytes[3].1);
-                    let conc3 = b.mk_concat(n3, n4);
-                    let conc2 = b.mk_concat(n2, conc3);
-                    let conc1 = b.mk_concat(n1, conc2);
-                    s3 = b.mk_union(s3, conc1);
-                }
-                _ => {}
-            }
+            seqs.push(sl.iter().map(|s| (s.start, s.end)).collect());
         }
     }
-    let merged = b.mk_union(s2, s1);
-    b.mk_union(s3, merged)
+    let mut cache = HashMap::new();
+    build_seqs(b, &seqs, &mut cache)
 }
 
 fn class_ranges(pattern: &str) -> Vec<(char, char)> {

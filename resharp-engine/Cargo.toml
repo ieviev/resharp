@@ -16,7 +16,14 @@ readme = "../README.md"
 doctest = false
 
 [features]
-default = []
+default = ["unicode-props"]
+unicode-props = ["resharp-parser/unicode-props"]
+unicode-case = ["resharp-parser/unicode-case"]
+unicode-gencat = ["resharp-parser/unicode-gencat"]
+unicode-script = ["resharp-parser/unicode-script"]
+unicode-bool = ["resharp-parser/unicode-bool"]
+unicode-age = ["resharp-parser/unicode-age"]
+unicode-segment = ["resharp-parser/unicode-segment"]
 # experimental, off by default: zero-width / anchored patterns can report phantom
 # matches (see TODO.md). do not enable in production.
 stream = []
@@ -35,7 +42,7 @@ pcre2-bench = ["dep:pcre2"]
 
 [dependencies]
 resharp-algebra.workspace = true
-resharp-parser.workspace = true
+resharp-parser = { path = "../resharp-parser", version = "0.8.1", default-features = false }
 rustc-hash = "2"
 serde = { version = "1", features = ["derive"], optional = true }
 bincode = { version = "1", optional = true }
@@ -43,10 +50,9 @@ pcre2 = { version = "0.2", optional = true }
 
 [dev-dependencies]
 serde = { version = "1", features = ["derive"] }
-resharp = { path = ".", features = ["diag", "experimental_capture_groups", "regex_set"] }
+resharp = { path = ".", default-features = false, features = ["diag", "experimental_capture_groups", "regex_set"] }
 resharp-algebra.workspace = true
-resharp-parser.workspace = true
-regex-syntax = "0.8.5"
+regex-syntax = { version = "0.8.5", default-features = false, features = ["unicode-perl"] }
 toml = "0.8"
 regex = "1"
 fancy-regex = "0.14"

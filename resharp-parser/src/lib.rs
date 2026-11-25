@@ -4,6 +4,8 @@
 
 #![warn(dead_code)]
 pub mod ast;
+pub mod translate;
+mod unicode_tables;
 use std::cell::{Cell, RefCell};
 
 use ast::{Ast, Concat, ErrorKind, GroupKind, LookaroundKind, RepetitionKind};
@@ -13,13 +15,11 @@ use regex_syntax::{
         ClassSetRange, ClassSetUnion, ClassUnicode, ClassUnicodeKind, ClassUnicodeOpKind,
         HexLiteralKind, Literal, LiteralKind, Position, Span, SpecialLiteralKind,
     },
-    hir::{
-        self,
-        translate::{Translator, TranslatorBuilder},
-    },
+    hir,
     utf8::Utf8Sequences,
 };
 use resharp_algebra::{Kind, NodeId};
+use translate::{TranslateError, Translator, TranslatorBuilder};
 
 type TB<'s> = resharp_algebra::RegexBuilder;
 type WbBranches = Vec<(NodeId, Option<NodeId>)>;
@@ -450,7 +450,7 @@ pub struct ResharpParser<'s> {
     perl_classes: Vec<(Uni, bool, regex_syntax::ast::ClassPerlKind, NodeId)>,
     unicode_classes: [resharp_algebra::UnicodeClassCache; 4],
     uni: Cell<Uni>,
-    pub translator: regex_syntax::hir::translate::Translator,
+    pub translator: Translator,
     pub pattern: &'s str,
     pos: Cell<Position>,
     capture_index: Cell<u32>,
@@ -653,7 +653,6 @@ impl<'s> ResharpParser<'s> {
     fn default_translator_builder(&self) -> TranslatorBuilder {
         let mut trb = TranslatorBuilder::new();
         trb.unicode(self.global_unicode);
-        trb.utf8(false);
         trb.case_insensitive(self.global_case_insensitive);
         trb
     }
@@ -665,7 +664,6 @@ impl<'s> ResharpParser<'s> {
     pub fn with_flags(pattern: &'s str, flags: &PatternFlags) -> Self {
         let mut trb = TranslatorBuilder::new();
         trb.unicode(flags.unicode);
-        trb.utf8(false);
         trb.case_insensitive(flags.case_insensitive);
         Self {
             translator: trb.build(),
@@ -732,7 +730,7 @@ impl<'s> ResharpParser<'s> {
         }
     }
 
-    fn unsupported_error(&self, _: regex_syntax::hir::Error) -> ParseError {
+    fn unsupported_error(&self, _: TranslateError) -> ParseError {
         self.error(
             Span::splat(self.pos()),
             ast::ErrorKind::UnsupportedResharpRegex,
@@ -1331,7 +1329,7 @@ impl<'s> ResharpParser<'s> {
         orig_ast: &regex_syntax::ast::Ast,
         tb: &mut TB<'s>,
     ) -> Result<NodeId> {
-        match self.translator.translate("", orig_ast) {
+        match self.translator.translate(orig_ast) {
             Err(_) => Err(self.error(self.span(), ast::ErrorKind::UnicodeClassInvalid)),
             Ok(hir) => self.hir_to_node_id(&hir, tb),
         }
@@ -1346,7 +1344,7 @@ impl<'s> ResharpParser<'s> {
         match translator {
             Some(tr) => {
                 let hir = tr
-                    .translate("", orig_ast)
+                    .translate(orig_ast)
                     .map_err(|e| self.unsupported_error(e))?;
                 self.hir_to_node_id(&hir, tb)
             }
