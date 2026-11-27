@@ -55,6 +55,13 @@ fn set_trailing_lookahead_distinguishes_members() {
 }
 
 #[test]
+fn set_trailing_lookahead_shared_prefix_reports_lowest_index() {
+    assert_eq!(cat(&["q(?=rs)", "q(?=r)"], "qrs"), vec![(0, 1, 0)]);
+    assert_eq!(cat(&["q(?=rs)", "q(?=r)"], "qrx"), vec![(0, 1, 1)]);
+    assert_eq!(cat(&["a(?=bcd)", "a(?=b)"], "abcd abc"), vec![(0, 1, 0), (5, 6, 1)]);
+}
+
+#[test]
 fn set_anchors() {
     assert_eq!(cat(&["\\Aa", "a$", "a"], "a a a"), vec![(0, 1, 0), (2, 3, 2), (4, 5, 1)]);
     assert_eq!(cat(&["\\Aa", "a$", "a"], "a"), vec![(0, 1, 0)]);
