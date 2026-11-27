@@ -1962,7 +1962,7 @@ impl RegexBuilder {
                     rel,
                     self.is_nullable(la_body, mask),
                 );
-                if self.is_nullable(la_body, mask) {
+                if self.is_nullable(la_body, mask) && !la_body.contains_tags(self) {
                     let right = node_id.right(self).missing_to_eps();
                     let rder = self.der(right, mask).clone();
                     #[cfg(feature = "debug")]
