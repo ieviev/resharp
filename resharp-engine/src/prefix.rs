@@ -1749,7 +1749,7 @@ pub(crate) fn fwd_lb_class(b: &mut RegexBuilder, lb: NodeId) -> Option<(NodeId, 
     if let Some(pred) = b.neg_lookbehind_prev_pred(lb) {
         return Some((pred, 1));
     }
-    if b.get_lookbehind_prev(lb) != NodeId::MISSING {
+    if !lb.is_pure_lookbehind(b) {
         return None;
     }
     let lb_inner = b.get_lookbehind_inner(lb);
@@ -1902,10 +1902,7 @@ fn neg_lb_body_and_seq(b: &mut RegexBuilder, node: NodeId) -> Option<(NodeId, Ve
     }
     let lb = node.left(b);
     let body = node.right(b);
-    if !lb.is_lookbehind(b) {
-        return None;
-    }
-    if b.get_lookbehind_prev(lb) != NodeId::MISSING {
+    if !lb.is_pure_lookbehind(b) {
         return None;
     }
     let inner = b.get_lookbehind_inner(lb);

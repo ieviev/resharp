@@ -53,6 +53,8 @@ pub(crate) mod captures;
 pub(crate) mod ldfa;
 #[cfg_attr(not(feature = "experimental_capture_groups"), allow(dead_code))]
 pub(crate) mod pparse;
+#[cfg_attr(not(feature = "experimental_capture_groups"), allow(dead_code))]
+pub(crate) mod tagwalk;
 pub(crate) mod linear;
 pub(crate) mod minterms;
 pub(crate) mod fwd;
@@ -62,7 +64,7 @@ pub(crate) mod scan;
 #[cfg(feature = "regex_set")]
 pub(crate) mod set;
 #[cfg(feature = "regex_set")]
-pub use set::{RegexSet, TaggedMatch};
+pub use set::{Labels, RegexSet, TaggedMatch};
 
 #[cfg(feature = "stream")]
 pub(crate) mod stream;
@@ -265,6 +267,8 @@ pub struct RegexOptions {
     pub hardening: HardeningMode,
     /// remove the default pattern size limit for very large regexes (default: false).
     pub unbounded_size: bool,
+    /// `RegexSet` only: accept lookbehind members disjoint from all others (default: false).
+    pub regexset_enforce_disjoint: bool,
     #[doc(hidden)]
     pub force_convergence: bool,
     /// disable all prefix-acceleration. much slower,
@@ -290,6 +294,7 @@ impl Default for RegexOptions {
             implicit_captures: false,
             hardening: HardeningMode::Auto,
             unbounded_size: false,
+            regexset_enforce_disjoint: false,
             force_convergence: false,
             disable_prefixes: false,
             force_linear: false,
@@ -349,6 +354,11 @@ impl RegexOptions {
     /// several smaller regexes is almost always the better fix than raising the limit.
     pub fn unbounded_size(mut self, yes: bool) -> Self {
         self.unbounded_size = yes;
+        self
+    }
+    /// `RegexSet` only: accept lookbehind members whose body is disjoint from every other member.
+    pub fn regexset_enforce_disjoint(mut self, yes: bool) -> Self {
+        self.regexset_enforce_disjoint = yes;
         self
     }
 }
@@ -2111,49 +2121,46 @@ impl Regex {
     #[cfg(feature = "experimental_capture_groups")]
     pub fn captures_all(&self, input: &[u8]) -> Result<Vec<Captures<'_>>, Error> {
         let matches = self.find_all(input)?;
-        {
-            let inner = &mut *self.inner.lock().unwrap_or_else(|e| e.into_inner());
-            inner.capture_dfa.begin_input(input);
-        }
-        matches.into_iter().map(|m| self.captures_of(input, m)).collect()
+        let inner = &mut *self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        inner.capture_dfa.begin_input(input);
+        matches
+            .into_iter()
+            .map(|m| {
+                let mut spans = Vec::with_capacity(self.group_names.len());
+                spans.push(Some((m.start, m.end)));
+                self.captures_into(inner, input, m.start, m.end, &mut spans)?;
+                if spans.len() != self.group_names.len() {
+                    return Err(Error::InternalError("capture slot count does not match group count"));
+                }
+                Ok(Captures { names: &self.group_names, spans })
+            })
+            .collect()
     }
 
     #[cfg(feature = "experimental_capture_groups")]
-    fn captures_of(&self, input: &[u8], m: Match) -> Result<Captures<'_>, Error> {
-        let mut spans = Vec::with_capacity(self.group_names.len());
-        spans.push(Some((m.start, m.end)));
-        spans.extend(self.captures_at(input, m.start, m.end)?);
-        if spans.len() != self.group_names.len() {
-            return Err(Error::InternalError("capture slot count does not match group count"));
-        }
-        Ok(Captures { names: &self.group_names, spans })
-    }
-
-    #[cfg(feature = "experimental_capture_groups")]
-    fn captures_at(
+    fn captures_into(
         &self,
+        inner: &mut RegexInner,
         input: &[u8],
         begin: usize,
         end: usize,
-    ) -> Result<Vec<Option<(usize, usize)>>, Error> {
+        spans: &mut Vec<Option<(usize, usize)>>,
+    ) -> Result<(), Error> {
         match &self.captures_dispatch {
-            captures::CaptureDispatch::Empty => return Ok(Vec::new()),
+            captures::CaptureDispatch::Empty => return Ok(()),
             captures::CaptureDispatch::FixedOffsets(offsets) => {
-                return Ok(offsets
-                    .iter()
-                    .map(|g| match *g {
-                        captures::GroupOffset::FromBegin { open, close } => {
-                            Some((begin + open as usize, begin + close as usize))
-                        }
-                        captures::GroupOffset::FromEnd { open, close } => {
-                            Some((end - open as usize, end - close as usize))
-                        }
-                    })
-                    .collect());
+                spans.extend(offsets.iter().map(|g| match *g {
+                    captures::GroupOffset::FromBegin { open, close } => {
+                        Some((begin + open as usize, begin + close as usize))
+                    }
+                    captures::GroupOffset::FromEnd { open, close } => {
+                        Some((end - open as usize, end - close as usize))
+                    }
+                }));
+                return Ok(());
             }
             captures::CaptureDispatch::Dfa => {}
         }
-        let inner = &mut *self.inner.lock().unwrap_or_else(|e| e.into_inner());
         let RegexInner {
             ref mut b,
             ref mut capture_dfa,
@@ -2161,7 +2168,7 @@ impl Regex {
             capture_root,
             ..
         } = *inner;
-        pparse::extract_captures(b, capture_dfa, capture_root, skeleton.as_ref(), input, begin, end)
+        pparse::extract_captures(b, capture_dfa, capture_root, skeleton.as_ref(), input, begin, end, spans)
     }
 
     /// group names, indexed like [`Captures`]. `None` for entry 0 and for

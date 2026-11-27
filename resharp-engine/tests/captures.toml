@@ -3171,3 +3171,38 @@ pattern = '(?P<g>(?=b))?'
 input = "ba"
 matches = [[0, 0], [1, 1], [2, 2]]
 groups = [[[0, 0]], [[]], [[]]]
+
+[[test]]
+name = "capture_walk_nullable_middle_field"
+pattern = "(?P<a>[a-z]+);(?P<b>\\d*);(?P<c>[^;]*)"
+input = "ab;;xyz"
+matches = [[0, 7]]
+groups = [[[0, 2], [3, 3], [4, 7]]]
+
+[[test]]
+name = "capture_walk_multiline_anchored_lines"
+pattern = "^(?P<k>\\w+)=(?P<v>\\d+)$"
+input = "x=1\nfoo=22"
+matches = [[0, 3], [4, 10]]
+groups = [[[0, 1], [2, 3]], [[4, 7], [8, 10]]]
+
+[[test]]
+name = "capture_walk_optional_group_declines"
+pattern = "(?P<a>\\d+)-(?P<b>\\d+)?-(?P<c>\\d+)"
+input = "1--3"
+matches = [[0, 4]]
+groups = [[[0, 1], [], [3, 4]]]
+
+[[test]]
+name = "capture_walk_optional_group_participates"
+pattern = "(?P<a>\\d+)-(?P<b>\\d+)?-(?P<c>\\d+)"
+input = "1-22-3"
+matches = [[0, 6]]
+groups = [[[0, 1], [2, 4], [5, 6]]]
+
+[[test]]
+name = "capture_walk_ambiguous_split_leftmost_longest"
+pattern = "(?P<a>a*)(?P<b>a*)"
+input = "aaa"
+matches = [[0, 3], [3, 3]]
+groups = [[[0, 3], [3, 3]], [[3, 3], [3, 3]]]

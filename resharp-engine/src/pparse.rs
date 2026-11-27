@@ -2,12 +2,14 @@ use resharp_algebra::nulls::Nullability;
 use resharp_algebra::{Kind, NodeId, RegexBuilder};
 use resharp_parser::{SkNode, Skeleton};
 use rustc_hash::FxHashMap;
+use std::collections::hash_map::Entry;
 use std::sync::Arc;
 
 use crate::ldfa::LDFA;
+use crate::tagwalk::TagWalk;
 use crate::Error;
 
-const UNSET: usize = usize::MAX;
+pub(crate) const UNSET: usize = usize::MAX;
 
 type TagVec = Arc<Vec<usize>>;
 type Sol = Option<(usize, TagVec)>;
@@ -25,6 +27,7 @@ pub(crate) struct PosixParser {
     span_hi: usize,
     input_scope: Option<(usize, usize)>,
     parent_group: Option<Vec<Option<usize>>>,
+    walk: Option<Option<TagWalk>>,
 }
 
 impl PosixParser {
@@ -42,6 +45,7 @@ impl PosixParser {
             span_hi: 0,
             input_scope: None,
             parent_group: None,
+            walk: None,
         }
     }
 
@@ -129,14 +133,12 @@ impl PosixParser {
             self.ends.insert(key, v.clone());
             return Ok(v);
         }
-        let mut ldfa = match self.ldfas.remove(&node) {
-            Some(l) => l,
-            None => LDFA::new_fwd(b, node, self.max_cap)?,
+        let ldfa = match self.ldfas.entry(node) {
+            Entry::Occupied(e) => e.into_mut(),
+            Entry::Vacant(e) => e.insert(LDFA::new_fwd(b, node, self.max_cap)?),
         };
         self.scratch_nulls.clear();
-        let r = ldfa.scan_fwd_all_nulls_to(b, i, hi.max(i), input, &mut self.scratch_nulls);
-        self.ldfas.insert(node, ldfa);
-        r?;
+        ldfa.scan_fwd_all_nulls_to(b, i, hi.max(i), input, &mut self.scratch_nulls)?;
         self.scratch_nulls.sort_unstable();
         self.scratch_nulls.dedup();
         let maxlen = b.get_max_length_only(node);
@@ -174,17 +176,15 @@ impl PosixParser {
         if let Some(v) = self.rev_starts.get(&key) {
             return Ok(v.clone());
         }
-        let mut ldfa = match self.rev_ldfas.remove(&node) {
-            Some(l) => l,
-            None => {
+        let ldfa = match self.rev_ldfas.entry(node) {
+            Entry::Occupied(e) => e.into_mut(),
+            Entry::Vacant(e) => {
                 let rev = b.reverse(node)?;
-                LDFA::new_rev(b, rev, self.max_cap)?
+                e.insert(LDFA::new_rev(b, rev, self.max_cap)?)
             }
         };
         self.scratch_nulls.clear();
-        let r = ldfa.scan_rev_all_nulls_from(b, k, input, &mut self.scratch_nulls);
-        self.rev_ldfas.insert(node, ldfa);
-        r?;
+        ldfa.scan_rev_all_nulls_from(b, k, input, &mut self.scratch_nulls)?;
         self.scratch_nulls.sort_unstable();
         self.scratch_nulls.dedup();
         let v = Arc::new(self.scratch_nulls.clone());
@@ -435,11 +435,7 @@ impl PosixParser {
 // reversed, a trailing lookahead would peek past the walk's start
 fn drop_trailing_zero_width_lookahead(b: &mut RegexBuilder, node: NodeId) -> NodeId {
     if node.is_lookahead(b) {
-        return if b.get_lookahead_tail(node) == NodeId::MISSING {
-            NodeId::EPS
-        } else {
-            node
-        };
+        return if node.is_pure_lookahead(b) { NodeId::EPS } else { node };
     }
     if !node.is_concat(b) {
         return node;
@@ -655,17 +651,26 @@ pub(crate) fn extract_captures(
     input: &[u8],
     begin: usize,
     end: usize,
-) -> Result<Vec<Option<(usize, usize)>>, Error> {
+    out: &mut Vec<Option<(usize, usize)>>,
+) -> Result<(), Error> {
     let (num_groups, num_tags) = pp.ensure_setup(b, root)?;
-    let mut result = vec![None; num_groups];
     if num_groups == 0 {
-        return Ok(result);
+        return Ok(());
     }
     let Some(sk) = sk else {
         return Err(Error::InternalError("missing capture skeleton"));
     };
     if pp.input_scope != Some((input.as_ptr() as usize, input.len())) {
         return Err(Error::InternalError("capture extraction outside a declared input scope"));
+    }
+    if pp.walk.is_none() {
+        pp.walk = Some(TagWalk::compile(b, sk, pp.max_cap)?);
+    }
+    if let Some(Some(w)) = pp.walk.as_mut() {
+        if w.run(b, input, begin, end, num_tags)? {
+            out.extend((1..=num_groups).map(|g| group_span(&w.out, g)));
+            return Ok(());
+        }
     }
     pp.ends.clear();
     pp.memo.clear();
@@ -677,10 +682,8 @@ pub(crate) fn extract_captures(
     let Some((_, v)) = pp.solve(b, sk, sk.root, begin, NodeId::EPS, end, true, input, num_tags)? else {
         return Err(Error::InternalError("match span does not parse"));
     };
-    for (g, slot) in result.iter_mut().enumerate() {
-        *slot = group_span(&v, g + 1);
-    }
-    Ok(result)
+    out.extend((1..=num_groups).map(|g| group_span(&v, g)));
+    Ok(())
 }
 
 fn merge_tags_into(base: &mut [usize], other: &[usize]) {

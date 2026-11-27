@@ -32,7 +32,7 @@ fn tagger() -> RegexSet {
 }
 
 fn tag(set: &RegexSet, text: &str) -> Vec<(String, Entity)> {
-    set.categorize_all(text.as_bytes())
+    set.classify_all(text.as_bytes())
         .unwrap()
         .iter()
         .map(|m| (text[m.start..m.end].to_string(), LEXICON[m.tag].0))

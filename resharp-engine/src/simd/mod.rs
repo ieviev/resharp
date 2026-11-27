@@ -104,24 +104,45 @@ impl RevSearchBytes {
         let v0 = _mm256_set1_epi8(self.bytes[0] as i8);
         let n = self.bytes.len();
 
-        macro_rules! compute_mask {
+        macro_rules! hit_vec {
             ($chunk:expr) => {{
                 let chunk = $chunk;
-                let mut mask = _mm256_movemask_epi8(_mm256_cmpeq_epi8(chunk, v0)) as u32;
+                let mut v = _mm256_cmpeq_epi8(chunk, v0);
                 if n >= 2 {
                     let v1 = _mm256_set1_epi8(self.bytes[1] as i8);
-                    mask |= _mm256_movemask_epi8(_mm256_cmpeq_epi8(chunk, v1)) as u32;
+                    v = _mm256_or_si256(v, _mm256_cmpeq_epi8(chunk, v1));
                 }
                 if n >= 3 {
                     let v2 = _mm256_set1_epi8(self.bytes[2] as i8);
-                    mask |= _mm256_movemask_epi8(_mm256_cmpeq_epi8(chunk, v2)) as u32;
+                    v = _mm256_or_si256(v, _mm256_cmpeq_epi8(chunk, v2));
                 }
-                mask
+                v
+            }};
+        }
+        macro_rules! compute_mask {
+            ($chunk:expr) => {{
+                _mm256_movemask_epi8(hit_vec!($chunk)) as u32
             }};
         }
 
         if FWD {
             let mut pos = 0;
+            while pos + 128 <= len {
+                let h = _mm256_or_si256(
+                    _mm256_or_si256(
+                        hit_vec!(_mm256_loadu_si256(ptr.add(pos) as *const __m256i)),
+                        hit_vec!(_mm256_loadu_si256(ptr.add(pos + 32) as *const __m256i)),
+                    ),
+                    _mm256_or_si256(
+                        hit_vec!(_mm256_loadu_si256(ptr.add(pos + 64) as *const __m256i)),
+                        hit_vec!(_mm256_loadu_si256(ptr.add(pos + 96) as *const __m256i)),
+                    ),
+                );
+                if _mm256_testz_si256(h, h) == 0 {
+                    break;
+                }
+                pos += 128;
+            }
             while pos + 32 <= len {
                 let mask = compute_mask!(_mm256_loadu_si256(ptr.add(pos) as *const __m256i));
                 if mask != 0 {
@@ -141,6 +162,22 @@ impl RevSearchBytes {
         } else {
             if len >= 32 {
                 let mut pos = len - 32;
+                while pos >= 128 {
+                    let h = _mm256_or_si256(
+                        _mm256_or_si256(
+                            hit_vec!(_mm256_loadu_si256(ptr.add(pos) as *const __m256i)),
+                            hit_vec!(_mm256_loadu_si256(ptr.add(pos - 32) as *const __m256i)),
+                        ),
+                        _mm256_or_si256(
+                            hit_vec!(_mm256_loadu_si256(ptr.add(pos - 64) as *const __m256i)),
+                            hit_vec!(_mm256_loadu_si256(ptr.add(pos - 96) as *const __m256i)),
+                        ),
+                    );
+                    if _mm256_testz_si256(h, h) == 0 {
+                        break;
+                    }
+                    pos -= 128;
+                }
                 loop {
                     let mask = compute_mask!(_mm256_loadu_si256(ptr.add(pos) as *const __m256i));
                     if mask != 0 {
@@ -304,6 +341,37 @@ impl FwdLiteralSearch {
 
     // COLLECT_ALL=false: stop at first match, return its start.
     // COLLECT_ALL=true:  push every non-overlapping match into `matches`, return None.
+    #[inline(never)]
+    #[target_feature(enable = "avx2")]
+    unsafe fn first_rare_block(
+        ptr: *const u8,
+        mut pos: usize,
+        lim: usize,
+        vrare: __m256i,
+    ) -> usize {
+        while pos + 128 <= lim {
+            let m0 = _mm256_cmpeq_epi8(_mm256_loadu_si256(ptr.add(pos) as *const __m256i), vrare);
+            let m1 = _mm256_cmpeq_epi8(
+                _mm256_loadu_si256(ptr.add(pos + 32) as *const __m256i),
+                vrare,
+            );
+            let m2 = _mm256_cmpeq_epi8(
+                _mm256_loadu_si256(ptr.add(pos + 64) as *const __m256i),
+                vrare,
+            );
+            let m3 = _mm256_cmpeq_epi8(
+                _mm256_loadu_si256(ptr.add(pos + 96) as *const __m256i),
+                vrare,
+            );
+            let any = _mm256_or_si256(_mm256_or_si256(m0, m1), _mm256_or_si256(m2, m3));
+            if _mm256_testz_si256(any, any) == 0 {
+                break;
+            }
+            pos += 128;
+        }
+        pos
+    }
+
     #[target_feature(enable = "avx2")]
     unsafe fn scan_avx2<const COLLECT_ALL: bool, const MODE: u8>(
         &self,
@@ -374,7 +442,11 @@ impl FwdLiteralSearch {
                 pos += 128;
             }
         } else if MODE == 0 {
-            while pos + 128 <= end + 1 {
+            loop {
+                pos = Self::first_rare_block(ptr, pos, end + 1, vrare);
+                if pos + 128 > end + 1 {
+                    break;
+                }
                 let m0 = _mm256_cmpeq_epi8(_mm256_loadu_si256(ptr.add(pos) as *const __m256i), vrare);
                 let m1 = _mm256_cmpeq_epi8(_mm256_loadu_si256(ptr.add(pos + 32) as *const __m256i), vrare);
                 let m2 = _mm256_cmpeq_epi8(_mm256_loadu_si256(ptr.add(pos + 64) as *const __m256i), vrare);
@@ -605,15 +677,43 @@ impl RevLiteralInner {
         let dual = nlen > 1;
         let min_rare_pos = rare_idx;
         let mut pos = end - (nlen - 1) + rare_idx;
+        macro_rules! rare_vec {
+            ($base:expr) => {{
+                let base: usize = $base;
+                let r =
+                    _mm256_cmpeq_epi8(_mm256_loadu_si256(ptr.add(base) as *const __m256i), vrare);
+                if dual {
+                    let c = _mm256_cmpeq_epi8(
+                        _mm256_loadu_si256(
+                            ptr.offset(base as isize + confirm_off) as *const __m256i
+                        ),
+                        vconf,
+                    );
+                    _mm256_and_si256(r, c)
+                } else {
+                    r
+                }
+            }};
+        }
+        macro_rules! rare_mask {
+            ($base:expr) => {{
+                let base: usize = $base;
+                _mm256_movemask_epi8(rare_vec!(base)) as u32
+            }};
+        }
+        while pos >= min_rare_pos + 128 {
+            let h = _mm256_or_si256(
+                _mm256_or_si256(rare_vec!(pos - 31), rare_vec!(pos - 63)),
+                _mm256_or_si256(rare_vec!(pos - 95), rare_vec!(pos - 127)),
+            );
+            if _mm256_testz_si256(h, h) == 0 {
+                break;
+            }
+            pos -= 128;
+        }
         while pos >= min_rare_pos + 32 {
             let base = pos - 31;
-            let chunk = _mm256_loadu_si256(ptr.add(base) as *const __m256i);
-            let mut mask = _mm256_movemask_epi8(_mm256_cmpeq_epi8(chunk, vrare)) as u32;
-            if dual && mask != 0 {
-                let cchunk =
-                    _mm256_loadu_si256(ptr.offset(base as isize + confirm_off) as *const __m256i);
-                mask &= _mm256_movemask_epi8(_mm256_cmpeq_epi8(cchunk, vconf)) as u32;
-            }
+            let mut mask = rare_mask!(base);
             while mask != 0 {
                 let bit = 31 - (mask.leading_zeros() as usize);
                 let start = base + bit - rare_idx;
@@ -1614,5 +1714,130 @@ impl RevSearchRanges {
             }
         }
         None
+    }
+}
+
+#[cfg(all(test, target_arch = "x86_64"))]
+mod tests {
+    use super::{FwdLiteralSearch, RevLiteralInner, RevSearchBytes};
+
+    fn lcg_bytes(seed: &mut u64, len: usize, alphabet: &[u8]) -> Vec<u8> {
+        (0..len)
+            .map(|_| {
+                *seed = seed
+                    .wrapping_mul(6364136223846793005)
+                    .wrapping_add(1442695040888963407);
+                alphabet[(*seed >> 33) as usize % alphabet.len()]
+            })
+            .collect()
+    }
+
+    fn naive_fwd(hay: &[u8], set: &[u8]) -> Option<usize> {
+        hay.iter().position(|b| set.contains(b))
+    }
+
+    fn naive_rev(hay: &[u8], set: &[u8]) -> Option<usize> {
+        hay.iter().rposition(|b| set.contains(b))
+    }
+
+    fn naive_literal_rev(hay: &[u8], needle: &[u8], end: usize) -> Option<usize> {
+        if end + 1 < needle.len() {
+            return None;
+        }
+        (0..=end + 1 - needle.len())
+            .rev()
+            .find(|&s| hay[s..].starts_with(needle))
+            .map(|s| s + needle.len() - 1)
+    }
+
+    #[test]
+    fn rev_search_bytes_matches_naive_across_lengths() {
+        let mut seed = 0x9e3779b97f4a7c15u64;
+        let sets: [&[u8]; 3] = [&[b'='], &[b'=', b'q'], &[b'=', b'q', b'z']];
+        for len in 0..=600 {
+            for alphabet in [&b"ab"[..], &b"abcdefgh=qz"[..]] {
+                let hay = lcg_bytes(&mut seed, len, alphabet);
+                for set in sets {
+                    let s = RevSearchBytes::new(set.to_vec());
+                    assert_eq!(
+                        s.find_fwd(&hay),
+                        naive_fwd(&hay, set),
+                        "fwd len={len} set={set:?}"
+                    );
+                    assert_eq!(
+                        s.find_rev(&hay),
+                        naive_rev(&hay, set),
+                        "rev len={len} set={set:?}"
+                    );
+                }
+                for pos in (0..len).step_by(37) {
+                    let mut planted = hay.clone();
+                    planted[pos] = b'=';
+                    let s = RevSearchBytes::new(vec![b'=']);
+                    assert_eq!(s.find_fwd(&planted), naive_fwd(&planted, b"="));
+                    assert_eq!(s.find_rev(&planted), naive_rev(&planted, b"="));
+                }
+            }
+        }
+    }
+
+    fn plant(base: &[u8], needle: &[u8], step: usize) -> Vec<u8> {
+        let mut hay = base.to_vec();
+        for pos in (0..hay.len().saturating_sub(needle.len())).step_by(step) {
+            hay[pos..pos + needle.len()].copy_from_slice(needle);
+        }
+        hay
+    }
+
+    #[test]
+    fn fwd_literal_matches_naive_across_lengths() {
+        let mut seed = 0x243f6a8885a308d3u64;
+        let lit = FwdLiteralSearch::new(b"=");
+        for len in 0..=400 {
+            let dense = lcg_bytes(&mut seed, len, b"ab=c");
+            let sparse = lcg_bytes(&mut seed, len, b"abc");
+            let mut hays = vec![dense, sparse.clone()];
+            hays.extend([97, 173, 251, 300, 419].map(|step| plant(&sparse, b"=", step)));
+            for hay in hays {
+                assert_eq!(
+                    lit.find_fwd(&hay),
+                    hay.iter().position(|&b| b == b'='),
+                    "find_fwd len={len}"
+                );
+                let mut all = Vec::new();
+                lit.find_all_fixed(&hay, &mut all);
+                let expect: Vec<(usize, usize)> = hay
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, &b)| b == b'=')
+                    .map(|(i, _)| (i, i + 1))
+                    .collect();
+                assert_eq!(all, expect, "find_all len={len}");
+            }
+        }
+    }
+
+    #[test]
+    fn rev_literal_matches_naive_across_lengths() {
+        let mut seed = 0xd1b54a32d192ed03u64;
+        let needles: [&[u8]; 3] = [b"=", b"ab", b"a=b"];
+        for len in 0..=400 {
+            let dense = lcg_bytes(&mut seed, len, b"ab=c");
+            let sparse = lcg_bytes(&mut seed, len, b"abc");
+            for needle in needles {
+                let lit = RevLiteralInner::new(needle.to_vec(), 0);
+                let mut hays = vec![dense.clone()];
+                hays.extend([97, 173, 251, 300, 419].map(|step| plant(&sparse, needle, step)));
+                for hay in hays {
+                    for end in 0..len {
+                        assert_eq!(
+                            lit.find_rev(&hay, end),
+                            naive_literal_rev(&hay, needle, end),
+                            "len={len} end={end} needle={needle:?}"
+                        );
+                    }
+                }
+            }
+        }
     }
 }

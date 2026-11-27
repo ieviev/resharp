@@ -562,6 +562,16 @@ impl NodeId {
     }
 
     #[inline]
+    pub fn is_pure_lookahead(self, b: &RegexBuilder) -> bool {
+        self.is_lookahead(b) && b.get_lookahead_tail(self) == NodeId::MISSING
+    }
+
+    #[inline]
+    pub fn is_pure_lookbehind(self, b: &RegexBuilder) -> bool {
+        self.is_lookbehind(b) && b.get_lookbehind_prev(self) == NodeId::MISSING
+    }
+
+    #[inline]
     fn is_opt_v(self, b: &RegexBuilder) -> Option<NodeId> {
         if b.get_kind(self) == Kind::Union && b.get_left(self).is_eps() {
             Some(b.get_right(self))
@@ -2039,8 +2049,7 @@ impl RegexBuilder {
                 }
 
                 let ambiguous_tail_rel = if la_tail != NodeId::MISSING
-                    && la_tail.is_lookahead(self)
-                    && self.get_lookahead_tail(la_tail) == NodeId::MISSING
+                    && la_tail.is_pure_lookahead(self)
                     && self.is_always_nullable(self.get_lookahead_inner(la_tail))
                 {
                     let r = self.get_lookahead_rel(la_tail);
@@ -5793,7 +5802,7 @@ impl RegexBuilder {
     }
 
     pub fn mk_plus(&mut self, body_id: NodeId) -> NodeId {
-        if body_id.is_lookahead(self) && self.get_lookahead_tail(body_id) == NodeId::MISSING {
+        if body_id.is_pure_lookahead(self) {
             return body_id;
         }
         let star = self.mk_star(body_id);
@@ -5803,7 +5812,7 @@ impl RegexBuilder {
         if upper == 0 {
             return NodeId::EPS;
         }
-        if (body_id.is_lookahead(self) && self.get_lookahead_tail(body_id) == NodeId::MISSING)
+        if body_id.is_pure_lookahead(self)
             || matches!(self.get_kind(body_id), Kind::Begin | Kind::End)
         {
             return if lower >= 1 { body_id } else { self.mk_opt(body_id) };
@@ -6019,7 +6028,7 @@ impl RegexBuilder {
         if body_id.is_plus(self) {
             return body_id.right(self);
         }
-        if body_id.is_lookahead(self) && self.get_lookahead_tail(body_id) == NodeId::MISSING {
+        if body_id.is_pure_lookahead(self) {
             return self.mk_opt(body_id);
         }
         self.get_node_id(key)
@@ -6856,7 +6865,7 @@ impl RegexBuilder {
                 if FWD && !in_la {
                     let mut best: FxHashMap<NodeId, u32> = FxHashMap::default();
                     for &p in &parts {
-                        if p.is_lookahead(self) && self.get_lookahead_tail(p) == NodeId::MISSING {
+                        if p.is_pure_lookahead(self) {
                             let body = self.get_lookahead_inner(p);
                             let lo = self.get_lookahead_rel_lo(p);
                             best.entry(body)
@@ -6865,7 +6874,7 @@ impl RegexBuilder {
                         }
                     }
                     parts.iter().rev().fold(NodeId::BOT, |acc, &p| {
-                        if p.is_lookahead(self) && self.get_lookahead_tail(p) == NodeId::MISSING {
+                        if p.is_pure_lookahead(self) {
                             let body = self.get_lookahead_inner(p);
                             if self.get_lookahead_rel_lo(p) != best[&body] {
                                 return acc;

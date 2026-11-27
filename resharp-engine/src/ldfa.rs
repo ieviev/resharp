@@ -63,7 +63,7 @@ pub(crate) fn context_at(pos: usize, len: usize) -> Nullability {
     }
 }
 
-fn center_or_end(at_end: bool) -> Nullability {
+pub(crate) fn center_or_end(at_end: bool) -> Nullability {
     if at_end { Nullability::END } else { Nullability::CENTER }
 }
 
@@ -1206,33 +1206,23 @@ impl LDFA {
         }
     }
 
-    fn collect_initial_nulls(&self, pos: usize, ctx: Nullability, out: &mut Vec<usize>) {
-        let eid = self.effects_id[DFA_INITIAL as usize] as u32;
+    pub(crate) fn nullable_now(&self, state: Sid, ctx: Nullability) -> bool {
+        let eid = self.effects_id[state as usize] as u32;
         match eid {
-            EID_NONE => {}
-            EID_ALWAYS0 => out.push(pos),
-            EID_CENTER0 => {
-                if ctx.has(Nullability::CENTER) {
-                    out.push(pos);
-                }
-            }
-            EID_BEGIN0 => {
-                if ctx.has(Nullability::BEGIN) {
-                    out.push(pos);
-                }
-            }
-            EID_END0 => {
-                if ctx.has(Nullability::END) {
-                    out.push(pos);
-                }
-            }
-            _ => {
-                for n in &self.effects[eid as usize] {
-                    if n.rel == 0 && n.mask.has(ctx) {
-                        out.push(pos);
-                    }
-                }
-            }
+            EID_NONE => false,
+            EID_ALWAYS0 => true,
+            EID_CENTER0 => ctx.has(Nullability::CENTER),
+            EID_BEGIN0 => ctx.has(Nullability::BEGIN),
+            EID_END0 => ctx.has(Nullability::END),
+            _ => self.effects[eid as usize]
+                .iter()
+                .any(|n| n.rel == 0 && n.mask.has(ctx)),
+        }
+    }
+
+    fn collect_initial_nulls(&self, pos: usize, ctx: Nullability, out: &mut Vec<usize>) {
+        if self.nullable_now(DFA_INITIAL, ctx) {
+            out.push(pos);
         }
     }
 
